@@ -38,8 +38,12 @@ class Settings(BaseSettings):
     logist_user_id: OptionalInt = None
 
     # LLM
-    anthropic_api_key: str = ""
-    anthropic_model: str = "claude-sonnet-5"
+    # Внимание: НЕ называть ANTHROPIC_*  — эти имена зарезервированы окружением
+    # песочницы разработки и имеют приоритет над .env, значения будут подменены.
+    llm_api_key: str = ""
+    llm_model: str = "claude-haiku-4-5-20251001"
+    # Задайте, если ключ выдан прокси-сервисом, а не напрямую console.anthropic.com
+    llm_base_url: str = ""
 
     # БД
     database_url: str = "sqlite+aiosqlite:///./logist.db"

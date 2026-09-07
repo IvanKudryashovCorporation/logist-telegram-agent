@@ -37,7 +37,8 @@ copy .env.example .env
 
 - `TG_API_ID` / `TG_API_HASH` — получить на https://my.telegram.org → API development tools
 - `TG_PHONE` — телефон аккаунта логиста
-- `ANTHROPIC_API_KEY` — ключ Claude API
+- `LLM_API_KEY` — ключ Claude API (имя намеренно не `ANTHROPIC_*`, см. комментарий в `app/config.py`)
+- `LLM_BASE_URL` — заполнить, только если ключ выдан прокси-сервисом, а не напрямую console.anthropic.com
 - `WORK_GROUP_CHAT_ID`, `LOGIST_USER_ID` — заполняются после шага «Авторизация» ниже
 
 ## Авторизация в Telegram (один раз)

@@ -1,7 +1,7 @@
 """Точка входа агента.
 
-Пока (Этап 0) только поднимает Telethon-клиент и проверяет доступ к чатам.
-Обработчики заявок появятся на Этапе 1.
+Этап 1: поднимает Telethon-клиент и слушает рабочую группу диспетчеров,
+разбирая заявки в БД.
 """
 
 import asyncio
@@ -9,6 +9,7 @@ import logging
 
 from app.config import settings
 from app.telegram.client import build_client
+from app.telegram.work_group import register_work_group_handlers
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,6 +33,7 @@ async def main() -> None:
     else:
         entity = await client.get_entity(settings.work_group_chat_id)
         log.info("Рабочая группа диспетчеров: %s", getattr(entity, "title", entity))
+        register_work_group_handlers(client)
 
     log.info("Ожидание событий. Ctrl+C для остановки.")
     await client.run_until_disconnected()
