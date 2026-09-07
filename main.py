@@ -1,7 +1,7 @@
 """Точка входа агента.
 
-Этап 1: поднимает Telethon-клиент и слушает рабочую группу диспетчеров,
-разбирая заявки в БД.
+Слушает рабочую группу диспетчеров (Этап 1) и переписку с логистом в его же
+«Избранном» для подтверждения публикаций (Этап 2).
 """
 
 import asyncio
@@ -9,6 +9,7 @@ import logging
 
 from app.config import settings
 from app.telegram.client import build_client
+from app.telegram.logist_dm import register_logist_dm_handlers
 from app.telegram.work_group import register_work_group_handlers
 
 logging.basicConfig(
@@ -34,6 +35,11 @@ async def main() -> None:
         entity = await client.get_entity(settings.work_group_chat_id)
         log.info("Рабочая группа диспетчеров: %s", getattr(entity, "title", entity))
         register_work_group_handlers(client)
+
+    if not settings.logist_user_id:
+        log.warning("LOGIST_USER_ID не задан — подтверждения публикаций отправлять некуда.")
+    else:
+        register_logist_dm_handlers(client)
 
     log.info("Ожидание событий. Ctrl+C для остановки.")
     await client.run_until_disconnected()
