@@ -12,6 +12,14 @@ PARSE_ORDER_TOOL = {
     "input_schema": {
         "type": "object",
         "properties": {
+            "is_order": {
+                "type": "boolean",
+                "description": (
+                    "Это новая заявка на перевозку (есть маршрут и/или похоже, что диспетчер "
+                    "передаёт заказ), а НЕ обычная переписка в чате — вопрос, подтверждение, "
+                    "'ок', реплай на чьё-то сообщение и т.п. Если сомневаетесь — false."
+                ),
+            },
             "pickup_date": {
                 "type": "string",
                 "description": "Дата подачи в формате YYYY-MM-DD. Если не указан год — текущий или ближайший будущий.",
@@ -52,12 +60,13 @@ PARSE_ORDER_TOOL = {
                 "description": "Какие ключевые поля отсутствуют или неоднозначны (например 'нет времени подачи', 'не указана точная стоимость'). Пусто, если заявка полная.",
             },
         },
-        "required": ["missing_fields"],
+        "required": ["is_order", "missing_fields"],
     },
 }
 
 
 class ParsedOrder(BaseModel):
+    is_order: bool = True
     pickup_date: Optional[str] = None
     pickup_time: Optional[str] = None
     from_city: Optional[str] = None

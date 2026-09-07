@@ -33,6 +33,10 @@ async def _handle_message(client: TelegramClient, message, is_edit: bool) -> Non
     if not text:
         return
 
+    if not is_edit and message.reply_to_msg_id is not None:
+        # Реплай — это переписка (например отклик водителя в общем чате), а не новая заявка.
+        return
+
     sender = await message.get_sender()
     dispatcher_tg_id = getattr(sender, "id", None)
     dispatcher_username = getattr(sender, "username", None)
@@ -48,9 +52,15 @@ async def _handle_message(client: TelegramClient, message, is_edit: bool) -> Non
                     )
                 )
             ).scalar_one_or_none()
+            if order is None:
+                return  # правка сообщения, которое мы и раньше не считали заявкой
+
+        parsed = await parse_order_text(text)
 
         is_new_order = order is None
         if order is None:
+            if not parsed.is_order:
+                return  # обычное сообщение в чате, не заявка — не заводим запись
             order = Order(
                 source_chat_id=message.chat_id,
                 source_message_id=message.id,
@@ -63,7 +73,6 @@ async def _handle_message(client: TelegramClient, message, is_edit: bool) -> Non
             order.raw_text = text
 
         status_before = order.status
-        parsed = await parse_order_text(text)
         apply_parsed_fields(order, parsed)
         await session.flush()
 

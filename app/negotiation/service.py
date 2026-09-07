@@ -28,9 +28,24 @@ from app.models import (
     ResponseStatus,
 )
 from app.negotiation.classifier import ClassifiedMessage, classify_driver_message
-from app.negotiation.state import FIELD_PROMPTS, get_awaiting, next_missing_field, set_awaiting
+from app.negotiation.state import (
+    FIELD_PROMPTS,
+    UNCLEAR_STREAK_LIMIT,
+    bump_unclear_streak,
+    get_awaiting,
+    mark_processed,
+    next_missing_field,
+    reset_unclear_streak,
+    set_awaiting,
+)
 
 log = logging.getLogger("agent.negotiation")
+
+
+def _driver_link(tg_user_id: int, label: str | None = None) -> str:
+    """HTML-ссылка на диалог с водителем — открывается сразу тапом, без поиска по id."""
+    label = label or str(tg_user_id)
+    return f'<a href="tg://user?id={tg_user_id}">{label}</a>'
 
 _CLOSED_STATUSES = {
     OrderStatus.DRIVER_ASSIGNED,
@@ -50,8 +65,9 @@ async def _safe_send_to_driver(client: TelegramClient, order_id: int, driver_tg_
         try:
             await client.send_message(
                 settings.logist_user_id,
-                f"⚠ Заказ #{order_id}: не смог написать водителю (id={driver_tg_id}) в личку: {exc}. "
+                f"⚠ Заказ #{order_id}: не смог написать {_driver_link(driver_tg_id)} в личку: {exc}. "
                 "Возможно, стоит написать самому.",
+                parse_mode="html",
             )
         except RPCError:
             log.exception("Не удалось даже уведомить логиста о сбое отправки.")
@@ -86,6 +102,8 @@ async def handle_group_reply(client: TelegramClient, group_chat_id: int, message
     reply_to = message.reply_to_msg_id
     if not reply_to:
         return
+    if not mark_processed(group_chat_id, message.id):
+        return  # уже обработали (например повторная доставка события после реконнекта)
 
     async with SessionLocal() as session:
         publication = (
@@ -134,6 +152,9 @@ async def handle_group_reply(client: TelegramClient, group_chat_id: int, message
 
 async def handle_driver_dm(client: TelegramClient, sender_id: int, message) -> None:
     """Личное сообщение от водителя — продолжение переговоров по последнему открытому отклику."""
+    if not mark_processed(message.chat_id, message.id):
+        return  # уже обработали (например повторная доставка события после реконнекта)
+
     async with SessionLocal() as session:
         driver = (
             await session.execute(select(Driver).where(Driver.tg_user_id == sender_id))
@@ -208,16 +229,51 @@ async def _react_to_kind(
         return
 
     kind = classified.kind
+    order_brief = (
+        f"{order.from_city} → {order.to_city}, "
+        f"{order.pickup_at.strftime('%d.%m %H:%M') if order.pickup_at else 'время уточняется'}, "
+        f"оплата {order.driver_payment or order.client_price or '?'} ₽"
+    )
+
     if kind == ResponseKind.QUESTION:
-        await _safe_send_to_driver(client, order.id, driver_tg_id, "Да, заказ ещё актуален.")
+        reset_unclear_streak(driver_tg_id)
+        await _safe_send_to_driver(client, order.id, driver_tg_id, f"Да, ещё актуально: {order_brief}.")
         return
     if kind == ResponseKind.HOLD:
+        reset_unclear_streak(driver_tg_id)
         await _safe_send_to_driver(client, order.id, driver_tg_id, "Хорошо, подождём вашего решения.")
         return
     if kind == ResponseKind.UNCLEAR:
-        await _safe_send_to_driver(client, order.id, driver_tg_id, "Уточните, пожалуйста — вам подходит этот заказ?")
+        streak = bump_unclear_streak(driver_tg_id)
+        if streak > UNCLEAR_STREAK_LIMIT:
+            reset_unclear_streak(driver_tg_id)
+            await _safe_send_to_driver(
+                client, order.id, driver_tg_id, "Передал ваш вопрос логисту, он свяжется с вами сам."
+            )
+            session.add(
+                ActionLog(
+                    order_id=order.id,
+                    actor=ActorType.AGENT,
+                    action="response_escalated",
+                    details=f"driver_id={driver.id} raw_text={response.raw_text!r}",
+                )
+            )
+            await client.send_message(
+                settings.logist_user_id,
+                f"⚠ Заказ #{order.id}: не могу понять {_driver_link(driver_tg_id, driver.name)}, напишите сами.\n"
+                f"Последнее сообщение: {response.raw_text!r}",
+                parse_mode="html",
+            )
+            return
+        await _safe_send_to_driver(
+            client,
+            order.id,
+            driver_tg_id,
+            f"Уточните, пожалуйста — подходит вам заказ {order_brief}?",
+        )
         return
 
+    reset_unclear_streak(driver_tg_id)
     if kind == ResponseKind.BARGAIN and classified.requested_payment is not None:
         base = order.driver_payment or Decimal(0)
         max_allowed = base * (1 + Decimal(settings.max_negotiation_uplift_pct) / 100)
@@ -269,12 +325,12 @@ async def _advance(
 
     summary = (
         f"Заказ #{order.id} ({order.from_city} → {order.to_city}): кандидат готов.\n"
-        f"Водитель: {driver.name}, {driver.phone}\n"
+        f"Водитель: {_driver_link(driver.tg_user_id, driver.name)}, {driver.phone}\n"
         f"Авто: {driver.car_model} {driver.car_plate}\n"
         f"Оплата: {response.agreed_payment or order.driver_payment} ₽\n"
         f"Откликов на заказ: {count}"
     )
-    await client.send_message(settings.logist_user_id, summary)
+    await client.send_message(settings.logist_user_id, summary, parse_mode="html")
     await _safe_send_to_driver(
         client, order.id, driver.tg_user_id, "Спасибо! Передал данные логисту, ждите подтверждения."
     )
