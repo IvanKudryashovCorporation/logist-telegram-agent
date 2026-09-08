@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Логист{% endblock %}</title>
+  <style>
+    :root {
+      --bg: #f5f6f8;
+      --card: #ffffff;
+      --border: #e1e4e8;
+      --text: #1f2328;
+      --muted: #656d76;
+      --accent: #2563eb;
+      --overdue: #dc2626;
+      --today: #d97706;
+      --ok: #16a34a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    header {
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+    header a { color: var(--text); text-decoration: none; font-weight: 600; }
+    header a.muted { color: var(--muted); font-weight: 400; }
+    main { padding: 20px 24px; max-width: 1100px; margin: 0 auto; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin-bottom: 10px;
+    }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+    .section-title {
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      color: var(--muted);
+      margin: 22px 0 8px;
+    }
+    .section-title.overdue { color: var(--overdue); }
+    .section-title.today { color: var(--today); }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      background: #eef2ff;
+      color: var(--accent);
+    }
+    .route { font-weight: 600; font-size: 15px; }
+    .muted { color: var(--muted); font-size: 13px; }
+    a.order-link { text-decoration: none; color: inherit; display: block; }
+    a.order-link:hover .card { border-color: var(--accent); }
+    form.toolbar { display: flex; gap: 8px; margin-bottom: 4px; flex-wrap: wrap; }
+    input, select {
+      padding: 7px 10px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    button {
+      padding: 7px 14px;
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: #fff;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 14px; }
+    th { color: var(--muted); font-weight: 500; }
+    .stat { font-size: 28px; font-weight: 700; }
+    .empty { color: var(--muted); padding: 8px 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <a href="/">Заказы</a>
+    <a href="/reports" class="muted">Отчёт</a>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

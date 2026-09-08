@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Заказ #{{ order.id }} — Логист{% endblock %}
+{% block content %}
+
+<a href="/" class="muted">&larr; ко всем заказам</a>
+
+<div class="card" style="margin-top: 10px;">
+  <div class="route">{{ order.from_city or "?" }} → {{ order.to_city or "?" }} <span class="badge">{{ status_labels[order.status] }}</span></div>
+  {% if order.has_problem %}<div class="badge" style="background:#fee2e2;color:#dc2626;">⚠ {{ order.problem_note or "Проблема" }}</div>{% endif %}
+
+  <table style="margin-top: 10px;">
+    <tr><th>Подача</th><td>{{ order.pickup_at.strftime("%d.%m.%Y %H:%M") if order.pickup_at else "не указана" }}</td></tr>
+    <tr><th>Откуда</th><td>{{ order.from_address or order.from_city or "—" }}</td></tr>
+    <tr><th>Куда</th><td>{{ order.to_address or order.to_city or "—" }}</td></tr>
+    {% if order.flight_or_train %}<tr><th>Рейс/поезд</th><td>{{ order.flight_or_train }}</td></tr>{% endif %}
+    <tr><th>Пассажиров</th><td>{{ order.passengers or "—" }}</td></tr>
+    {% if order.car_class %}<tr><th>Класс авто</th><td>{{ order.car_class }}</td></tr>{% endif %}
+    {% if order.luggage %}<tr><th>Багаж</th><td>{{ order.luggage }}</td></tr>{% endif %}
+    <tr><th>Клиент</th><td>{{ order.client_name or "—" }}, {{ order.client_phone or "—" }}</td></tr>
+    <tr><th>Цена клиента</th><td>{{ order.client_price or "—" }} ₽</td></tr>
+    <tr><th>Оплата водителю</th><td>{{ order.driver_payment or "—" }} ₽</td></tr>
+    <tr><th>Комиссия</th><td>{{ order.commission or "—" }} {% if order.commission_paid %}(оплачена){% endif %}</td></tr>
+    <tr><th>Диспетчер</th><td>{{ order.dispatcher_username or order.dispatcher_tg_id or "—" }}</td></tr>
+    <tr><th>Исходный текст</th><td>{{ order.raw_text }}</td></tr>
+  </table>
+
+  {% if assigned_driver %}
+    <div class="section-title">Назначенный водитель</div>
+    <table>
+      <tr><th>Имя</th><td>{{ assigned_driver.name or "—" }}</td></tr>
+      <tr><th>Телефон</th><td>{{ assigned_driver.phone or "—" }}</td></tr>
+      <tr><th>Авто</th><td>{{ assigned_driver.car_model or "—" }} {{ assigned_driver.car_plate or "" }}</td></tr>
+      <tr><th>Telegram</th><td><a href="tg://user?id={{ assigned_driver.tg_user_id }}">{{ assigned_driver.tg_username or assigned_driver.tg_user_id }}</a></td></tr>
+    </table>
+  {% endif %}
+</div>
+
+<div class="section-title">Отклики водителей ({{ responses|length }})</div>
+{% if responses %}
+  <table class="card">
+    <tr><th>#</th><th>Водитель</th><th>Тип</th><th>Статус</th><th>Просит</th><th>Согласовано</th><th>Текст</th></tr>
+    {% for response, driver in responses %}
+      <tr>
+        <td>{{ response.id }}</td>
+        <td><a href="tg://user?id={{ driver.tg_user_id }}">{{ driver.name or driver.tg_username or driver.tg_user_id }}</a></td>
+        <td>{{ response.kind.value }}</td>
+        <td>{{ response.status.value }}</td>
+        <td>{{ response.requested_payment or "—" }}</td>
+        <td>{{ response.agreed_payment or "—" }}</td>
+        <td class="muted">{{ response.raw_text or "—" }}</td>
+      </tr>
+    {% endfor %}
+  </table>
+{% else %}
+  <div class="empty">Пока нет откликов.</div>
+{% endif %}
+
+<div class="section-title">Публикации ({{ publications|length }})</div>
+{% if publications %}
+  <table class="card">
+    <tr><th>Группа</th><th>Опубликовано</th><th>Удалено</th><th>Оплата на момент</th></tr>
+    {% for pub, group in publications %}
+      <tr>
+        <td>{{ group.title }}</td>
+        <td>{{ pub.posted_at.strftime("%d.%m %H:%M") if pub.posted_at else "—" }}</td>
+        <td>{% if pub.deleted_at %}{{ pub.deleted_at.strftime("%d.%m %H:%M") }}{% elif pub.delete_failed %}⚠ ошибка удаления{% else %}активна{% endif %}</td>
+        <td>{{ pub.driver_payment_at_post or "—" }}</td>
+      </tr>
+    {% endfor %}
+  </table>
+{% else %}
+  <div class="empty">Публикаций не было.</div>
+{% endif %}
+
+<div class="section-title">История</div>
+{% if logs %}
+  <table class="card">
+    <tr><th>Когда</th><th>Кто</th><th>Действие</th><th>Детали</th></tr>
+    {% for log in logs %}
+      <tr>
+        <td class="muted">{{ log.created_at.strftime("%d.%m %H:%M") }}</td>
+        <td>{{ log.actor.value }}</td>
+        <td>{{ log.action }}</td>
+        <td class="muted">{{ log.details or "" }}</td>
+      </tr>
+    {% endfor %}
+  </table>
+{% else %}
+  <div class="empty">Пусто.</div>
+{% endif %}
+
+{% endblock %}

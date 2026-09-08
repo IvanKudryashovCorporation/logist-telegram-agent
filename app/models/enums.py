@@ -21,6 +21,18 @@ class OrderStatus(str, enum.Enum):
     CANCELLED = "cancelled"                    # Отмена
 
 
+#: Человекочитаемые подписи статусов — для веб-панели (Этап 5).
+ORDER_STATUS_LABELS = {
+    OrderStatus.NEW: "Новая",
+    OrderStatus.NEEDS_CLARIFICATION: "Нужно уточнить",
+    OrderStatus.SEARCHING: "В поиске",
+    OrderStatus.HAS_RESPONSES: "Есть отклики",
+    OrderStatus.DRIVER_ASSIGNED: "Водитель назначен",
+    OrderStatus.IN_PROGRESS: "В работе",
+    OrderStatus.COMPLETED: "Завершено",
+    OrderStatus.CANCELLED: "Отмена",
+}
+
 #: Статусы, которые агент может выставлять без подтверждения логиста.
 AGENT_ALLOWED_STATUSES = {
     OrderStatus.NEW,

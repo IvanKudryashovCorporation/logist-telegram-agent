@@ -17,3 +17,9 @@ anthropic==0.40.0
 
 # Планировщик (перепубликация, напоминания)
 APScheduler==3.10.4
+
+# Веб-панель (Этап 5)
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+jinja2==3.1.4
+python-multipart==0.0.17
