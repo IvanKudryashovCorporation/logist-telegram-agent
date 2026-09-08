@@ -1,12 +1,60 @@
 {% extends "base.html" %}
 {% block title %}Заказ #{{ order.id }} — Логист{% endblock %}
+{% block head_extra %}
+  {% if has_pending %}<meta http-equiv="refresh" content="4">{% endif %}
+{% endblock %}
 {% block content %}
 
 <a href="/" class="muted">&larr; ко всем заказам</a>
 
+{% if pending_actions %}
+  <div class="card" style="margin-top: 10px;">
+    <div class="section-title" style="margin-top: 0;">Задачи для агента</div>
+    {% for a in pending_actions %}
+      <div style="padding: 4px 0; font-size: 14px;">
+        {{ a.created_at.strftime("%d.%m %H:%M") }} — {{ a.action.value }}
+        {% if a.status.value == "pending" %}
+          <span class="badge" style="background:#fff7ed;color:#d97706;">ожидает агента…</span>
+        {% elif a.status.value == "done" %}
+          <span class="badge" style="background:#f0fdf4;color:#16a34a;">выполнено</span> — {{ a.result_message }}
+        {% else %}
+          <span class="badge" style="background:#fee2e2;color:#dc2626;">ошибка</span> — {{ a.result_message }}
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+{% endif %}
+
 <div class="card" style="margin-top: 10px;">
   <div class="route">{{ order.from_city or "?" }} → {{ order.to_city or "?" }} <span class="badge">{{ status_labels[order.status] }}</span></div>
   {% if order.has_problem %}<div class="badge" style="background:#fee2e2;color:#dc2626;">⚠ {{ order.problem_note or "Проблема" }}</div>{% endif %}
+
+  <div class="checkbox-row" style="margin-top: 10px;">
+    {% if not has_active_publications and order.status.value not in ["driver_assigned", "in_progress", "completed", "cancelled"] %}
+      <form method="post" action="/orders/{{ order.id }}/publish" onsubmit="return confirm('Опубликовать заказ в подходящие водительские группы?');">
+        <button type="submit">Опубликовать водителям</button>
+      </form>
+    {% endif %}
+    {% if order.status not in ["completed", "cancelled"] %}
+      <form method="post" action="/orders/{{ order.id }}/cancel" onsubmit="return confirm('Отменить заказ? Водителю (если назначен) придёт уведомление, публикации удалятся.');">
+        <button type="submit" style="background:#dc2626;border-color:#dc2626;">Отменить заказ</button>
+      </form>
+    {% endif %}
+    {% if order.status.value == "in_progress" %}
+      <form method="post" action="/orders/{{ order.id }}/complete">
+        <button type="submit" style="background:#16a34a;border-color:#16a34a;">Завершить заказ</button>
+      </form>
+    {% endif %}
+    {% if assigned_driver and not order.commission_paid %}
+      <form method="post" action="/orders/{{ order.id }}/confirm-payment">
+        <button type="submit">Подтвердить оплату комиссии</button>
+      </form>
+    {% endif %}
+  </div>
+  <div class="muted" style="margin-top: 6px;">
+    Кнопки выше отправляют команду живому агенту в Telegram (очередь, ~{{ 8 }} сек) — водителю уйдёт сообщение,
+    публикации удалятся, где нужно. Форма ниже — это прямое редактирование данных без уведомлений.
+  </div>
 
   <form method="post" action="/orders/{{ order.id }}/update" class="edit-form">
     <div class="field-grid">
@@ -66,7 +114,7 @@
 <div class="section-title">Отклики водителей ({{ responses|length }})</div>
 {% if responses %}
   <table class="card">
-    <tr><th>#</th><th>Водитель</th><th>Тип</th><th>Статус</th><th>Просит</th><th>Согласовано</th><th>Текст</th></tr>
+    <tr><th>#</th><th>Водитель</th><th>Тип</th><th>Статус</th><th>Просит</th><th>Согласовано</th><th>Текст</th><th></th></tr>
     {% for response, driver in responses %}
       <tr>
         <td>{{ response.id }}</td>
@@ -76,6 +124,14 @@
         <td>{{ response.requested_payment or "—" }}</td>
         <td>{{ response.agreed_payment or "—" }}</td>
         <td class="muted">{{ response.raw_text or "—" }}</td>
+        <td>
+          {% if order.status.value not in ["driver_assigned", "in_progress", "completed", "cancelled"] and response.status.value in ["forwarded", "negotiating"] %}
+            <form method="post" action="/orders/{{ order.id }}/assign" onsubmit="return confirm('Назначить {{ driver.name or driver.tg_username }} на этот заказ?');">
+              <input type="hidden" name="response_id" value="{{ response.id }}">
+              <button type="submit">Назначить</button>
+            </form>
+          {% endif %}
+        </td>
       </tr>
     {% endfor %}
   </table>

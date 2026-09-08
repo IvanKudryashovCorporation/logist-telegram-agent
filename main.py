@@ -19,6 +19,7 @@ from app.telegram.driver_dm import register_driver_dm_handlers
 from app.telegram.driver_groups import register_driver_group_handlers
 from app.telegram.logist_dm import register_logist_dm_handlers
 from app.telegram.work_group import register_work_group_handlers
+from app.workflow.queue import start_pending_actions_poller
 
 logging.basicConfig(
     level=logging.INFO,
@@ -61,6 +62,7 @@ async def main() -> None:
 
     register_driver_dm_handlers(client)
     start_commission_reminders(client)
+    start_pending_actions_poller(client)
 
     log.info("Ожидание событий. Ctrl+C для остановки.")
     await client.run_until_disconnected()

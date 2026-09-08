@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
@@ -23,6 +23,9 @@ from app.models import (
     DriverResponse,
     Order,
     OrderStatus,
+    PendingAction,
+    PendingActionStatus,
+    PendingActionType,
     Publication,
 )
 
@@ -159,6 +162,18 @@ async def order_detail(request: Request, order_id: int):
             )
         ).scalars().all()
 
+        pending_actions = (
+            await session.execute(
+                select(PendingAction)
+                .where(PendingAction.order_id == order_id)
+                .order_by(PendingAction.created_at.desc())
+                .limit(10)
+            )
+        ).scalars().all()
+
+    has_pending = any(a.status == PendingActionStatus.PENDING for a in pending_actions)
+    has_active_publications = any(pub.deleted_at is None for pub, _group in publications)
+
     return templates.TemplateResponse(
         "order_detail.html",
         {
@@ -169,8 +184,60 @@ async def order_detail(request: Request, order_id: int):
             "publications": publications,
             "logs": logs,
             "statuses": list(OrderStatus),
+            "pending_actions": pending_actions,
+            "has_pending": has_pending,
+            "has_active_publications": has_active_publications,
         },
     )
+
+
+async def _queue_action(order_id: int, action: PendingActionType, response_id: int | None = None) -> None:
+    """Ставит задачу в очередь для агента. Не дублирует, если такая же уже висит необработанной."""
+    async with SessionLocal() as session:
+        existing = (
+            await session.execute(
+                select(PendingAction).where(
+                    PendingAction.order_id == order_id,
+                    PendingAction.action == action,
+                    PendingAction.status == PendingActionStatus.PENDING,
+                    PendingAction.response_id == response_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return
+        session.add(PendingAction(order_id=order_id, action=action, response_id=response_id))
+        await session.commit()
+
+
+@app.post("/orders/{order_id}/publish")
+async def queue_publish(order_id: int):
+    await _queue_action(order_id, PendingActionType.PUBLISH)
+    return RedirectResponse(url=f"/orders/{order_id}", status_code=303)
+
+
+@app.post("/orders/{order_id}/assign")
+async def queue_assign(order_id: int, response_id: int = Form(...)):
+    await _queue_action(order_id, PendingActionType.ASSIGN, response_id)
+    return RedirectResponse(url=f"/orders/{order_id}", status_code=303)
+
+
+@app.post("/orders/{order_id}/complete")
+async def queue_complete(order_id: int):
+    await _queue_action(order_id, PendingActionType.COMPLETE)
+    return RedirectResponse(url=f"/orders/{order_id}", status_code=303)
+
+
+@app.post("/orders/{order_id}/cancel")
+async def queue_cancel(order_id: int):
+    await _queue_action(order_id, PendingActionType.CANCEL)
+    return RedirectResponse(url=f"/orders/{order_id}", status_code=303)
+
+
+@app.post("/orders/{order_id}/confirm-payment")
+async def queue_confirm_payment(order_id: int):
+    await _queue_action(order_id, PendingActionType.CONFIRM_PAYMENT)
+    return RedirectResponse(url=f"/orders/{order_id}", status_code=303)
 
 
 @app.post("/orders/{order_id}/update")

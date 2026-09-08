@@ -71,3 +71,25 @@ class ActorType(str, enum.Enum):
     LOGIST = "logist"
     DISPATCHER = "dispatcher"
     DRIVER = "driver"
+
+
+class PendingActionType(str, enum.Enum):
+    """Действие с side-эффектами в Telegram, поставленное из веб-панели.
+
+    Веб-панель и агент — разные процессы с одним Telethon-сессией на аккаунте
+    логиста; параллельное подключение к ней ломает файл сессии (SQLite lock).
+    Поэтому веб-панель не шлёт сообщения сама, а кладёт задачу в очередь —
+    её забирает и выполняет уже работающий агент (app/workflow/queue.py).
+    """
+
+    PUBLISH = "publish"
+    ASSIGN = "assign"
+    COMPLETE = "complete"
+    CANCEL = "cancel"
+    CONFIRM_PAYMENT = "confirm_payment"
+
+
+class PendingActionStatus(str, enum.Enum):
+    PENDING = "pending"
+    DONE = "done"
+    FAILED = "failed"

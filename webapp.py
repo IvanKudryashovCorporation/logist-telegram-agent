@@ -10,4 +10,8 @@
 import uvicorn
 
 if __name__ == "__main__":
-    uvicorn.run("app.web.server:app", host="127.0.0.1", port=8000, reload=True)
+    # reload=True звучит удобно для разработки, но на практике не стоит того:
+    # его watcher-процесс переживает Ctrl+C/kill родителя и продолжает держать
+    # порт со старым кодом, плюс шаблоны иногда не подхватывались на лету.
+    # После правок просто перезапускайте процесс вручную.
+    uvicorn.run("app.web.server:app", host="127.0.0.1", port=8000, reload=False)
