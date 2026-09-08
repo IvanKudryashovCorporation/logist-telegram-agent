@@ -56,8 +56,16 @@ def _driver_details_for_client(order: Order) -> str:
         lines.append(f"Рейс/поезд: {order.flight_or_train}")
     if order.passengers:
         lines.append(f"Пассажиров: {order.passengers}")
-    lines.append(f"Клиент: {order.client_name or '?'}, {order.client_phone or '?'}")
-    lines.append("Позвоните клиенту, подтвердите время подачи и напишите мне «созвонился».")
+
+    if order.client_name or order.client_phone:
+        client_bits = [v for v in (order.client_name, order.client_phone) if v]
+        lines.append(f"Клиент: {', '.join(client_bits)}")
+        lines.append("Позвоните клиенту, подтвердите время подачи и напишите мне «созвонился».")
+    else:
+        # Диспетчер не указал контакт клиента — не подсовываем водителю "?, ?",
+        # честно говорим, что уточняется, и не просим звонить в никуда.
+        lines.append("Контакт клиента уточняется у диспетчера, скоро пришлю.")
+        lines.append("Как подтвердите созвон с клиентом — напишите мне «созвонился».")
     return "\n".join(lines)
 
 
@@ -136,6 +144,8 @@ async def assign_driver(client: TelegramClient, order_id: int, response_id: int 
 
     result = f"Заказ {_order_brief(order)} назначен {driver.name or driver.tg_username}."
     result += " Отправил данные водителю." if sent_ok else " ⚠ Не смог написать водителю — свяжитесь сами."
+    if not (order.client_name or order.client_phone):
+        result += " ⚠ У заявки нет контакта клиента — впишите его в веб-панели, иначе водителю звонить некуда."
     return result
 
 
