@@ -295,7 +295,8 @@ async def update_order(request: Request, order_id: int):
         order.to_city = _s("to_city")
         order.from_address = _s("from_address")
         order.to_address = _s("to_address")
-        order.flight_or_train = _s("flight_or_train")
+        # Рейс/поезд убрали из формы веб-панели (не показываем) — не трогаем поле,
+        # чтобы значение из Telegram-заявки не затиралось сохранением формы.
         order.car_class = _s("car_class")
         order.passengers = _int("passengers", order.passengers)
         order.luggage = _s("luggage")
