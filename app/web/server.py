@@ -182,19 +182,26 @@ async def update_order(request: Request, order_id: int):
         value = value.strip() if isinstance(value, str) else value
         return value or None
 
-    def _dec(name: str) -> Decimal | None:
+    def _dec(name: str, current: Decimal | None) -> Decimal | None:
+        """Пустое поле — явная очистка. Нечисловой ввод — не трогаем старое значение,
+        а не молча обнуляем его (ошибка ввода не должна стирать данные заказа)."""
         value = _s(name)
+        if value is None:
+            return None
         try:
-            return Decimal(value) if value is not None else None
+            parsed = Decimal(value)
         except Exception:
-            return None
+            return current
+        return parsed if parsed.is_finite() else current
 
-    def _int(name: str) -> int | None:
+    def _int(name: str, current: int | None) -> int | None:
         value = _s(name)
-        try:
-            return int(value) if value is not None else None
-        except ValueError:
+        if value is None:
             return None
+        try:
+            return int(value)
+        except ValueError:
+            return current
 
     async with SessionLocal() as session:
         order = await session.get(Order, order_id)
@@ -223,15 +230,15 @@ async def update_order(request: Request, order_id: int):
         order.to_address = _s("to_address")
         order.flight_or_train = _s("flight_or_train")
         order.car_class = _s("car_class")
-        order.passengers = _int("passengers")
+        order.passengers = _int("passengers", order.passengers)
         order.luggage = _s("luggage")
         order.has_pets = form.get("has_pets") is not None
         order.needs_child_seat = form.get("needs_child_seat") is not None
         order.client_name = _s("client_name")
         order.client_phone = _s("client_phone")
-        order.client_price = _dec("client_price")
-        order.driver_payment = _dec("driver_payment")
-        order.commission = _dec("commission")
+        order.client_price = _dec("client_price", order.client_price)
+        order.driver_payment = _dec("driver_payment", order.driver_payment)
+        order.commission = _dec("commission", order.commission)
         order.commission_paid = form.get("commission_paid") is not None
         order.has_problem = form.get("has_problem") is not None
         order.problem_note = _s("problem_note")

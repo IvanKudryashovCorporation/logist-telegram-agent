@@ -37,8 +37,11 @@ from app.negotiation.state import (
     get_awaiting,
     mark_processed,
     next_missing_field,
+    pop_last_offer,
     reset_unclear_streak,
     set_awaiting,
+    set_last_offer,
+    unmark_processed,
 )
 
 log = logging.getLogger("agent.negotiation")
@@ -101,49 +104,79 @@ async def handle_group_reply(client: TelegramClient, group_chat_id: int, message
     if not mark_processed(group_chat_id, message.id):
         return  # уже обработали (например повторная доставка события после реконнекта)
 
-    async with SessionLocal() as session:
-        publication = (
-            await session.execute(
-                select(Publication)
-                .join(DriverGroup)
-                .where(
-                    DriverGroup.tg_chat_id == group_chat_id,
-                    Publication.tg_message_id == reply_to,
-                    Publication.deleted_at.is_(None),
+    try:
+        async with SessionLocal() as session:
+            publication = (
+                await session.execute(
+                    select(Publication)
+                    .join(DriverGroup)
+                    .where(
+                        DriverGroup.tg_chat_id == group_chat_id,
+                        Publication.tg_message_id == reply_to,
+                        Publication.deleted_at.is_(None),
+                    )
                 )
-            )
-        ).scalar_one_or_none()
-        if publication is None:
-            return
+            ).scalar_one_or_none()
+            if publication is None:
+                return
 
-        order = await session.get(Order, publication.order_id)
-        if order is None or order.status in _CLOSED_STATUSES:
-            return
+            order = await session.get(Order, publication.order_id)
+            if order is None or order.status in _CLOSED_STATUSES:
+                return
 
-        sender = await message.get_sender()
-        driver = await _get_or_create_driver(session, sender)
+            sender = await message.get_sender()
+            driver = await _get_or_create_driver(session, sender)
 
-        text = (message.raw_text or "").strip()
-        classified = await classify_driver_message(text) if text else ClassifiedMessage(kind=ResponseKind.UNCLEAR)
-        _apply_opportunistic_fields(driver, classified)
+            text = (message.raw_text or "").strip()
+            classified = await classify_driver_message(text) if text else ClassifiedMessage(kind=ResponseKind.UNCLEAR)
+            _apply_opportunistic_fields(driver, classified)
 
-        response = DriverResponse(
-            order_id=order.id,
-            driver_id=driver.id,
-            raw_text=text,
-            kind=classified.kind,
-            requested_payment=classified.requested_payment,
-        )
-        session.add(response)
-        if order.status in (OrderStatus.NEW, OrderStatus.SEARCHING):
-            order.status = OrderStatus.HAS_RESPONSES
-        await session.flush()
+            # Если у водителя уже есть открытый отклик по этому же заказу (например,
+            # ответил "+", а потом отдельным сообщением уточнил сумму) — обновляем
+            # его, а не заводим второй ряд (иначе /assign увидит "двух" кандидатов
+            # в одном и том же человеке).
+            existing_response = (
+                await session.execute(
+                    select(DriverResponse).where(
+                        DriverResponse.order_id == order.id,
+                        DriverResponse.driver_id == driver.id,
+                        DriverResponse.status.in_(
+                            [ResponseStatus.NEW, ResponseStatus.NEGOTIATING, ResponseStatus.FORWARDED]
+                        ),
+                    )
+                )
+            ).scalar_one_or_none()
 
-        await _safe_send_to_driver(
-            client, order.id, driver.tg_user_id, "Здравствуйте! Пишу по вашему отклику на заказ в группе."
-        )
-        await _react_to_kind(client, session, driver, response, order, classified)
-        await session.commit()
+            is_first_contact = existing_response is None
+            if existing_response is not None:
+                response = existing_response
+                response.raw_text = text
+                response.kind = classified.kind
+                if classified.requested_payment is not None:
+                    response.requested_payment = classified.requested_payment
+            else:
+                response = DriverResponse(
+                    order_id=order.id,
+                    driver_id=driver.id,
+                    raw_text=text,
+                    kind=classified.kind,
+                    requested_payment=classified.requested_payment,
+                )
+                session.add(response)
+
+            if order.status in (OrderStatus.NEW, OrderStatus.SEARCHING):
+                order.status = OrderStatus.HAS_RESPONSES
+            await session.flush()
+
+            if is_first_contact:
+                await _safe_send_to_driver(
+                    client, order.id, driver.tg_user_id, "Здравствуйте! Пишу по вашему отклику на заказ в группе."
+                )
+            await _react_to_kind(client, session, driver, response, order, classified)
+            await session.commit()
+    except Exception:
+        unmark_processed(group_chat_id, message.id)
+        raise
 
 
 async def handle_driver_dm(client: TelegramClient, sender_id: int, message) -> None:
@@ -151,6 +184,14 @@ async def handle_driver_dm(client: TelegramClient, sender_id: int, message) -> N
     if not mark_processed(message.chat_id, message.id):
         return  # уже обработали (например повторная доставка события после реконнекта)
 
+    try:
+        await _handle_driver_dm_inner(client, sender_id, message)
+    except Exception:
+        unmark_processed(message.chat_id, message.id)
+        raise
+
+
+async def _handle_driver_dm_inner(client: TelegramClient, sender_id: int, message) -> None:
     async with SessionLocal() as session:
         driver = (
             await session.execute(select(Driver).where(Driver.tg_user_id == sender_id))
@@ -166,7 +207,7 @@ async def handle_driver_dm(client: TelegramClient, sender_id: int, message) -> N
                 await session.execute(
                     select(DriverResponse)
                     .where(DriverResponse.driver_id == driver.id, DriverResponse.status == ResponseStatus.ASSIGNED)
-                    .order_by(DriverResponse.created_at.desc())
+                    .order_by(DriverResponse.id.desc())
                 )
             ).scalars().all()
             for assigned_response in assigned_responses:
@@ -178,14 +219,18 @@ async def handle_driver_dm(client: TelegramClient, sender_id: int, message) -> N
                     await session.commit()
                     return
 
+        # FORWARDED тоже считаем «открытым»: водитель мог задать ещё вопрос уже
+        # после того, как его данные ушли логисту, и это не должно теряться.
         response = (
             await session.execute(
                 select(DriverResponse)
                 .where(
                     DriverResponse.driver_id == driver.id,
-                    DriverResponse.status.in_([ResponseStatus.NEW, ResponseStatus.NEGOTIATING]),
+                    DriverResponse.status.in_(
+                        [ResponseStatus.NEW, ResponseStatus.NEGOTIATING, ResponseStatus.FORWARDED]
+                    ),
                 )
-                .order_by(DriverResponse.created_at.desc())
+                .order_by(DriverResponse.id.desc())
             )
         ).scalars().first()
         if response is None:
@@ -207,14 +252,28 @@ async def handle_driver_dm(client: TelegramClient, sender_id: int, message) -> N
             await session.commit()
             return
 
-        text = (message.raw_text or "").strip()
         if not text:
             return
 
         if awaiting:
-            setattr(driver, awaiting, text)
-            set_awaiting(driver.tg_user_id, None)
-            await _advance(client, session, driver, response, order)
+            if _looks_like_valid_answer(awaiting, text):
+                setattr(driver, awaiting, text)
+                set_awaiting(driver.tg_user_id, None)
+                await _advance(client, session, driver, response, order)
+            else:
+                await _safe_send_to_driver(
+                    client,
+                    order.id,
+                    driver.tg_user_id,
+                    f"Не понял ответ. {FIELD_PROMPTS[awaiting]}",
+                )
+            await session.commit()
+            return
+
+        if response.status == ResponseStatus.FORWARDED:
+            # Уже передали логисту — не переклассифицируем и не дублируем карточку,
+            # просто подтверждаем, что сообщение дошло.
+            await _safe_send_to_driver(client, order.id, driver.tg_user_id, "Данные уже переданы логисту, ждите.")
             await session.commit()
             return
 
@@ -227,6 +286,19 @@ async def handle_driver_dm(client: TelegramClient, sender_id: int, message) -> N
 
         await _react_to_kind(client, session, driver, response, order, classified)
         await session.commit()
+
+
+def _looks_like_valid_answer(field: str, text: str) -> bool:
+    """Грубый фильтр от «Не разобрал» ответов на прямой вопрос при сборе данных водителя.
+
+    Не строгая валидация формата — только отсекает явные не-ответы (встречный
+    вопрос, слишком короткая реплика), чтобы не записать их в карточку водителя.
+    """
+    if "?" in text:
+        return False
+    if field == "phone":
+        return sum(ch.isdigit() for ch in text) >= 5
+    return len(text) >= 2
 
 
 async def _react_to_kind(
@@ -290,18 +362,40 @@ async def _react_to_kind(
         return
 
     reset_unclear_streak(driver_tg_id)
-    if kind == ResponseKind.BARGAIN and classified.requested_payment is not None:
-        base = order.driver_payment or Decimal(0)
+    if kind == ResponseKind.BARGAIN:
+        if classified.requested_payment is None:
+            # «Торг есть?» без суммы — не тупик, а прямой вопрос к водителю.
+            await _safe_send_to_driver(client, order.id, driver_tg_id, "За какую сумму вы согласны? Напишите цифру в рублях.")
+            return
+
+        base = order.driver_payment or order.client_price
+        if not base:
+            # Цену никто не назвал (LLM не разобрал стоимость заявки) — торговаться не от чего,
+            # это на усмотрение логиста, а не автоторга.
+            await _safe_send_to_driver(client, order.id, driver_tg_id, "Секунду, уточняю у логиста.")
+            await client.send_message(
+                settings.logist_user_id,
+                f"⚠ Заказ #{order.id}: у заявки не задана оплата водителю, а "
+                f"{driver_link(driver_tg_id, driver.name)} просит {classified.requested_payment} ₽. "
+                "Договоритесь сами и назначьте через /assign.",
+                parse_mode="html",
+            )
+            return
+
         max_allowed = base * (1 + Decimal(settings.max_negotiation_uplift_pct) / 100)
         if classified.requested_payment <= max_allowed:
             response.agreed_payment = classified.requested_payment
             response.status = ResponseStatus.NEGOTIATING
+            pop_last_offer(driver_tg_id)
             await _safe_send_to_driver(client, order.id, driver_tg_id, f"Договорились, {classified.requested_payment:.0f} ₽.")
         else:
+            set_last_offer(driver_tg_id, max_allowed)
             await _safe_send_to_driver(client, order.id, driver_tg_id, f"Больше {max_allowed:.0f} ₽ дать не могу, устроит?")
             return  # ждём решения водителя, данные пока не запрашиваем
     elif kind == ResponseKind.ACCEPT:
-        response.agreed_payment = response.agreed_payment or order.driver_payment
+        # Если до этого предлагали компромиссную сумму — соглашается именно на неё,
+        # а не откатывается на исходную оплату по заказу.
+        response.agreed_payment = response.agreed_payment or pop_last_offer(driver_tg_id) or order.driver_payment
         response.status = ResponseStatus.NEGOTIATING
         await _safe_send_to_driver(client, order.id, driver_tg_id, "Отлично!")
     else:

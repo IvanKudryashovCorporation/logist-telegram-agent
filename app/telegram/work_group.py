@@ -7,6 +7,7 @@ from telethon import TelegramClient, events
 from app.config import settings
 from app.db.base import SessionLocal
 from app.models import ActionLog, ActorType, Order, OrderStatus
+from app.negotiation.state import mark_processed, unmark_processed
 from app.parsing.llm_parser import parse_order_text
 from app.parsing.order_builder import apply_parsed_fields
 from app.publishing.service import propose_publication
@@ -40,30 +41,49 @@ async def _handle_message(client: TelegramClient, message, is_edit: bool) -> Non
         # Реплай — это переписка (например отклик водителя в общем чате), а не новая заявка.
         return
 
+    # Защита от повторной доставки одного и того же события Telethon (реконнект,
+    # get_difference) — иначе получаем дубликат заказа и двойную публикацию.
+    if not mark_processed(message.chat_id, message.id):
+        return
+
+    try:
+        order_id, order_status, is_new_order, status_before = await _upsert_order(client, message, is_edit)
+    except Exception:
+        unmark_processed(message.chat_id, message.id)
+        raise
+
+    if order_id is None:
+        return
+
+    # Предлагаем публикацию, когда заказ впервые становится полностью разобранным.
+    if order_status == OrderStatus.NEW and (is_new_order or status_before == OrderStatus.NEEDS_CLARIFICATION):
+        await propose_publication(order_id, client)
+
+
+async def _upsert_order(client: TelegramClient, message, is_edit: bool):
+    text = message.raw_text.strip()
     sender = await message.get_sender()
     dispatcher_tg_id = getattr(sender, "id", None)
     dispatcher_username = getattr(sender, "username", None)
 
     async with SessionLocal() as session:
-        order = None
-        if is_edit:
-            order = (
-                await session.execute(
-                    select(Order).where(
-                        Order.source_chat_id == message.chat_id,
-                        Order.source_message_id == message.id,
-                    )
+        order = (
+            await session.execute(
+                select(Order).where(
+                    Order.source_chat_id == message.chat_id,
+                    Order.source_message_id == message.id,
                 )
-            ).scalar_one_or_none()
-            if order is None:
-                return  # правка сообщения, которое мы и раньше не считали заявкой
+            )
+        ).scalar_one_or_none()
+        if is_edit and order is None:
+            return None, None, None, None  # правка сообщения, которое мы и раньше не считали заявкой
 
         parsed = await parse_order_text(text)
 
         is_new_order = order is None
         if order is None:
             if not parsed.is_order:
-                return  # обычное сообщение в чате, не заявка — не заводим запись
+                return None, None, None, None  # обычное сообщение в чате, не заявка
             order = Order(
                 source_chat_id=message.chat_id,
                 source_message_id=message.id,
@@ -100,6 +120,4 @@ async def _handle_message(client: TelegramClient, message, is_edit: bool) -> Non
             order_status.value,
         )
 
-    # Предлагаем публикацию, когда заказ впервые становится полностью разобранным.
-    if order_status == OrderStatus.NEW and (is_new_order or status_before == OrderStatus.NEEDS_CLARIFICATION):
-        await propose_publication(order_id, client)
+    return order_id, order_status, is_new_order, status_before

@@ -18,15 +18,27 @@ from app.telegram.links import driver_link
 
 log = logging.getLogger("agent.workflow")
 
-_CALL_CONFIRMED_KEYWORDS = ("созвон", "дозвон", "подтверд", "договорил", "на связи")
-_PAYMENT_CLAIM_KEYWORDS = ("оплатил", "перевел", "перевёл", "скинул", "отправил деньги", "оплата прошла", "перекинул")
+# Узкие, конкретные фразы — короткие слова вроде "подтверд" или "на связи" ловили
+# посторонние сообщения ("подтвердите адрес подачи") и ошибочно переключали статус.
+_CALL_CONFIRMED_KEYWORDS = ("созвонил", "дозвонил", "клиент подтвердил", "договорились с клиентом")
+_PAYMENT_CLAIM_KEYWORDS = (
+    "оплатил комиссию",
+    "перевел комиссию",
+    "перевёл комиссию",
+    "скинул комиссию",
+    "комиссия оплачена",
+    "комиссию отправил",
+    "комиссию перекинул",
+)
 
 
-async def _safe_send(client: TelegramClient, tg_id: int, text: str) -> None:
+async def _safe_send(client: TelegramClient, tg_id: int, text: str) -> bool:
     try:
         await client.send_message(tg_id, text)
+        return True
     except RPCError as exc:
         log.warning("Не удалось отправить сообщение %s: %s", tg_id, exc)
+        return False
 
 
 def _order_brief(order: Order) -> str:
@@ -113,12 +125,18 @@ async def assign_driver(client: TelegramClient, order_id: int, response_id: int 
             if other_driver.id != driver.id:
                 declined_tg_ids.append(other_driver.tg_user_id)
 
-    await delete_publications(order_id, client, reason="assigned")
-    await _safe_send(client, driver.tg_user_id, _driver_details_for_client(order))
+    try:
+        await delete_publications(order_id, client, reason="assigned")
+    except Exception:
+        log.exception("Не удалось удалить публикации заказа #%s при назначении", order_id)
+
+    sent_ok = await _safe_send(client, driver.tg_user_id, _driver_details_for_client(order))
     for tg_id in declined_tg_ids:
         await _safe_send(client, tg_id, f"Заказ {_order_brief(order)} уже отдали другому водителю, спасибо за отклик!")
 
-    return f"Заказ {_order_brief(order)} назначен {driver.name or driver.tg_username}. Отправил данные водителю."
+    result = f"Заказ {_order_brief(order)} назначен {driver.name or driver.tg_username}."
+    result += " Отправил данные водителю." if sent_ok else " ⚠ Не смог написать водителю — свяжитесь сами."
+    return result
 
 
 async def complete_order(client: TelegramClient, order_id: int) -> str:
@@ -139,10 +157,34 @@ async def cancel_order(client: TelegramClient, order_id: int) -> str:
         order = await session.get(Order, order_id)
         if order is None:
             return f"Заказ #{order_id} не найден."
+
+        assigned_driver = None
+        if order.assigned_driver_id is not None:
+            assigned_response = (
+                await session.execute(
+                    select(DriverResponse).where(
+                        DriverResponse.order_id == order_id, DriverResponse.status == ResponseStatus.ASSIGNED
+                    )
+                )
+            ).scalar_one_or_none()
+            if assigned_response is not None:
+                assigned_response.status = ResponseStatus.REJECTED
+            assigned_driver = await session.get(Driver, order.assigned_driver_id)
+
         order.status = OrderStatus.CANCELLED
         session.add(ActionLog(order_id=order.id, actor=ActorType.LOGIST, action="order_cancelled"))
         await session.commit()
-    await delete_publications(order_id, client, reason="cancelled")
+
+    try:
+        await delete_publications(order_id, client, reason="cancelled")
+    except Exception:
+        log.exception("Не удалось удалить публикации заказа #%s при отмене", order_id)
+
+    if assigned_driver is not None:
+        await _safe_send(
+            client, assigned_driver.tg_user_id, f"Заказ {_order_brief(order)} отменён, извините за неудобства."
+        )
+
     return f"Заказ {_order_brief(order)} отменён, публикации удалены."
 
 

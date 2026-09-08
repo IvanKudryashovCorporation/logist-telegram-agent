@@ -3,6 +3,8 @@
 Одного работающего инстанса агента достаточно для MVP — как и в app/publishing/service.py.
 """
 
+from decimal import Decimal
+
 # tg_user_id водителя -> имя поля Driver, которое агент запросил последним.
 _awaiting_field: dict[int, str] = {}
 
@@ -15,6 +17,10 @@ _PROCESSED_MESSAGES_LIMIT = 5000
 _unclear_streak: dict[int, int] = {}
 UNCLEAR_STREAK_LIMIT = 2
 
+# tg_user_id водителя -> сумма, которую агент последней предложил при торге
+# (чтобы не откатиться на базовую оплату, если водитель потом согласится).
+_last_offer: dict[int, Decimal] = {}
+
 
 def mark_processed(chat_id: int, message_id: int) -> bool:
     """True, если сообщение обрабатывается впервые (и помечает его обработанным)."""
@@ -25,6 +31,20 @@ def mark_processed(chat_id: int, message_id: int) -> bool:
         _processed_messages.clear()
     _processed_messages.add(key)
     return True
+
+
+def unmark_processed(chat_id: int, message_id: int) -> None:
+    """Снимает пометку — используется, если обработка упала с ошибкой до коммита,
+    чтобы повторная доставка того же события не была молча отброшена."""
+    _processed_messages.discard((chat_id, message_id))
+
+
+def set_last_offer(tg_user_id: int, amount: Decimal) -> None:
+    _last_offer[tg_user_id] = amount
+
+
+def pop_last_offer(tg_user_id: int) -> Decimal | None:
+    return _last_offer.pop(tg_user_id, None)
 
 
 def bump_unclear_streak(tg_user_id: int) -> int:

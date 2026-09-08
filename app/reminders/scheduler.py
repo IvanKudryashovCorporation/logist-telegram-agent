@@ -35,7 +35,10 @@ def start_commission_reminders(client: TelegramClient) -> AsyncIOScheduler:
 
 
 async def _check_due_orders(client: TelegramClient) -> None:
-    deadline = datetime.utcnow() - timedelta(hours=settings.commission_reminder_hours)
+    # pickup_at хранится как локальное время (как его вводит диспетчер и видит логист
+    # в веб-панели), поэтому сравниваем с локальным now(), а не UTC — иначе на UTC+3
+    # напоминание уходит на 3 часа позже, чем нужно.
+    deadline = datetime.now() - timedelta(hours=settings.commission_reminder_hours)
     async with SessionLocal() as session:
         orders = (
             await session.execute(
