@@ -3,10 +3,17 @@
 Одного работающего инстанса агента достаточно для MVP — как и в app/publishing/service.py.
 """
 
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 # tg_user_id водителя -> имя поля Driver, которое агент запросил последним.
 _awaiting_field: dict[int, str] = {}
+
+# tg_user_id водителя -> когда последний раз просили уточнить, по какому заказу
+# он пишет (не нашли заказ по маршруту в "холодном" личном сообщении). Не даёт
+# засыпать одинаковым вопросом, если водитель шлёт несколько сообщений подряд.
+_cold_dm_prompted_at: dict[int, datetime] = {}
+_COLD_DM_PROMPT_COOLDOWN = timedelta(seconds=90)
 
 # (chat_id, message_id) уже обработанных сообщений — защита от повторной доставки
 # одного и того же события Telethon (например после реконнекта/get_difference).
@@ -54,6 +61,16 @@ def bump_unclear_streak(tg_user_id: int) -> int:
 
 def reset_unclear_streak(tg_user_id: int) -> None:
     _unclear_streak.pop(tg_user_id, None)
+
+
+def should_send_cold_dm_prompt(tg_user_id: int) -> bool:
+    """True — можно (снова) спросить «по какому заказу вы пишете»."""
+    last = _cold_dm_prompted_at.get(tg_user_id)
+    now = datetime.utcnow()
+    if last is not None and now - last < _COLD_DM_PROMPT_COOLDOWN:
+        return False
+    _cold_dm_prompted_at[tg_user_id] = now
+    return True
 
 # Порядок сбора обязательных данных (вопрос 81).
 REQUIRED_FIELDS_ORDER = [

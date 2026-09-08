@@ -41,6 +41,7 @@ from app.negotiation.state import (
     reset_unclear_streak,
     set_awaiting,
     set_last_offer,
+    should_send_cold_dm_prompt,
     unmark_processed,
 )
 
@@ -226,17 +227,24 @@ async def _handle_driver_dm_inner(client: TelegramClient, sender_id: int, messag
         # в переговоры по какому-то ДРУГОМУ заказу, даже если те ещё открыты.
         text = (message.raw_text or "").strip()
         if text:
-            assigned_responses = (
+            # Фильтруем по статусу ЗАКАЗА, а не только отклика: response.status
+            # остаётся ASSIGNED навсегда (это факт истории — этот водитель победил),
+            # даже когда заказ давно завершён/отменён. Без фильтра по заказу старый
+            # неубранный тестовый/забытый заказ мог перехватить сообщение про
+            # текущий, действительно активный (воспроизвели на живом тесте).
+            assigned_pairs = (
                 await session.execute(
-                    select(DriverResponse)
-                    .where(DriverResponse.driver_id == driver.id, DriverResponse.status == ResponseStatus.ASSIGNED)
+                    select(DriverResponse, Order)
+                    .join(Order, DriverResponse.order_id == Order.id)
+                    .where(
+                        DriverResponse.driver_id == driver.id,
+                        DriverResponse.status == ResponseStatus.ASSIGNED,
+                        Order.status.in_([OrderStatus.DRIVER_ASSIGNED, OrderStatus.IN_PROGRESS]),
+                    )
                     .order_by(DriverResponse.id.desc())
                 )
-            ).scalars().all()
-            for assigned_response in assigned_responses:
-                assigned_order = await session.get(Order, assigned_response.order_id)
-                if assigned_order is None:
-                    continue
+            ).all()
+            for _assigned_response, assigned_order in assigned_pairs:
                 handled = await handle_assigned_driver_message(client, session, driver, assigned_order, text)
                 if handled:
                     await session.commit()
@@ -262,13 +270,16 @@ async def _handle_driver_dm_inner(client: TelegramClient, sender_id: int, messag
 
             hinted_order = await _find_order_by_route_hint(session, text)
             if hinted_order is None:
-                await _safe_send_to_driver(
-                    client,
-                    0,
-                    driver.tg_user_id,
-                    "Здравствуйте! По какому заказу вы пишете — уточните маршрут, "
-                    "или ответьте прямо на объявление в группе, так я не перепутаю.",
-                )
+                if should_send_cold_dm_prompt(driver.tg_user_id):
+                    await _safe_send_to_driver(
+                        client,
+                        0,
+                        driver.tg_user_id,
+                        "Здравствуйте! По какому заказу вы пишете — уточните маршрут, "
+                        "или ответьте прямо на объявление в группе, так я не перепутаю.",
+                    )
+                # иначе недавно уже спрашивали то же самое — не долбим повторно,
+                # просто ждём, пока водитель назовёт маршрут или сам сориентируется
                 await session.commit()
                 return
 
