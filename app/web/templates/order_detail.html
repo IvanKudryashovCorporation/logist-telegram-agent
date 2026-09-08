@@ -112,7 +112,8 @@
 
 <div class="section-title">Отклики водителей ({{ responses|length }})</div>
 {% if responses %}
-  <table class="card">
+  <div class="card table-scroll">
+  <table>
     <tr><th>#</th><th>Водитель</th><th>Тип</th><th>Статус</th><th>Просит</th><th>Согласовано</th><th>Текст</th><th></th></tr>
     {% for response, driver in responses %}
       <tr>
@@ -134,13 +135,15 @@
       </tr>
     {% endfor %}
   </table>
+  </div>
 {% else %}
   <div class="empty">Пока нет откликов.</div>
 {% endif %}
 
 <div class="section-title">Публикации ({{ publications|length }})</div>
 {% if publications %}
-  <table class="card">
+  <div class="card table-scroll">
+  <table>
     <tr><th>Группа</th><th>Опубликовано</th><th>Удалено</th><th>Оплата на момент</th></tr>
     {% for pub, group in publications %}
       <tr>
@@ -151,13 +154,15 @@
       </tr>
     {% endfor %}
   </table>
+  </div>
 {% else %}
   <div class="empty">Публикаций не было.</div>
 {% endif %}
 
 <div class="section-title">История</div>
 {% if logs %}
-  <table class="card">
+  <div class="card table-scroll">
+  <table>
     <tr><th>Когда</th><th>Кто</th><th>Действие</th><th>Детали</th></tr>
     {% for log in logs %}
       <tr>
@@ -168,6 +173,7 @@
       </tr>
     {% endfor %}
   </table>
+  </div>
 {% else %}
   <div class="empty">Пусто.</div>
 {% endif %}
