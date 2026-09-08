@@ -8,21 +8,49 @@
   <div class="route">{{ order.from_city or "?" }} → {{ order.to_city or "?" }} <span class="badge">{{ status_labels[order.status] }}</span></div>
   {% if order.has_problem %}<div class="badge" style="background:#fee2e2;color:#dc2626;">⚠ {{ order.problem_note or "Проблема" }}</div>{% endif %}
 
-  <table style="margin-top: 10px;">
-    <tr><th>Подача</th><td>{{ order.pickup_at.strftime("%d.%m.%Y %H:%M") if order.pickup_at else "не указана" }}</td></tr>
-    <tr><th>Откуда</th><td>{{ order.from_address or order.from_city or "—" }}</td></tr>
-    <tr><th>Куда</th><td>{{ order.to_address or order.to_city or "—" }}</td></tr>
-    {% if order.flight_or_train %}<tr><th>Рейс/поезд</th><td>{{ order.flight_or_train }}</td></tr>{% endif %}
-    <tr><th>Пассажиров</th><td>{{ order.passengers or "—" }}</td></tr>
-    {% if order.car_class %}<tr><th>Класс авто</th><td>{{ order.car_class }}</td></tr>{% endif %}
-    {% if order.luggage %}<tr><th>Багаж</th><td>{{ order.luggage }}</td></tr>{% endif %}
-    <tr><th>Клиент</th><td>{{ order.client_name or "—" }}, {{ order.client_phone or "—" }}</td></tr>
-    <tr><th>Цена клиента</th><td>{{ order.client_price or "—" }} ₽</td></tr>
-    <tr><th>Оплата водителю</th><td>{{ order.driver_payment or "—" }} ₽</td></tr>
-    <tr><th>Комиссия</th><td>{{ order.commission or "—" }} {% if order.commission_paid %}(оплачена){% endif %}</td></tr>
-    <tr><th>Диспетчер</th><td>{{ order.dispatcher_username or order.dispatcher_tg_id or "—" }}</td></tr>
-    <tr><th>Исходный текст</th><td>{{ order.raw_text }}</td></tr>
-  </table>
+  <form method="post" action="/orders/{{ order.id }}/update" class="edit-form">
+    <div class="field-grid">
+      <label>Статус
+        <select name="status">
+          {% for s in statuses %}
+            <option value="{{ s.value }}" {% if order.status == s %}selected{% endif %}>{{ status_labels[s] }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Подача
+        <input type="datetime-local" name="pickup_at" value="{{ order.pickup_at.strftime('%Y-%m-%dT%H:%M') if order.pickup_at else '' }}">
+      </label>
+      <label>Откуда (город)<input type="text" name="from_city" value="{{ order.from_city or '' }}"></label>
+      <label>Куда (город)<input type="text" name="to_city" value="{{ order.to_city or '' }}"></label>
+      <label>Откуда (адрес)<input type="text" name="from_address" value="{{ order.from_address or '' }}"></label>
+      <label>Куда (адрес)<input type="text" name="to_address" value="{{ order.to_address or '' }}"></label>
+      <label>Рейс/поезд<input type="text" name="flight_or_train" value="{{ order.flight_or_train or '' }}"></label>
+      <label>Класс авто<input type="text" name="car_class" value="{{ order.car_class or '' }}"></label>
+      <label>Пассажиров<input type="number" name="passengers" value="{{ order.passengers or '' }}"></label>
+      <label>Багаж<input type="text" name="luggage" value="{{ order.luggage or '' }}"></label>
+      <label>Имя клиента<input type="text" name="client_name" value="{{ order.client_name or '' }}"></label>
+      <label>Телефон клиента<input type="text" name="client_phone" value="{{ order.client_phone or '' }}"></label>
+      <label>Цена клиента, ₽<input type="number" step="0.01" name="client_price" value="{{ order.client_price or '' }}"></label>
+      <label>Оплата водителю, ₽<input type="number" step="0.01" name="driver_payment" value="{{ order.driver_payment or '' }}"></label>
+      <label>Комиссия, ₽<input type="number" step="0.01" name="commission" value="{{ order.commission or '' }}"></label>
+      <label>Заметка о проблеме<input type="text" name="problem_note" value="{{ order.problem_note or '' }}"></label>
+    </div>
+    <div class="checkbox-row">
+      <label><input type="checkbox" name="has_pets" {% if order.has_pets %}checked{% endif %}> с животным</label>
+      <label><input type="checkbox" name="needs_child_seat" {% if order.needs_child_seat %}checked{% endif %}> детское кресло</label>
+      <label><input type="checkbox" name="is_urgent" {% if order.is_urgent %}checked{% endif %}> срочный</label>
+      <label><input type="checkbox" name="commission_paid" {% if order.commission_paid %}checked{% endif %}> комиссия оплачена</label>
+      <label><input type="checkbox" name="has_problem" {% if order.has_problem %}checked{% endif %}> проблема</label>
+    </div>
+    <div class="muted" style="margin: 8px 0;">
+      Диспетчер: {{ order.dispatcher_username or order.dispatcher_tg_id or "—" }} · Исходный текст: {{ order.raw_text }}
+    </div>
+    <div class="muted" style="margin-bottom: 10px;">
+      Изменение статуса здесь не шлёт уведомлений водителю и не удаляет публикации в группах —
+      для назначения/отмены с side-эффектами используйте команды в Telegram (/assign, /cancel).
+    </div>
+    <button type="submit">Сохранить</button>
+  </form>
 
   {% if assigned_driver %}
     <div class="section-title">Назначенный водитель</div>

@@ -9,7 +9,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from fastapi import FastAPI, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 
@@ -17,6 +17,7 @@ from app.db.base import SessionLocal
 from app.models import (
     ORDER_STATUS_LABELS,
     ActionLog,
+    ActorType,
     Driver,
     DriverGroup,
     DriverResponse,
@@ -167,8 +168,86 @@ async def order_detail(request: Request, order_id: int):
             "responses": responses,
             "publications": publications,
             "logs": logs,
+            "statuses": list(OrderStatus),
         },
     )
+
+
+@app.post("/orders/{order_id}/update")
+async def update_order(request: Request, order_id: int):
+    form = await request.form()
+
+    def _s(name: str) -> str | None:
+        value = form.get(name)
+        value = value.strip() if isinstance(value, str) else value
+        return value or None
+
+    def _dec(name: str) -> Decimal | None:
+        value = _s(name)
+        try:
+            return Decimal(value) if value is not None else None
+        except Exception:
+            return None
+
+    def _int(name: str) -> int | None:
+        value = _s(name)
+        try:
+            return int(value) if value is not None else None
+        except ValueError:
+            return None
+
+    async with SessionLocal() as session:
+        order = await session.get(Order, order_id)
+        if order is None:
+            return HTMLResponse("Заказ не найден", status_code=404)
+
+        status_value = _s("status")
+        if status_value:
+            try:
+                order.status = OrderStatus(status_value)
+            except ValueError:
+                pass
+
+        pickup_raw = _s("pickup_at")
+        if pickup_raw:
+            try:
+                order.pickup_at = datetime.fromisoformat(pickup_raw)
+            except ValueError:
+                pass
+        else:
+            order.pickup_at = None
+
+        order.from_city = _s("from_city")
+        order.to_city = _s("to_city")
+        order.from_address = _s("from_address")
+        order.to_address = _s("to_address")
+        order.flight_or_train = _s("flight_or_train")
+        order.car_class = _s("car_class")
+        order.passengers = _int("passengers")
+        order.luggage = _s("luggage")
+        order.has_pets = form.get("has_pets") is not None
+        order.needs_child_seat = form.get("needs_child_seat") is not None
+        order.client_name = _s("client_name")
+        order.client_phone = _s("client_phone")
+        order.client_price = _dec("client_price")
+        order.driver_payment = _dec("driver_payment")
+        order.commission = _dec("commission")
+        order.commission_paid = form.get("commission_paid") is not None
+        order.has_problem = form.get("has_problem") is not None
+        order.problem_note = _s("problem_note")
+        order.is_urgent = form.get("is_urgent") is not None
+
+        session.add(
+            ActionLog(
+                order_id=order.id,
+                actor=ActorType.LOGIST,
+                action="web_edit",
+                details="изменено через веб-панель",
+            )
+        )
+        await session.commit()
+
+    return RedirectResponse(url=f"/orders/{order_id}", status_code=303)
 
 
 @app.get("/reports", response_class=HTMLResponse)

@@ -84,6 +84,23 @@
     th { color: var(--muted); font-weight: 500; }
     .stat { font-size: 28px; font-weight: 700; }
     .empty { color: var(--muted); padding: 8px 0; }
+    .field-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 10px 14px;
+      margin-top: 10px;
+    }
+    .field-grid label {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .field-grid input, .field-grid select { width: 100%; }
+    .checkbox-row { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 12px; }
+    .checkbox-row label { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--text); }
+    .edit-form button { margin-top: 4px; }
   </style>
 </head>
 <body>
