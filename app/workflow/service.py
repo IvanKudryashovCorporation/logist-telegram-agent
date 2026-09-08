@@ -233,6 +233,11 @@ async def handle_assigned_driver_message(
         payment_msg = "Отлично! Заказ переведён в работу."
         if settings.payment_details:
             payment_msg += f"\nПосле поездки переведите комиссию по реквизитам:\n{settings.payment_details}"
+        else:
+            # Без реквизитов в настройках всё равно даём водителю понятную инструкцию,
+            # а не тишину — иначе он не знает, что вообще должен что-то оплатить.
+            payment_msg += "\nПосле поездки переведите комиссию — реквизиты уточните у логиста."
+        payment_msg += "\nКогда оплатите — напишите мне «оплатил комиссию»."
         await _safe_send(client, driver.tg_user_id, payment_msg)
 
         await client.send_message(

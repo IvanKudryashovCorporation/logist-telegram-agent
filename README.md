@@ -93,8 +93,84 @@ copy .env.example .env
 
 Открыть http://127.0.0.1:8000 — список заказов (сегодня/завтра/позже/просрочено),
 поиск по телефону/маршруту/водителю, карточка заказа, `/reports` — сводка за период.
-Без авторизации по решению из опроса — при выкладке на VPS ограничьте доступ на
-уровне сети (firewall/VPN), не открывайте порт наружу напрямую.
+
+Без авторизации по решению из опроса. `WEB_HOST`/`WEB_PORT` в `.env` управляют,
+на каком адресе слушать (по умолчанию `127.0.0.1` — недоступно снаружи).
+
+## Деплой на VPS (Ubuntu/Debian)
+
+Агент и веб-панель — два независимых процесса на одной БД. На сервере держим их
+через systemd (автозапуск, автоперезапуск при падении).
+
+**1. Подготовка сервера**
+
+```bash
+sudo adduser --system --group --home /opt/logist-agent logist
+sudo -u logist -H bash -c '
+  git clone <URL_вашего_репозитория> /opt/logist-agent/src &&
+  cd /opt/logist-agent/src &&
+  python3 -m venv .venv &&
+  .venv/bin/pip install -r requirements.txt
+'
+```
+
+(Пути в `deploy/*.service` указывают на `/opt/logist-agent` — либо клонируйте
+прямо туда, либо поправьте `WorkingDirectory`/`ExecStart` в юнитах под свой путь.)
+
+**2. `.env` и авторизация**
+
+```bash
+sudo -u logist cp /opt/logist-agent/src/.env.example /opt/logist-agent/src/.env
+sudo -u logist nano /opt/logist-agent/src/.env   # заполнить как локально
+cd /opt/logist-agent/src
+sudo -u logist .venv/bin/python -m scripts.auth_telegram              # запросит код
+sudo -u logist .venv/bin/python -m scripts.auth_telegram --code XXXXX # ввести код
+sudo -u logist .venv/bin/python -m alembic upgrade head
+```
+
+Для внешнего доступа к веб-панели добавьте в `.env`:
+
+```
+WEB_HOST=0.0.0.0
+```
+
+⚠ Без авторизации в панели это открывает её всем, кто узнает `IP:8000` — включая
+телефоны клиентов и цены в заказах. Если это не то, что нужно, ограничьте доступ
+файрволом (например `ufw allow from <ваш_IP> to any port 8000`) или поставьте
+Tailscale/VPN вместо публичного порта.
+
+**3. systemd**
+
+```bash
+sudo cp deploy/logist-agent.service deploy/logist-web.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now logist-agent logist-web
+sudo systemctl status logist-agent logist-web    # проверить, что оба Active
+sudo journalctl -u logist-agent -f               # живые логи агента
+```
+
+Если сервис не стартует — почти всегда дело в путях: проверьте, что
+`WorkingDirectory`/`ExecStart` в юнитах совпадают с реальным расположением
+проекта на сервере, и что `python3 -m venv` создал `.venv/bin/python` (не
+`Scripts/`, это Windows-путь).
+
+**4. Файрвол**
+
+```bash
+sudo ufw allow OpenSSH
+sudo ufw allow 8000/tcp    # только если WEB_HOST=0.0.0.0 и панель должна быть снаружи
+sudo ufw enable
+```
+
+**5. Обновление кода**
+
+```bash
+cd /opt/logist-agent/src
+sudo -u logist git pull
+sudo -u logist .venv/bin/pip install -r requirements.txt
+sudo -u logist .venv/bin/python -m alembic upgrade head
+sudo systemctl restart logist-agent logist-web
+```
 
 ## Структура
 
@@ -112,6 +188,7 @@ app/
   web/               FastAPI-панель (Этап 5)
 scripts/             авторизация, список чатов, smoke-тест БД, управление группами
 migrations/          Alembic
+deploy/              systemd-юниты для VPS (agent + web)
 main.py              точка входа агента
 webapp.py            точка входа веб-панели
 ```

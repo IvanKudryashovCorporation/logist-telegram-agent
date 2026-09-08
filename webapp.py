@@ -3,15 +3,18 @@
 
     python webapp.py
 
-Без авторизации по решению из опроса — при выкладке на VPS ограничьте
-доступ на уровне сети (firewall/VPN), не открывайте порт наружу напрямую.
+Без авторизации по решению из опроса. Хост и порт — из .env (WEB_HOST,
+WEB_PORT). Локально по умолчанию 127.0.0.1 (не торчит наружу); на VPS
+для внешнего доступа задайте WEB_HOST=0.0.0.0 и откройте порт в файрволе.
 """
 
 import uvicorn
+
+from app.config import settings
 
 if __name__ == "__main__":
     # reload=True звучит удобно для разработки, но на практике не стоит того:
     # его watcher-процесс переживает Ctrl+C/kill родителя и продолжает держать
     # порт со старым кодом, плюс шаблоны иногда не подхватывались на лету.
     # После правок просто перезапускайте процесс вручную.
-    uvicorn.run("app.web.server:app", host="127.0.0.1", port=8000, reload=False)
+    uvicorn.run("app.web.server:app", host=settings.web_host, port=settings.web_port, reload=False)

@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     # БД
     database_url: str = "sqlite+aiosqlite:///./logist.db"
 
+    # Веб-панель (Этап 5). Локально — 127.0.0.1, чтобы не торчать наружу.
+    # На VPS для внешнего доступа задайте WEB_HOST=0.0.0.0 в .env.
+    web_host: str = "127.0.0.1"
+    web_port: int = 8000
+
     # Бизнес-правила (см. опрос: вопросы 25-26, 30, 52, 75, 120, 124)
     default_driver_share: Decimal = Decimal("0.80")
     waiting_rate_per_hour: Decimal = Decimal("500")

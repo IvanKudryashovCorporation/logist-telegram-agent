@@ -1,0 +1,17 @@
+[Unit]
+Description=Logist Telegram Agent (main.py)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=logist
+WorkingDirectory=/opt/logist-agent
+ExecStart=/opt/logist-agent/.venv/bin/python main.py
+Restart=on-failure
+RestartSec=5
+# Файл сессии Telethon и .env содержат секреты — держим права строгими (см. README).
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

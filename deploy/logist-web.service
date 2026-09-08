@@ -1,0 +1,16 @@
+[Unit]
+Description=Logist Web Panel (webapp.py)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=logist
+WorkingDirectory=/opt/logist-agent
+ExecStart=/opt/logist-agent/.venv/bin/python webapp.py
+Restart=on-failure
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
