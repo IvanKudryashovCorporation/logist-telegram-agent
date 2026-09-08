@@ -191,13 +191,36 @@ async def handle_driver_dm(client: TelegramClient, sender_id: int, message) -> N
         raise
 
 
+async def _find_order_by_route_hint(session: AsyncSession, text: str) -> Order | None:
+    """Водитель написал в личку 'с нуля', не отвечая на объявление в группе.
+
+    Пытаемся угадать заказ по упомянутым городам маршрута среди ещё активных
+    заявок. Если совпадений нет или их несколько — лучше переспросить, чем
+    угадать неправильно."""
+    text_lower = text.lower()
+    candidates = (
+        await session.execute(
+            select(Order).where(Order.status.in_([OrderStatus.NEW, OrderStatus.SEARCHING, OrderStatus.HAS_RESPONSES]))
+        )
+    ).scalars().all()
+    matches = [
+        o
+        for o in candidates
+        if o.from_city and o.to_city and o.from_city.lower() in text_lower and o.to_city.lower() in text_lower
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 async def _handle_driver_dm_inner(client: TelegramClient, sender_id: int, message) -> None:
     async with SessionLocal() as session:
         driver = (
             await session.execute(select(Driver).where(Driver.tg_user_id == sender_id))
         ).scalar_one_or_none()
         if driver is None:
-            return  # неизвестный контакт — вне зоны действия MVP, разберёт логист вручную
+            # Незнакомый контакт написал в личку сам, без ответа в группе —
+            # заводим карточку водителя, дальше разберёмся по тексту сообщения.
+            sender = await message.get_sender()
+            driver = await _get_or_create_driver(session, sender)
 
         # Приоритет — уже назначенные заказы: "созвонился"/"оплатил" не должны попасть
         # в переговоры по какому-то ДРУГОМУ заказу, даже если те ещё открыты.
@@ -234,6 +257,37 @@ async def _handle_driver_dm_inner(client: TelegramClient, sender_id: int, messag
             )
         ).scalars().first()
         if response is None:
+            if not text:
+                return  # фото/стикер без единого слова текста — зацепиться не за что
+
+            hinted_order = await _find_order_by_route_hint(session, text)
+            if hinted_order is None:
+                await _safe_send_to_driver(
+                    client,
+                    0,
+                    driver.tg_user_id,
+                    "Здравствуйте! По какому заказу вы пишете — уточните маршрут, "
+                    "или ответьте прямо на объявление в группе, так я не перепутаю.",
+                )
+                await session.commit()
+                return
+
+            classified = await classify_driver_message(text)
+            _apply_opportunistic_fields(driver, classified)
+            response = DriverResponse(
+                order_id=hinted_order.id,
+                driver_id=driver.id,
+                raw_text=text,
+                kind=classified.kind,
+                requested_payment=classified.requested_payment,
+            )
+            session.add(response)
+            if hinted_order.status in (OrderStatus.NEW, OrderStatus.SEARCHING):
+                hinted_order.status = OrderStatus.HAS_RESPONSES
+            await session.flush()
+
+            await _react_to_kind(client, session, driver, response, hinted_order, classified)
+            await session.commit()
             return
 
         order = await session.get(Order, response.order_id)
