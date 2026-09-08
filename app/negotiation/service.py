@@ -28,6 +28,8 @@ from app.models import (
     ResponseStatus,
 )
 from app.negotiation.classifier import ClassifiedMessage, classify_driver_message
+from app.telegram.links import driver_link
+from app.workflow.service import handle_assigned_driver_message
 from app.negotiation.state import (
     FIELD_PROMPTS,
     UNCLEAR_STREAK_LIMIT,
@@ -40,12 +42,6 @@ from app.negotiation.state import (
 )
 
 log = logging.getLogger("agent.negotiation")
-
-
-def _driver_link(tg_user_id: int, label: str | None = None) -> str:
-    """HTML-ссылка на диалог с водителем — открывается сразу тапом, без поиска по id."""
-    label = label or str(tg_user_id)
-    return f'<a href="tg://user?id={tg_user_id}">{label}</a>'
 
 _CLOSED_STATUSES = {
     OrderStatus.DRIVER_ASSIGNED,
@@ -65,7 +61,7 @@ async def _safe_send_to_driver(client: TelegramClient, order_id: int, driver_tg_
         try:
             await client.send_message(
                 settings.logist_user_id,
-                f"⚠ Заказ #{order_id}: не смог написать {_driver_link(driver_tg_id)} в личку: {exc}. "
+                f"⚠ Заказ #{order_id}: не смог написать {driver_link(driver_tg_id)} в личку: {exc}. "
                 "Возможно, стоит написать самому.",
                 parse_mode="html",
             )
@@ -161,6 +157,26 @@ async def handle_driver_dm(client: TelegramClient, sender_id: int, message) -> N
         ).scalar_one_or_none()
         if driver is None:
             return  # неизвестный контакт — вне зоны действия MVP, разберёт логист вручную
+
+        # Приоритет — уже назначенные заказы: "созвонился"/"оплатил" не должны попасть
+        # в переговоры по какому-то ДРУГОМУ заказу, даже если те ещё открыты.
+        text = (message.raw_text or "").strip()
+        if text:
+            assigned_responses = (
+                await session.execute(
+                    select(DriverResponse)
+                    .where(DriverResponse.driver_id == driver.id, DriverResponse.status == ResponseStatus.ASSIGNED)
+                    .order_by(DriverResponse.created_at.desc())
+                )
+            ).scalars().all()
+            for assigned_response in assigned_responses:
+                assigned_order = await session.get(Order, assigned_response.order_id)
+                if assigned_order is None:
+                    continue
+                handled = await handle_assigned_driver_message(client, session, driver, assigned_order, text)
+                if handled:
+                    await session.commit()
+                    return
 
         response = (
             await session.execute(
@@ -260,7 +276,7 @@ async def _react_to_kind(
             )
             await client.send_message(
                 settings.logist_user_id,
-                f"⚠ Заказ #{order.id}: не могу понять {_driver_link(driver_tg_id, driver.name)}, напишите сами.\n"
+                f"⚠ Заказ #{order.id}: не могу понять {driver_link(driver_tg_id, driver.name)}, напишите сами.\n"
                 f"Последнее сообщение: {response.raw_text!r}",
                 parse_mode="html",
             )
@@ -325,7 +341,7 @@ async def _advance(
 
     summary = (
         f"Заказ #{order.id} ({order.from_city} → {order.to_city}): кандидат готов.\n"
-        f"Водитель: {_driver_link(driver.tg_user_id, driver.name)}, {driver.phone}\n"
+        f"Водитель: {driver_link(driver.tg_user_id, driver.name)}, {driver.phone}\n"
         f"Авто: {driver.car_model} {driver.car_plate}\n"
         f"Оплата: {response.agreed_payment or order.driver_payment} ₽\n"
         f"Откликов на заказ: {count}"

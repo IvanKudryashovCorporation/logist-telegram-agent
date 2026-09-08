@@ -29,6 +29,9 @@ def register_work_group_handlers(client: TelegramClient) -> None:
 
 
 async def _handle_message(client: TelegramClient, message, is_edit: bool) -> None:
+    if message.out:
+        return  # собственные сообщения агента в эту группу — не заявки
+
     text = (message.raw_text or "").strip()
     if not text:
         return
