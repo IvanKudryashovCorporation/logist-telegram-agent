@@ -69,17 +69,17 @@ async def main() -> None:
         register_work_group_handlers(client, list(work_group_ids))
         log.info("Слушаю заявки в %s рабочих группах.", len(work_group_ids))
 
-    if not settings.logist_user_id:
-        log.warning("LOGIST_USER_ID не задан — подтверждения публикаций отправлять некуда.")
-    else:
-        register_logist_dm_handlers(client)
-
     if not settings.driver_interaction_enabled:
         log.warning(
-            "DRIVER_INTERACTION_ENABLED=false — публикация водителям и переписка с ними "
-            "выключены, работает только разбор заявок из рабочих групп."
+            "DRIVER_INTERACTION_ENABLED=false — агент ничего не отвечает и никому не пишет, "
+            "работает только разбор заявок из рабочих групп в базу."
         )
     else:
+        if not settings.logist_user_id:
+            log.warning("LOGIST_USER_ID не задан — подтверждения публикаций отправлять некуда.")
+        else:
+            register_logist_dm_handlers(client)
+
         async with SessionLocal() as session:
             driver_group_ids = (
                 await session.execute(select(DriverGroup.tg_chat_id).where(DriverGroup.is_active.is_(True)))
