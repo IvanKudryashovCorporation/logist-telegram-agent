@@ -47,6 +47,12 @@
 
   {% if not link %}
     <div class="muted" style="margin-top: 10px;">Не удалось определить аккаунт диспетчера — заявка от {{ order.dispatcher_username or order.dispatcher_tg_id or "неизвестного отправителя" }}.</div>
+  {% elif not order.dispatcher_username %}
+    <div class="muted" style="margin-top: 10px;">
+      У диспетчера нет публичного @username — ссылка может не открыться сама в мобильном браузере.
+      Если не сработало, откройте страницу в приложении Telegram (через "поделиться" → "открыть в
+      приложении") или ответьте прямо на объявление в группе, откуда пришла заявка.
+    </div>
   {% endif %}
 </div>
 

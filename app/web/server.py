@@ -78,11 +78,18 @@ def _matches_query(order: Order, q: str) -> bool:
 
 
 def dispatcher_link(order: Order) -> str | None:
-    """Ссылка на диалог с диспетчером в Telegram, если известен его аккаунт."""
-    if order.dispatcher_tg_id:
-        return f"tg://user?id={order.dispatcher_tg_id}"
+    """Ссылка на диалог с диспетчером в Telegram, если известен его аккаунт.
+
+    https://t.me/<username> — предпочтительно: работает в любом браузере,
+    как в приложении, так и без него (откроет web.telegram.org). tg://user?id=
+    оставлен запасным для диспетчеров без публичного username — многие
+    мобильные браузеры блокируют этот "сырой" протокол при переходе с сайта,
+    поэтому им пользуемся только когда другого варианта нет.
+    """
     if order.dispatcher_username:
         return f"https://t.me/{order.dispatcher_username}"
+    if order.dispatcher_tg_id:
+        return f"tg://user?id={order.dispatcher_tg_id}"
     return None
 
 
