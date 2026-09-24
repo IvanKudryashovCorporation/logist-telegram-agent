@@ -41,7 +41,7 @@ copy .env.example .env
 - `TG_PHONE` — телефон аккаунта логиста
 - `LLM_API_KEY` — ключ Claude API (имя намеренно не `ANTHROPIC_*`, см. комментарий в `app/config.py`)
 - `LLM_BASE_URL` — заполнить, только если ключ выдан прокси-сервисом, а не напрямую console.anthropic.com
-- `WORK_GROUP_CHAT_ID`, `LOGIST_USER_ID` — заполняются после шага «Авторизация» ниже
+- `LOGIST_USER_ID` — заполняется после шага «Авторизация» ниже
 
 ## Авторизация в Telegram (один раз)
 
@@ -51,6 +51,21 @@ copy .env.example .env
 
 Скрипт запросит код из Telegram и пароль 2FA, затем создаст `logist.session`.
 Файл сессии — это доступ к аккаунту, он в `.gitignore`; не передавайте его.
+
+## Рабочие группы диспетчеров (откуда парсятся заявки)
+
+Список групп — в БД, можно добавить сколько угодно:
+
+```bash
+.venv\Scripts\python.exe -m scripts.manage_work_groups add @username_группы
+.venv\Scripts\python.exe -m scripts.manage_work_groups add -1001234567890 "Название группы"
+.venv\Scripts\python.exe -m scripts.manage_work_groups list
+.venv\Scripts\python.exe -m scripts.manage_work_groups deactivate <id>
+```
+
+Добавление по `@username`/ссылке резолвит чат через живую Telethon-сессию — не
+запускайте эту команду одновременно с работающим `main.py` (конфликт за файл
+сессии), сначала остановите агента.
 
 Дальше можно найти id нужных чатов:
 

@@ -15,6 +15,7 @@ from app.models.group import DriverGroup, Publication
 from app.models.log import ActionLog
 from app.models.order import Order
 from app.models.pending_action import PendingAction
+from app.models.work_group import WorkGroup
 
 __all__ = [
     "AGENT_ALLOWED_STATUSES",
@@ -32,4 +33,5 @@ __all__ = [
     "Publication",
     "ResponseKind",
     "ResponseStatus",
+    "WorkGroup",
 ]

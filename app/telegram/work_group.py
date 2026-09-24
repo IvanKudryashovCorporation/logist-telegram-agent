@@ -4,7 +4,6 @@ import logging
 
 from telethon import TelegramClient, events
 
-from app.config import settings
 from app.db.base import SessionLocal
 from app.models import ActionLog, ActorType, Order, OrderStatus
 from app.negotiation.state import mark_processed, unmark_processed
@@ -16,15 +15,15 @@ from sqlalchemy import select
 log = logging.getLogger("agent.work_group")
 
 
-def register_work_group_handlers(client: TelegramClient) -> None:
-    if not settings.work_group_chat_id:
+def register_work_group_handlers(client: TelegramClient, chat_ids: list[int]) -> None:
+    if not chat_ids:
         return
 
-    @client.on(events.NewMessage(chats=settings.work_group_chat_id))
+    @client.on(events.NewMessage(chats=chat_ids))
     async def on_new_order_message(event: events.NewMessage.Event) -> None:
         await _handle_message(client, event.message, is_edit=False)
 
-    @client.on(events.MessageEdited(chats=settings.work_group_chat_id))
+    @client.on(events.MessageEdited(chats=chat_ids))
     async def on_edited_order_message(event: events.MessageEdited.Event) -> None:
         await _handle_message(client, event.message, is_edit=True)
 
