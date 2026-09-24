@@ -1,8 +1,8 @@
 """Точка входа агента.
 
-Слушает рабочую группу диспетчеров (Этап 1), переписку с логистом в его же
-«Избранном» для подтверждения публикаций (Этап 2) и команд назначения (Этап 4),
-отклики водителей в группах и в личке (Этап 3), плюс напоминания о комиссии.
+Слушает рабочие группы диспетчеров и разбирает заявки в БД — это агрегатор
+заказов для водителей (см. app/web/), никакой переписки или публикации
+агент больше не ведёт.
 """
 
 import asyncio
@@ -12,14 +12,9 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.db.base import SessionLocal
-from app.models import DriverGroup, WorkGroup
-from app.reminders.scheduler import start_commission_reminders
+from app.models import WorkGroup
 from app.telegram.client import build_client
-from app.telegram.driver_dm import register_driver_dm_handlers
-from app.telegram.driver_groups import register_driver_group_handlers
-from app.telegram.logist_dm import register_logist_dm_handlers
 from app.telegram.work_group import register_work_group_handlers
-from app.workflow.queue import start_pending_actions_poller
 
 logging.basicConfig(
     level=logging.INFO,
@@ -68,31 +63,6 @@ async def main() -> None:
     else:
         register_work_group_handlers(client, list(work_group_ids))
         log.info("Слушаю заявки в %s рабочих группах.", len(work_group_ids))
-
-    if not settings.driver_interaction_enabled:
-        log.warning(
-            "DRIVER_INTERACTION_ENABLED=false — агент ничего не отвечает и никому не пишет, "
-            "работает только разбор заявок из рабочих групп в базу."
-        )
-    else:
-        if not settings.logist_user_id:
-            log.warning("LOGIST_USER_ID не задан — подтверждения публикаций отправлять некуда.")
-        else:
-            register_logist_dm_handlers(client)
-
-        async with SessionLocal() as session:
-            driver_group_ids = (
-                await session.execute(select(DriverGroup.tg_chat_id).where(DriverGroup.is_active.is_(True)))
-            ).scalars().all()
-        if not driver_group_ids:
-            log.warning("Нет ни одной активной водительской группы — отклики читать неоткуда.")
-        else:
-            register_driver_group_handlers(client, list(driver_group_ids))
-            log.info("Слушаю отклики в %s водительских группах.", len(driver_group_ids))
-
-        register_driver_dm_handlers(client)
-        start_commission_reminders(client)
-        start_pending_actions_poller(client)
 
     log.info("Ожидание событий. Ctrl+C для остановки.")
     await client.run_until_disconnected()

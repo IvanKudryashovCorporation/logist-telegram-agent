@@ -30,7 +30,7 @@ async def main() -> None:
             client_name="Иван",
             client_phone="+79990000000",
             client_price=Decimal("14000"),
-            driver_payment=Decimal("11200"),  # 80% по умолчанию
+            driver_payment=Decimal("14000"),  # 1 в 1, без наценки
             status=OrderStatus.NEW,
         )
         session.add(order)
@@ -49,11 +49,9 @@ async def main() -> None:
 
     async with SessionLocal() as session:
         loaded = (await session.execute(select(Order).where(Order.id == order_id))).scalar_one()
-        margin = (loaded.client_price or 0) - (loaded.driver_payment or 0)
         print(f"Прочитан: {loaded!r}")
         print(f"  подача:  {loaded.pickup_at}")
-        print(f"  клиент:  {loaded.client_price} ₽, водителю: {loaded.driver_payment} ₽")
-        print(f"  маржа:   {margin} ₽")
+        print(f"  цена:    {loaded.client_price} ₽")
 
         logs = (await session.execute(select(ActionLog).where(ActionLog.order_id == order_id))).scalars().all()
         print(f"  история: {[log.action for log in logs]}")

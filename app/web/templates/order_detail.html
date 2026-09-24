@@ -1,181 +1,36 @@
 {% extends "base.html" %}
-{% block title %}Заказ #{{ order.id }} — Логист{% endblock %}
-{% block head_extra %}
-  {% if has_pending %}<meta http-equiv="refresh" content="4">{% endif %}
-{% endblock %}
+{% block title %}Заказ #{{ order.id }}{% endblock %}
 {% block content %}
 
 <a href="/" class="muted">&larr; ко всем заказам</a>
 
-{% if pending_actions %}
-  <div class="card" style="margin-top: 10px;">
-    <div class="section-title" style="margin-top: 0;">Задачи для агента</div>
-    {% for a in pending_actions %}
-      <div style="padding: 4px 0; font-size: 14px;">
-        {{ a.created_at.strftime("%d.%m %H:%M") }} — {{ a.action.value }}
-        {% if a.status.value == "pending" %}
-          <span class="badge" style="background:#fff7ed;color:#d97706;">ожидает агента…</span>
-        {% elif a.status.value == "done" %}
-          <span class="badge" style="background:#f0fdf4;color:#16a34a;">выполнено</span> — {{ a.result_message }}
-        {% else %}
-          <span class="badge" style="background:#fee2e2;color:#dc2626;">ошибка</span> — {{ a.result_message }}
-        {% endif %}
-      </div>
-    {% endfor %}
-  </div>
-{% endif %}
-
 <div class="card" style="margin-top: 10px;">
-  <div class="route">{{ order.from_city or "?" }} → {{ order.to_city or "?" }} <span class="badge">{{ status_labels[order.status] }}</span></div>
-  {% if order.has_problem %}<div class="badge" style="background:#fee2e2;color:#dc2626;">⚠ {{ order.problem_note or "Проблема" }}</div>{% endif %}
+  <div class="route">{{ order.from_city or "?" }} → {{ order.to_city or "?" }}</div>
+  {% if order.status.value == "needs_clarification" %}
+    <div class="badge" style="background:#fff7ed;color:#d97706;">Часть данных не разобралась — сверьтесь с текстом заявки ниже</div>
+  {% endif %}
 
-  <div class="checkbox-row" style="margin-top: 10px;">
-    {% if not has_active_publications and order.status.value not in ["driver_assigned", "in_progress", "completed", "cancelled"] %}
-      <form method="post" action="/orders/{{ order.id }}/publish" onsubmit="return confirm('Опубликовать заказ в подходящие водительские группы?');">
-        <button type="submit">Опубликовать водителям</button>
-      </form>
-    {% endif %}
-    {% if order.status not in ["completed", "cancelled"] %}
-      <form method="post" action="/orders/{{ order.id }}/cancel" onsubmit="return confirm('Отменить заказ? Водителю (если назначен) придёт уведомление, публикации удалятся.');">
-        <button type="submit" style="background:#dc2626;border-color:#dc2626;">Отменить заказ</button>
-      </form>
-    {% endif %}
-    {% if order.status.value == "in_progress" %}
-      <form method="post" action="/orders/{{ order.id }}/complete">
-        <button type="submit" style="background:#16a34a;border-color:#16a34a;">Завершить заказ</button>
-      </form>
-    {% endif %}
-    {% if assigned_driver and not order.commission_paid %}
-      <form method="post" action="/orders/{{ order.id }}/confirm-payment">
-        <button type="submit">Подтвердить оплату комиссии</button>
-      </form>
-    {% endif %}
-  </div>
-  <div class="muted" style="margin-top: 6px;">
-    Кнопки выше отправляют команду живому агенту в Telegram (очередь, ~{{ 8 }} сек) — водителю уйдёт сообщение,
-    публикации удалятся, где нужно. Форма ниже — это прямое редактирование данных без уведомлений.
-  </div>
+  <table style="margin-top: 10px;">
+    <tr><th>Подача</th><td>{{ order.pickup_at.strftime("%d.%m.%Y %H:%M") if order.pickup_at else "не указана" }}</td></tr>
+    <tr><th>Откуда</th><td>{{ order.from_address or order.from_city or "—" }}</td></tr>
+    <tr><th>Куда</th><td>{{ order.to_address or order.to_city or "—" }}</td></tr>
+    {% if order.flight_or_train %}<tr><th>Рейс/поезд</th><td>{{ order.flight_or_train }}</td></tr>{% endif %}
+    <tr><th>Пассажиров</th><td>{{ order.passengers or "—" }}</td></tr>
+    {% if order.car_class %}<tr><th>Класс авто</th><td>{{ order.car_class }}</td></tr>{% endif %}
+    {% if order.luggage %}<tr><th>Багаж</th><td>{{ order.luggage }}</td></tr>{% endif %}
+    {% if order.has_pets %}<tr><th></th><td>С животным</td></tr>{% endif %}
+    {% if order.needs_child_seat %}<tr><th></th><td>Нужно детское кресло</td></tr>{% endif %}
+    <tr><th>Цена</th><td>{{ order.client_price or "—" }} ₽</td></tr>
+    <tr><th>Клиент</th><td>{{ order.client_name or "—" }}, {{ order.client_phone or "—" }}</td></tr>
+    <tr><th>Исходный текст</th><td class="muted">{{ order.raw_text }}</td></tr>
+  </table>
 
-  <form method="post" action="/orders/{{ order.id }}/update" class="edit-form">
-    <div class="field-grid">
-      <label>Статус
-        <select name="status">
-          {% for s in statuses %}
-            <option value="{{ s.value }}" {% if order.status == s %}selected{% endif %}>{{ status_labels[s] }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <label>Подача
-        <input type="datetime-local" name="pickup_at" value="{{ order.pickup_at.strftime('%Y-%m-%dT%H:%M') if order.pickup_at else '' }}">
-      </label>
-      <label>Откуда (город)<input type="text" name="from_city" value="{{ order.from_city or '' }}"></label>
-      <label>Куда (город)<input type="text" name="to_city" value="{{ order.to_city or '' }}"></label>
-      <label>Откуда (адрес)<input type="text" name="from_address" value="{{ order.from_address or '' }}"></label>
-      <label>Куда (адрес)<input type="text" name="to_address" value="{{ order.to_address or '' }}"></label>
-      <label>Класс авто<input type="text" name="car_class" value="{{ order.car_class or '' }}"></label>
-      <label>Пассажиров<input type="number" name="passengers" value="{{ order.passengers or '' }}"></label>
-      <label>Багаж<input type="text" name="luggage" value="{{ order.luggage or '' }}"></label>
-      <label>Имя клиента<input type="text" name="client_name" value="{{ order.client_name or '' }}"></label>
-      <label>Телефон клиента<input type="text" name="client_phone" value="{{ order.client_phone or '' }}"></label>
-      <label>Цена клиента, ₽<input type="number" step="0.01" name="client_price" value="{{ order.client_price or '' }}"></label>
-      <label>Оплата водителю, ₽<input type="number" step="0.01" name="driver_payment" value="{{ order.driver_payment or '' }}"></label>
-      <label>Комиссия, ₽<input type="number" step="0.01" name="commission" value="{{ order.commission or '' }}"></label>
-      <label>Заметка о проблеме<input type="text" name="problem_note" value="{{ order.problem_note or '' }}"></label>
-    </div>
-    <div class="checkbox-row">
-      <label><input type="checkbox" name="has_pets" {% if order.has_pets %}checked{% endif %}> с животным</label>
-      <label><input type="checkbox" name="needs_child_seat" {% if order.needs_child_seat %}checked{% endif %}> детское кресло</label>
-      <label><input type="checkbox" name="is_urgent" {% if order.is_urgent %}checked{% endif %}> срочный</label>
-      <label><input type="checkbox" name="commission_paid" {% if order.commission_paid %}checked{% endif %}> комиссия оплачена</label>
-      <label><input type="checkbox" name="has_problem" {% if order.has_problem %}checked{% endif %}> проблема</label>
-    </div>
-    <div class="muted" style="margin: 8px 0;">
-      Диспетчер: {{ order.dispatcher_username or order.dispatcher_tg_id or "—" }} · Исходный текст: {{ order.raw_text }}
-    </div>
-    <div class="muted" style="margin-bottom: 10px;">
-      Изменение статуса здесь не шлёт уведомлений водителю и не удаляет публикации в группах —
-      для назначения/отмены с side-эффектами используйте команды в Telegram (/assign, /cancel).
-    </div>
-    <button type="submit">Сохранить</button>
-  </form>
-
-  {% if assigned_driver %}
-    <div class="section-title">Назначенный водитель</div>
-    <table>
-      <tr><th>Имя</th><td>{{ assigned_driver.name or "—" }}</td></tr>
-      <tr><th>Телефон</th><td>{{ assigned_driver.phone or "—" }}</td></tr>
-      <tr><th>Авто</th><td>{{ assigned_driver.car_model or "—" }} {{ assigned_driver.car_plate or "" }}</td></tr>
-      <tr><th>Telegram</th><td><a href="tg://user?id={{ assigned_driver.tg_user_id }}">{{ assigned_driver.tg_username or assigned_driver.tg_user_id }}</a></td></tr>
-    </table>
+  {% set link = dispatcher_link(order) %}
+  {% if link %}
+    <a href="{{ link }}"><button style="margin-top: 14px;">Написать диспетчеру</button></a>
+  {% else %}
+    <div class="muted" style="margin-top: 14px;">Не удалось определить аккаунт диспетчера — заявка от {{ order.dispatcher_username or order.dispatcher_tg_id or "неизвестного отправителя" }}.</div>
   {% endif %}
 </div>
-
-<div class="section-title">Отклики водителей ({{ responses|length }})</div>
-{% if responses %}
-  <div class="card table-scroll">
-  <table>
-    <tr><th>#</th><th>Водитель</th><th>Тип</th><th>Статус</th><th>Просит</th><th>Согласовано</th><th>Текст</th><th></th></tr>
-    {% for response, driver in responses %}
-      <tr>
-        <td>{{ response.id }}</td>
-        <td><a href="tg://user?id={{ driver.tg_user_id }}">{{ driver.name or driver.tg_username or driver.tg_user_id }}</a></td>
-        <td>{{ response.kind.value }}</td>
-        <td>{{ response.status.value }}</td>
-        <td>{{ response.requested_payment or "—" }}</td>
-        <td>{{ response.agreed_payment or "—" }}</td>
-        <td class="muted">{{ response.raw_text or "—" }}</td>
-        <td>
-          {% if order.status.value not in ["driver_assigned", "in_progress", "completed", "cancelled"] and response.status.value in ["forwarded", "negotiating"] %}
-            <form method="post" action="/orders/{{ order.id }}/assign" onsubmit="return confirm('Назначить {{ driver.name or driver.tg_username }} на этот заказ?');">
-              <input type="hidden" name="response_id" value="{{ response.id }}">
-              <button type="submit">Назначить</button>
-            </form>
-          {% endif %}
-        </td>
-      </tr>
-    {% endfor %}
-  </table>
-  </div>
-{% else %}
-  <div class="empty">Пока нет откликов.</div>
-{% endif %}
-
-<div class="section-title">Публикации ({{ publications|length }})</div>
-{% if publications %}
-  <div class="card table-scroll">
-  <table>
-    <tr><th>Группа</th><th>Опубликовано</th><th>Удалено</th><th>Оплата на момент</th></tr>
-    {% for pub, group in publications %}
-      <tr>
-        <td>{{ group.title }}</td>
-        <td>{{ pub.posted_at.strftime("%d.%m %H:%M") if pub.posted_at else "—" }}</td>
-        <td>{% if pub.deleted_at %}{{ pub.deleted_at.strftime("%d.%m %H:%M") }}{% elif pub.delete_failed %}⚠ ошибка удаления{% else %}активна{% endif %}</td>
-        <td>{{ pub.driver_payment_at_post or "—" }}</td>
-      </tr>
-    {% endfor %}
-  </table>
-  </div>
-{% else %}
-  <div class="empty">Публикаций не было.</div>
-{% endif %}
-
-<div class="section-title">История</div>
-{% if logs %}
-  <div class="card table-scroll">
-  <table>
-    <tr><th>Когда</th><th>Кто</th><th>Действие</th><th>Детали</th></tr>
-    {% for log in logs %}
-      <tr>
-        <td class="muted">{{ log.created_at.strftime("%d.%m %H:%M") }}</td>
-        <td>{{ log.actor.value }}</td>
-        <td>{{ log.action }}</td>
-        <td class="muted">{{ log.details or "" }}</td>
-      </tr>
-    {% endfor %}
-  </table>
-  </div>
-{% else %}
-  <div class="empty">Пусто.</div>
-{% endif %}
 
 {% endblock %}

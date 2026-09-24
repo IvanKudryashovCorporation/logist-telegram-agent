@@ -47,8 +47,6 @@ async def main(code: str | None, password: str | None) -> None:
     me = await client.get_me()
     print(f"Авторизован: {me.first_name} (@{me.username}), id={me.id}")
     print(f"Файл сессии: {settings.session_path}")
-    print()
-    print("Подставьте этот id в .env как LOGIST_USER_ID, если это аккаунт логиста.")
 
     await client.disconnect()
 

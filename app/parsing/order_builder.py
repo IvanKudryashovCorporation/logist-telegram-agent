@@ -1,10 +1,12 @@
-"""Сборка/обновление модели Order из результата LLM-парсинга."""
+"""Сборка/обновление модели Order из результата LLM-парсинга.
+
+Цена переносится 1 в 1 из заявки, без наценки — это агрегатор для
+водителей, не посредник.
+"""
 
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
 from typing import Optional
 
-from app.config import settings
 from app.models import Order, OrderStatus
 from app.parsing.schema import ParsedOrder
 
@@ -16,15 +18,6 @@ def _combine_pickup_at(pickup_date: Optional[str], pickup_time: Optional[str]) -
     try:
         return datetime.fromisoformat(f"{pickup_date}T{time_part}")
     except ValueError:
-        return None
-
-
-def _driver_payment(client_price: Optional[Decimal]) -> Optional[Decimal]:
-    if client_price is None:
-        return None
-    try:
-        return (client_price * settings.default_driver_share).quantize(Decimal("1"))
-    except InvalidOperation:
         return None
 
 
@@ -47,7 +40,7 @@ def apply_parsed_fields(order: Order, parsed: ParsedOrder) -> None:
 
     if parsed.client_price is not None:
         order.client_price = parsed.client_price
-        order.driver_payment = _driver_payment(parsed.client_price)
+        order.driver_payment = parsed.client_price  # без наценки, 1 в 1
 
     if order.status in (OrderStatus.NEW, OrderStatus.NEEDS_CLARIFICATION):
         order.status = (

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Логист{% endblock %}</title>
+  <title>{% block title %}Заказы для водителей{% endblock %}</title>
   {% block head_extra %}{% endblock %}
   <style>
     :root {
@@ -80,36 +80,15 @@
       cursor: pointer;
       font-size: 14px;
     }
-    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-    .table-scroll table { min-width: 480px; }
     table { border-collapse: collapse; width: 100%; }
     th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 14px; }
     th { color: var(--muted); font-weight: 500; }
-    .stat { font-size: 28px; font-weight: 700; }
     .empty { color: var(--muted); padding: 8px 0; }
-    .field-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-      gap: 10px 14px;
-      margin-top: 10px;
-    }
-    .field-grid label {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      font-size: 13px;
-      color: var(--muted);
-    }
-    .field-grid input, .field-grid select { width: 100%; }
-    .checkbox-row { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 12px; }
-    .checkbox-row label { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--text); }
-    .edit-form button { margin-top: 4px; }
   </style>
 </head>
 <body>
   <header>
-    <a href="/">Заказы</a>
-    <a href="/reports" class="muted">Отчёт</a>
+    <a href="/">Заказы для водителей</a>
   </header>
   <main>
     {% block content %}{% endblock %}

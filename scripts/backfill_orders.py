@@ -44,14 +44,14 @@ async def backfill(limit: int, only_group_id: int | None) -> None:
                 print(f"  [{message.id}] пропущено (пусто/реплай/своё)")
                 continue
             try:
-                order_id, status, is_new, _ = await _upsert_order(client, message, is_edit=False)
+                order_id = await _upsert_order(message, is_edit=False)
             except Exception as exc:
                 print(f"  [{message.id}] ОШИБКА: {exc}")
                 continue
             if order_id is None:
                 print(f"  [{message.id}] не заявка: {text[:60]!r}")
             else:
-                print(f"  [{message.id}] {'создан' if is_new else 'обновлён'} заказ #{order_id}, статус={status.value}")
+                print(f"  [{message.id}] заказ #{order_id}")
 
     await client.disconnect()
 

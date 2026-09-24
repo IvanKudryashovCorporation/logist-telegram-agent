@@ -1,16 +1,19 @@
-"""Обработчики сообщений в рабочей группе диспетчеров (Этап 1, вопросы 19-20, 103)."""
+"""Обработчики сообщений в рабочих группах диспетчеров: разбор заявок в БД.
+
+Агрегатор для водителей — здесь только парсинг, никакой публикации или
+переписки с кем-либо (вопросы 19-20, 103 из опроса, актуальны только
+в части устройства парсинга).
+"""
 
 import logging
 
 from telethon import TelegramClient, events
 
-from app.config import settings
 from app.db.base import SessionLocal
-from app.models import ActionLog, ActorType, Order, OrderStatus
-from app.negotiation.state import mark_processed, unmark_processed
+from app.models import ActionLog, ActorType, Order
 from app.parsing.llm_parser import parse_order_text
 from app.parsing.order_builder import apply_parsed_fields
-from app.publishing.service import propose_publication
+from app.telegram.dedup import mark_processed, unmark_processed
 from sqlalchemy import select
 
 log = logging.getLogger("agent.work_group")
@@ -22,14 +25,14 @@ def register_work_group_handlers(client: TelegramClient, chat_ids: list[int]) ->
 
     @client.on(events.NewMessage(chats=chat_ids))
     async def on_new_order_message(event: events.NewMessage.Event) -> None:
-        await _handle_message(client, event.message, is_edit=False)
+        await _handle_message(event.message, is_edit=False)
 
     @client.on(events.MessageEdited(chats=chat_ids))
     async def on_edited_order_message(event: events.MessageEdited.Event) -> None:
-        await _handle_message(client, event.message, is_edit=True)
+        await _handle_message(event.message, is_edit=True)
 
 
-async def _handle_message(client: TelegramClient, message, is_edit: bool) -> None:
+async def _handle_message(message, is_edit: bool) -> None:
     if message.out:
         return  # собственные сообщения агента в эту группу — не заявки
 
@@ -38,34 +41,24 @@ async def _handle_message(client: TelegramClient, message, is_edit: bool) -> Non
         return
 
     if not is_edit and message.reply_to_msg_id is not None:
-        # Реплай — это переписка (например отклик водителя в общем чате), а не новая заявка.
+        # Реплай — это переписка в чате, а не новая заявка.
         return
 
     # Защита от повторной доставки одного и того же события Telethon (реконнект,
-    # get_difference) — иначе получаем дубликат заказа и двойную публикацию.
+    # get_difference) — иначе получаем дубликат заказа.
     if not mark_processed(message.chat_id, message.id):
         return
 
     try:
-        order_id, order_status, is_new_order, status_before = await _upsert_order(client, message, is_edit)
+        await _upsert_order(message, is_edit)
     except Exception:
         unmark_processed(message.chat_id, message.id)
         raise
 
-    if order_id is None:
-        return
 
-    # Предлагаем публикацию, когда заказ впервые становится полностью разобранным.
-    # Временно выключено — сейчас нужен только разбор заявок, без выхода на водителей.
-    if (
-        settings.driver_interaction_enabled
-        and order_status == OrderStatus.NEW
-        and (is_new_order or status_before == OrderStatus.NEEDS_CLARIFICATION)
-    ):
-        await propose_publication(order_id, client)
-
-
-async def _upsert_order(client: TelegramClient, message, is_edit: bool):
+async def _upsert_order(message, is_edit: bool) -> int | None:
+    """Возвращает id созданного/обновлённого заказа, или None, если сообщение
+    не было заявкой (обычная переписка) либо это правка того, что и раньше не было заявкой."""
     text = message.raw_text.strip()
     sender = await message.get_sender()
     dispatcher_tg_id = getattr(sender, "id", None)
@@ -81,14 +74,14 @@ async def _upsert_order(client: TelegramClient, message, is_edit: bool):
             )
         ).scalar_one_or_none()
         if is_edit and order is None:
-            return None, None, None, None  # правка сообщения, которое мы и раньше не считали заявкой
+            return  # правка сообщения, которое мы и раньше не считали заявкой
 
         parsed = await parse_order_text(text)
 
         is_new_order = order is None
         if order is None:
             if not parsed.is_order:
-                return None, None, None, None  # обычное сообщение в чате, не заявка
+                return  # обычное сообщение в чате, не заявка
             order = Order(
                 source_chat_id=message.chat_id,
                 source_message_id=message.id,
@@ -100,7 +93,6 @@ async def _upsert_order(client: TelegramClient, message, is_edit: bool):
         else:
             order.raw_text = text
 
-        status_before = order.status
         apply_parsed_fields(order, parsed)
         await session.flush()
 
@@ -114,15 +106,13 @@ async def _upsert_order(client: TelegramClient, message, is_edit: bool):
             )
         )
         await session.commit()
-        order_id, order_status = order.id, order.status
 
         log.info(
             "%s заказ #%s: %s -> %s, статус=%s",
             "Создан" if is_new_order else "Обновлён",
-            order_id,
+            order.id,
             order.from_city,
             order.to_city,
-            order_status.value,
+            order.status.value,
         )
-
-    return order_id, order_status, is_new_order, status_before
+        return order.id

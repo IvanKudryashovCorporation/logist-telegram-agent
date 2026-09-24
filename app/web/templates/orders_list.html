@@ -1,19 +1,13 @@
 {% extends "base.html" %}
-{% block title %}Заказы — Логист{% endblock %}
+{% block title %}Заказы для водителей{% endblock %}
 {% block content %}
 
 <form class="toolbar" method="get" action="/">
-  <input type="text" name="q" value="{{ q }}" placeholder="Поиск: телефон, город, водитель, номер авто...">
-  <select name="status">
-    <option value="">Все статусы</option>
-    {% for s in statuses %}
-      <option value="{{ s.value }}" {% if status == s.value %}selected{% endif %}>{{ status_labels[s] }}</option>
-    {% endfor %}
-  </select>
+  <input type="text" name="q" value="{{ q }}" placeholder="Поиск: город, телефон, диспетчер...">
   <button type="submit">Найти</button>
 </form>
 
-{% for key in ["overdue", "today", "tomorrow", "later", "no_date", "closed"] %}
+{% for key in ["overdue", "today", "tomorrow", "later", "no_date"] %}
   {% set orders = buckets[key] %}
   {% if orders %}
     <div class="section-title {{ key }}">{{ bucket_titles[key] }} ({{ orders|length }})</div>
@@ -24,17 +18,13 @@
             <div class="route">{{ order.from_city or "?" }} → {{ order.to_city or "?" }}</div>
             <div class="muted">
               {% if order.pickup_at %}{{ order.pickup_at.strftime("%d.%m %H:%M") }}{% else %}время не указано{% endif %}
-              · #{{ order.id }}
             </div>
-            <div style="margin-top: 6px;">
-              <span class="badge">{{ status_labels[order.status] }}</span>
-              {% if order.has_problem %}<span class="badge" style="background:#fee2e2;color:#dc2626;">Проблема</span>{% endif %}
-            </div>
-            {% if order.assigned_driver_id and drivers.get(order.assigned_driver_id) %}
-              <div class="muted" style="margin-top: 6px;">Водитель: {{ drivers[order.assigned_driver_id].name or drivers[order.assigned_driver_id].tg_username }}</div>
+            {% if order.status.value == "needs_clarification" %}
+              <div style="margin-top: 6px;"><span class="badge" style="background:#fff7ed;color:#d97706;">Уточняется</span></div>
             {% endif %}
+            {% if order.passengers %}<div class="muted" style="margin-top: 6px;">{{ order.passengers }} чел.</div>{% endif %}
             {% if order.client_price %}
-              <div class="muted">{{ order.client_price }} ₽{% if order.driver_payment %} · водителю {{ order.driver_payment }} ₽{% endif %}</div>
+              <div class="route" style="margin-top: 4px;">{{ order.client_price }} ₽</div>
             {% endif %}
           </div>
         </a>
@@ -44,7 +34,7 @@
 {% endfor %}
 
 {% if buckets.values() | map("length") | sum == 0 %}
-  <div class="empty">Ничего не найдено.</div>
+  <div class="empty">Заказов не найдено.</div>
 {% endif %}
 
 {% endblock %}

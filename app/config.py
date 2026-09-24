@@ -1,6 +1,5 @@
 """Конфигурация приложения: читается из .env."""
 
-from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -33,14 +32,9 @@ class Settings(BaseSettings):
     tg_phone: str = ""
     tg_session_name: str = "logist"
 
-    # Чаты
+    # Чаты. Список рабочих групп живёт в БД (scripts.manage_work_groups);
+    # это поле — только для разового переноса старой настройки из .env.
     work_group_chat_id: OptionalInt = None
-    logist_user_id: OptionalInt = None
-
-    # Временный рубильник: только парсинг заявок из рабочих групп (Этап 1),
-    # без публикации водителям и без переписки с ними (Этапы 2-3 выключены).
-    # Верните True в .env, когда будете готовы включить публикацию/переговоры.
-    driver_interaction_enabled: bool = True
 
     # LLM
     # Внимание: НЕ называть ANTHROPIC_*  — эти имена зарезервированы окружением
@@ -53,19 +47,10 @@ class Settings(BaseSettings):
     # БД
     database_url: str = "sqlite+aiosqlite:///./logist.db"
 
-    # Веб-панель (Этап 5). Локально — 127.0.0.1, чтобы не торчать наружу.
+    # Веб-панель. Локально — 127.0.0.1, чтобы не торчать наружу.
     # На VPS для внешнего доступа задайте WEB_HOST=0.0.0.0 в .env.
     web_host: str = "127.0.0.1"
     web_port: int = 8000
-
-    # Бизнес-правила (см. опрос: вопросы 25-26, 30, 52, 75, 120, 124)
-    default_driver_share: Decimal = Decimal("0.80")
-    waiting_rate_per_hour: Decimal = Decimal("500")
-    max_negotiation_uplift_pct: int = 15
-    repost_uplift_pct: int = 10
-    repost_interval_minutes: int = 10
-    commission_reminder_hours: int = 24
-    payment_details: str = ""
 
     @property
     def session_path(self) -> Path:
