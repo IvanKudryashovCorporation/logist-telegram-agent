@@ -74,19 +74,25 @@ async def main() -> None:
     else:
         register_logist_dm_handlers(client)
 
-    async with SessionLocal() as session:
-        driver_group_ids = (
-            await session.execute(select(DriverGroup.tg_chat_id).where(DriverGroup.is_active.is_(True)))
-        ).scalars().all()
-    if not driver_group_ids:
-        log.warning("Нет ни одной активной водительской группы — отклики читать неоткуда.")
+    if not settings.driver_interaction_enabled:
+        log.warning(
+            "DRIVER_INTERACTION_ENABLED=false — публикация водителям и переписка с ними "
+            "выключены, работает только разбор заявок из рабочих групп."
+        )
     else:
-        register_driver_group_handlers(client, list(driver_group_ids))
-        log.info("Слушаю отклики в %s водительских группах.", len(driver_group_ids))
+        async with SessionLocal() as session:
+            driver_group_ids = (
+                await session.execute(select(DriverGroup.tg_chat_id).where(DriverGroup.is_active.is_(True)))
+            ).scalars().all()
+        if not driver_group_ids:
+            log.warning("Нет ни одной активной водительской группы — отклики читать неоткуда.")
+        else:
+            register_driver_group_handlers(client, list(driver_group_ids))
+            log.info("Слушаю отклики в %s водительских группах.", len(driver_group_ids))
 
-    register_driver_dm_handlers(client)
-    start_commission_reminders(client)
-    start_pending_actions_poller(client)
+        register_driver_dm_handlers(client)
+        start_commission_reminders(client)
+        start_pending_actions_poller(client)
 
     log.info("Ожидание событий. Ctrl+C для остановки.")
     await client.run_until_disconnected()

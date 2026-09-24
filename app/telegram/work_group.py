@@ -4,6 +4,7 @@ import logging
 
 from telethon import TelegramClient, events
 
+from app.config import settings
 from app.db.base import SessionLocal
 from app.models import ActionLog, ActorType, Order, OrderStatus
 from app.negotiation.state import mark_processed, unmark_processed
@@ -55,7 +56,12 @@ async def _handle_message(client: TelegramClient, message, is_edit: bool) -> Non
         return
 
     # Предлагаем публикацию, когда заказ впервые становится полностью разобранным.
-    if order_status == OrderStatus.NEW and (is_new_order or status_before == OrderStatus.NEEDS_CLARIFICATION):
+    # Временно выключено — сейчас нужен только разбор заявок, без выхода на водителей.
+    if (
+        settings.driver_interaction_enabled
+        and order_status == OrderStatus.NEW
+        and (is_new_order or status_before == OrderStatus.NEEDS_CLARIFICATION)
+    ):
         await propose_publication(order_id, client)
 
 
