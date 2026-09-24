@@ -84,11 +84,13 @@
     th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 14px; }
     th { color: var(--muted); font-weight: 500; }
     .empty { color: var(--muted); padding: 8px 0; }
+    .actions-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
   </style>
 </head>
 <body>
   <header>
-    <a href="/">Заказы для водителей</a>
+    <a href="/">Заказы</a>
+    <a href="/my" class="muted">Мои заказы</a>
   </header>
   <main>
     {% block content %}{% endblock %}

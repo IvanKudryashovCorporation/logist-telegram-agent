@@ -65,5 +65,11 @@ class Order(Base, TimestampMixin):
     problem_note: Mapped[Optional[str]] = mapped_column(Text)
     is_urgent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # --- "Мои заказы" ---
+    # Сайт без логина: водителя различаем по анонимной cookie в браузере
+    # (см. app/web/server.py). Кто взял заказ первым — тот и взял.
+    taken_by_token: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    taken_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=False))
+
     def __repr__(self) -> str:
         return f"<Order #{self.id} {self.from_city}->{self.to_city} {self.status.value}>"

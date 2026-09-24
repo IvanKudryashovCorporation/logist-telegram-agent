@@ -25,11 +25,28 @@
     <tr><th>Исходный текст</th><td class="muted">{{ order.raw_text }}</td></tr>
   </table>
 
-  {% set link = dispatcher_link(order) %}
-  {% if link %}
-    <a href="{{ link }}"><button style="margin-top: 14px;">Написать диспетчеру</button></a>
-  {% else %}
-    <div class="muted" style="margin-top: 14px;">Не удалось определить аккаунт диспетчера — заявка от {{ order.dispatcher_username or order.dispatcher_tg_id or "неизвестного отправителя" }}.</div>
+  <div class="actions-row" style="margin-top: 14px;">
+    {% set link = dispatcher_link(order) %}
+    {% if link %}
+      <a href="{{ link }}"><button>Написать диспетчеру</button></a>
+    {% endif %}
+
+    {% if is_mine %}
+      <span class="badge" style="background:#f0fdf4;color:#16a34a;">В моих заказах</span>
+      <form method="post" action="/orders/{{ order.id }}/release">
+        <button style="background:#fff;color:var(--text);border-color:var(--border);">Отменить взятие</button>
+      </form>
+    {% elif is_taken_by_someone_else %}
+      <span class="badge" style="background:#fee2e2;color:#dc2626;">Уже взят другим водителем</span>
+    {% else %}
+      <form method="post" action="/orders/{{ order.id }}/take">
+        <button style="background:#16a34a;border-color:#16a34a;">Взять заказ</button>
+      </form>
+    {% endif %}
+  </div>
+
+  {% if not link %}
+    <div class="muted" style="margin-top: 10px;">Не удалось определить аккаунт диспетчера — заявка от {{ order.dispatcher_username or order.dispatcher_tg_id or "неизвестного отправителя" }}.</div>
   {% endif %}
 </div>
 

@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Мои заказы{% endblock %}
+{% block content %}
+
+<div class="section-title" style="margin-top: 0;">Мои заказы ({{ orders|length }})</div>
+
+{% if orders %}
+  <div class="grid">
+    {% for order in orders %}
+      <a class="order-link" href="/orders/{{ order.id }}">
+        <div class="card">
+          <div class="route">{{ order.from_city or "?" }} → {{ order.to_city or "?" }}</div>
+          <div class="muted">
+            {% if order.pickup_at %}{{ order.pickup_at.strftime("%d.%m %H:%M") }}{% else %}время не указано{% endif %}
+          </div>
+          {% if order.passengers %}<div class="muted" style="margin-top: 6px;">{{ order.passengers }} чел.</div>{% endif %}
+          {% if order.client_price %}
+            <div class="route" style="margin-top: 4px;">{{ order.client_price }} ₽</div>
+          {% endif %}
+        </div>
+      </a>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="empty">Пока пусто — на странице заказа нажмите «Взять заказ», он появится здесь.</div>
+{% endif %}
+
+{% endblock %}
