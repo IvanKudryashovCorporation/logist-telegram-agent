@@ -22,14 +22,18 @@ log = logging.getLogger("agent.work_group")
 
 
 async def _find_duplicate(session, parsed: ParsedOrder) -> Order | None:
-    """Тот же маршрут и та же точная подача уже есть в активной ленте —
-    разные диспетчеры часто публикуют один и тот же рейс порознь, в разных
-    группах, и текстом чуть по-разному (разная цена, сокращённые города).
-    Сравниваем города через тот же справочник сокращений, что и фильтр
-    на сайте, а не как есть, — иначе "Симф" и "Симферополь" не совпадут.
+    """Тот же маршрут, та же точная подача И та же цена уже есть в активной
+    ленте — разные диспетчеры иногда публикуют один и тот же рейс порознь, в
+    разных группах, слегка другими словами (сокращённые города и т.п.), но
+    с той же ценой. Цена — обязательное условие: одинаковый маршрут/время с
+    РАЗНОЙ ценой — это два разных реальных предложения (разные диспетчеры,
+    разные машины), не дубль, их нельзя схлопывать.
+
+    Сравниваем города через тот же справочник сокращений, что и фильтр на
+    сайте, а не как есть, — иначе "Симф" и "Симферополь" не совпадут.
     """
     pickup_at = combine_pickup_at(parsed.pickup_date, parsed.pickup_time)
-    if not parsed.from_city or not parsed.to_city or pickup_at is None:
+    if not parsed.from_city or not parsed.to_city or pickup_at is None or parsed.client_price is None:
         return None
 
     from_canon = expand_city_term(parsed.from_city).lower()
@@ -40,6 +44,7 @@ async def _find_duplicate(session, parsed: ParsedOrder) -> Order | None:
             select(Order).where(
                 Order.status != OrderStatus.CANCELLED,
                 Order.pickup_at == pickup_at,
+                Order.client_price == parsed.client_price,
             )
         )
     ).scalars().all()
