@@ -142,6 +142,29 @@
     }
     .search-box svg { flex-shrink: 0; color: var(--muted); }
 
+    /* ── Сортировка ── */
+    .sort-picker {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .sort-picker-label {
+      font-size: 13px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .sort-picker select {
+      padding: 7px 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--text);
+      font-size: 13.5px;
+      font-family: inherit;
+      cursor: pointer;
+    }
+
     main { padding: 20px 24px 60px; max-width: 1100px; margin: 0 auto; }
 
     /* ── Секции/карточки ── */
@@ -565,10 +588,33 @@
         <a href="/" class="{{ 'active' if request.url.path == '/' else '' }}">Лента <span class="tab-count">{{ lenta_count or 0 }}</span></a>
         <a href="/my" class="{{ 'active' if request.url.path.startswith('/my') else '' }}">Мои заказы <span class="tab-count">{{ my_count or 0 }}</span></a>
       </div>
-      <form class="search-box" method="get" action="/">
+      <form class="search-box" method="get" action="/" id="searchForm">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
         <input type="text" name="q" value="{{ q or '' }}" placeholder="Город, телефон или цена">
+        {% if filters is defined %}
+          <input type="hidden" name="from_city" value="{{ filters.from_city }}">
+          <input type="hidden" name="to_city" value="{{ filters.to_city }}">
+          <input type="hidden" name="passengers" value="{{ filters.passengers or '' }}">
+          <input type="hidden" name="date_from" value="{{ filters.date_from.isoformat() if filters.date_from else '' }}">
+          <input type="hidden" name="date_to" value="{{ filters.date_to.isoformat() if filters.date_to else '' }}">
+          <input type="hidden" name="time_from" value="{{ filters.time_from.strftime('%H:%M') if filters.time_from else '' }}">
+          <input type="hidden" name="time_to" value="{{ filters.time_to.strftime('%H:%M') if filters.time_to else '' }}">
+          <input type="hidden" name="price_min" value="{{ filters.price_min or '' }}">
+          <input type="hidden" name="price_max" value="{{ filters.price_max or '' }}">
+        {% endif %}
       </form>
+      {% if sort is defined %}
+        <div class="sort-picker">
+          <label for="sortSelect" class="sort-picker-label">Сортировать по</label>
+          <select name="sort" id="sortSelect" form="searchForm">
+            {% for value, label in sort_labels.items() %}
+              <option value="{{ value }}" {{ 'selected' if sort == value else '' }}>{{ label }}</option>
+            {% endfor %}
+          </select>
+          <input type="hidden" name="lat" id="sortLat" value="{{ lat or '' }}" form="searchForm">
+          <input type="hidden" name="lon" id="sortLon" value="{{ lon or '' }}" form="searchForm">
+        </div>
+      {% endif %}
       {% if filters is defined %}
         <details class="filters-details" {{ 'open' if filters.active_count else '' }}>
           <summary>
@@ -577,6 +623,11 @@
           </summary>
           <form class="filters-panel" method="get" action="/">
             <input type="hidden" name="q" value="{{ q or '' }}">
+            {% if sort is defined %}
+              <input type="hidden" name="sort" value="{{ sort }}">
+              <input type="hidden" name="lat" value="{{ lat or '' }}">
+              <input type="hidden" name="lon" value="{{ lon or '' }}">
+            {% endif %}
             <div>
               <label>Откуда</label>
               <div class="city-picker">
@@ -917,6 +968,43 @@
         });
 
         renderChips();
+      });
+    })();
+
+    (function () {
+      var select = document.getElementById('sortSelect');
+      if (!select) return;
+
+      var latInput = document.getElementById('sortLat');
+      var lonInput = document.getElementById('sortLon');
+      var form = document.getElementById('searchForm');
+      var lastValue = select.value; // на случай отказа геолокации — откатиться сюда
+
+      select.addEventListener('change', function () {
+        if (select.value !== 'distance') {
+          form.submit();
+          return;
+        }
+        if (!('geolocation' in navigator)) {
+          alert('Геолокация недоступна в этом браузере.');
+          select.value = lastValue;
+          return;
+        }
+        select.disabled = true;
+        navigator.geolocation.getCurrentPosition(
+          function (pos) {
+            latInput.value = pos.coords.latitude;
+            lonInput.value = pos.coords.longitude;
+            select.disabled = false;
+            form.submit();
+          },
+          function () {
+            select.disabled = false;
+            alert('Не удалось определить местоположение — проверьте разрешение геолокации в браузере (нужен HTTPS).');
+            select.value = lastValue;
+          },
+          { enableHighAccuracy: false, timeout: 10000 }
+        );
       });
     })();
   </script>

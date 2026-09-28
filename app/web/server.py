@@ -21,7 +21,7 @@ from sqlalchemy import func, or_, select
 
 from app.db.base import SessionLocal
 from app.models import ORDER_STATUS_LABELS, Order, OrderStatus
-from app.city_aliases import KNOWN_CITIES, city_matches, split_city_terms
+from app.city_aliases import KNOWN_CITIES, city_coords, city_matches, split_city_terms
 
 # Диспетчеры пишут время подачи как есть, по местным часам (Крым/Кубань/
 # Кавминводы — везде МСК, UTC+3, без перевода). pickup_at хранится в БД
@@ -319,6 +319,43 @@ async def _known_cities(session) -> list[str]:
     return sorted(set(KNOWN_CITIES) | set(from_cities) | set(to_cities))
 
 
+SORT_LABELS = {
+    "recent": "Недавности",
+    "price": "Цене",
+    "date": "Дате подачи",
+    "distance": "Близости",
+}
+DEFAULT_SORT = "recent"
+
+
+def _haversine_km(a: tuple[float, float], b: tuple[float, float]) -> float:
+    from math import asin, cos, radians, sin, sqrt
+
+    lat1, lon1, lat2, lon2 = map(radians, (a[0], a[1], b[0], b[1]))
+    d_lat = lat2 - lat1
+    d_lon = lon2 - lon1
+    h = sin(d_lat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(d_lon / 2) ** 2
+    return 2 * 6371 * asin(sqrt(h))
+
+
+def _sort_orders(orders: list[Order], sort: str, driver_coords: tuple[float, float] | None) -> list[Order]:
+    """Меняет порядок заказов ВНУТРИ каждой секции (Сегодня/Завтра/...) —
+    сама разбивка по дню подачи сохраняется, сортировка только на неё
+    накладывается (_bucketize просто раскладывает уже упорядоченный список)."""
+    if sort == "price":
+        return sorted(orders, key=lambda o: (o.client_price is None, -(o.client_price or 0)))
+    if sort == "date":
+        return sorted(orders, key=lambda o: (o.pickup_at is None, o.pickup_at))
+    if sort == "distance" and driver_coords is not None:
+        def _distance(order: Order) -> float:
+            coords = city_coords(order.from_city)
+            return _haversine_km(driver_coords, coords) if coords else float("inf")
+
+        return sorted(orders, key=_distance)
+    # "recent" (по умолчанию) — самые свежие заявки сверху.
+    return sorted(orders, key=lambda o: o.created_at, reverse=True)
+
+
 def _bucketize(orders: list[Order]) -> dict[str, list[Order]]:
     today = _now_msk().date()
     buckets: dict[str, list[Order]] = {
@@ -353,11 +390,22 @@ async def dashboard(
     time_to: str = "",
     price_min: str = "",
     price_max: str = "",
+    sort: str = DEFAULT_SORT,
+    lat: str = "",
+    lon: str = "",
 ):
     token, new_token = _driver_token(request)
     filters = Filters(
         from_city, to_city, passengers, date_from, date_to, time_from, time_to, price_min, price_max
     )
+    if sort not in SORT_LABELS:
+        sort = DEFAULT_SORT
+    driver_coords: tuple[float, float] | None = None
+    if sort == "distance":
+        try:
+            driver_coords = (float(lat), float(lon))
+        except (TypeError, ValueError):
+            driver_coords = None
 
     async with SessionLocal() as session:
         stmt = (
@@ -378,6 +426,7 @@ async def dashboard(
     if q:
         orders = [o for o in orders if _matches_query(o, q)]
     orders = [o for o in orders if filters.matches(o)]
+    orders = _sort_orders(orders, sort, driver_coords)
 
     html = templates.TemplateResponse(
         "orders_list.html",
@@ -388,6 +437,10 @@ async def dashboard(
             "filters": filters,
             "bucket_titles": BUCKET_TITLES,
             "known_cities": known_cities,
+            "sort": sort,
+            "sort_labels": SORT_LABELS,
+            "lat": lat,
+            "lon": lon,
             **counts,
         },
     )
