@@ -21,9 +21,13 @@ class Order(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(primary_key=True)
 
     # --- Источник: сообщение диспетчера в рабочей группе ---
-    # Храним id сообщения, чтобы ловить его редактирование.
+    # Храним id сообщения, чтобы ловить его редактирование. Одно сообщение
+    # может содержать НЕСКОЛЬКО заявок сразу (диспетчер скидывает список) —
+    # source_sub_index различает их (0, 1, 2...) в пределах одного сообщения;
+    # для обычного сообщения с одной заявкой это всегда 0.
     source_chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     source_message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    source_sub_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # Диспетчер определяется по аккаунту отправителя — на него ведёт кнопка
     # "Написать диспетчеру" на сайте.
     dispatcher_tg_id: Mapped[Optional[int]] = mapped_column(BigInteger)

@@ -44,14 +44,16 @@ async def backfill(limit: int, only_group_id: int | None) -> None:
                 print(f"  [{message.id}] пропущено (пусто/реплай/своё)")
                 continue
             try:
-                order_id = await _upsert_order(message, is_edit=False)
+                order_ids = await _upsert_order(message, is_edit=False)
             except Exception as exc:
                 print(f"  [{message.id}] ОШИБКА: {exc}")
                 continue
-            if order_id is None:
+            if not order_ids:
                 print(f"  [{message.id}] не заявка: {text[:60]!r}")
+            elif len(order_ids) == 1:
+                print(f"  [{message.id}] заказ #{order_ids[0]}")
             else:
-                print(f"  [{message.id}] заказ #{order_id}")
+                print(f"  [{message.id}] заказы #{', #'.join(map(str, order_ids))} (несколько в одном сообщении)")
 
     await client.disconnect()
 

@@ -12,7 +12,7 @@ from telethon import TelegramClient, events
 from app.city_aliases import expand_city_term
 from app.db.base import SessionLocal
 from app.models import ActionLog, ActorType, Order, OrderStatus
-from app.parsing.llm_parser import parse_order_text
+from app.parsing.llm_parser import parse_order_texts
 from app.parsing.order_builder import apply_parsed_fields, combine_pickup_at
 from app.parsing.schema import ParsedOrder
 from app.telegram.dedup import mark_processed, unmark_processed
@@ -72,6 +72,10 @@ def register_work_group_handlers(client: TelegramClient, chat_ids: list[int]) ->
     async def on_edited_order_message(event: events.MessageEdited.Event) -> None:
         await _handle_message(event.message, is_edit=True)
 
+    @client.on(events.MessageDeleted(chats=chat_ids))
+    async def on_deleted_order_message(event: events.MessageDeleted.Event) -> None:
+        await _handle_deleted(event.chat_id, event.deleted_ids)
+
 
 async def _handle_message(message, is_edit: bool) -> None:
     if message.out:
@@ -97,86 +101,178 @@ async def _handle_message(message, is_edit: bool) -> None:
         raise
 
 
-async def _upsert_order(message, is_edit: bool) -> int | None:
-    """Возвращает id созданного/обновлённого заказа, или None, если сообщение
-    не было заявкой (обычная переписка) либо это правка того, что и раньше не было заявкой."""
+async def _handle_deleted(chat_id: int | None, message_ids: list[int]) -> None:
+    """Диспетчер удалил сообщение в Telegram — заявки из него больше не
+    актуальны, скрываем со дна ленты (как и любую вручную отменённую
+    заявку). У водителей, которые уже взяли заказ себе, он остаётся виден
+    в "Моих заказах" — они уже договорились, пропадает только из общей ленты.
+    """
+    if chat_id is None or not message_ids:
+        return
+
+    async with SessionLocal() as session:
+        orders = (
+            await session.execute(
+                select(Order).where(
+                    Order.source_chat_id == chat_id,
+                    Order.source_message_id.in_(message_ids),
+                    Order.status != OrderStatus.CANCELLED,
+                )
+            )
+        ).scalars().all()
+        if not orders:
+            return
+
+        for order in orders:
+            order.status = OrderStatus.CANCELLED
+            session.add(
+                ActionLog(
+                    order_id=order.id,
+                    actor=ActorType.DISPATCHER,
+                    action="cancelled_message_deleted",
+                )
+            )
+        await session.commit()
+
+        log.info(
+            "Сообщение удалено в Telegram (chat=%s) — скрыто заказов: %s",
+            chat_id,
+            [o.id for o in orders],
+        )
+
+
+def _order_raw_text(parsed: ParsedOrder, fallback_text: str) -> str:
+    """Кусок исходного текста, относящийся именно к этой заявке (для
+    "Исходный текст заявки" на сайте) — если LLM не вернула фрагмент
+    (сообщение с одной заявкой), берём весь текст сообщения."""
+    snippet = (parsed.raw_snippet or "").strip()
+    return snippet if snippet else fallback_text
+
+
+async def _upsert_order(message, is_edit: bool) -> list[int]:
+    """Возвращает id всех созданных/обновлённых заказов из этого сообщения
+    (может быть несколько, если в сообщении несколько заявок; пустой список,
+    если сообщение не было заявкой вовсе)."""
     text = message.raw_text.strip()
     sender = await message.get_sender()
     dispatcher_tg_id = getattr(sender, "id", None)
     dispatcher_username = getattr(sender, "username", None)
 
     async with SessionLocal() as session:
-        order = (
-            await session.execute(
-                select(Order).where(
-                    Order.source_chat_id == message.chat_id,
-                    Order.source_message_id == message.id,
-                )
-            )
-        ).scalar_one_or_none()
-        if is_edit and order is None:
-            return  # правка сообщения, которое мы и раньше не считали заявкой
-
-        parsed = await parse_order_text(text)
-
-        is_new_order = order is None
-        if order is None:
-            if not parsed.is_order:
-                return  # обычное сообщение в чате, не заявка
-
-            duplicate = await _find_duplicate(session, parsed)
-            if duplicate is not None:
-                session.add(
-                    ActionLog(
-                        order_id=duplicate.id,
-                        actor=ActorType.DISPATCHER,
-                        actor_tg_id=dispatcher_tg_id,
-                        action="duplicate_skipped",
-                        details=f"chat={message.chat_id} msg={message.id}",
+        existing_by_index = {
+            o.source_sub_index: o
+            for o in (
+                await session.execute(
+                    select(Order).where(
+                        Order.source_chat_id == message.chat_id,
+                        Order.source_message_id == message.id,
                     )
                 )
+            ).scalars().all()
+        }
+        if is_edit and not existing_by_index:
+            return []  # правка сообщения, которое мы и раньше не считали заявкой
+
+        parsed_list = await parse_order_texts(text)
+
+        if not parsed_list:
+            if is_edit and existing_by_index:
+                # Правка убрала из сообщения все заявки (переписал текст на
+                # обычное сообщение) — прежде отслеживаемые больше не актуальны.
+                for order in existing_by_index.values():
+                    if order.status != OrderStatus.CANCELLED:
+                        order.status = OrderStatus.CANCELLED
+                        session.add(
+                            ActionLog(
+                                order_id=order.id,
+                                actor=ActorType.DISPATCHER,
+                                actor_tg_id=dispatcher_tg_id,
+                                action="cancelled_edited_out",
+                            )
+                        )
                 await session.commit()
-                log.info(
-                    "Дубль заказа #%s пропущен: %s -> %s (chat=%s msg=%s)",
-                    duplicate.id,
-                    duplicate.from_city,
-                    duplicate.to_city,
-                    message.chat_id,
-                    message.id,
+            return []  # обычное сообщение в чате, не заявка
+
+        result_ids: list[int] = []
+
+        for index, parsed in enumerate(parsed_list):
+            existing = existing_by_index.get(index)
+            is_new_order = existing is None
+
+            if is_new_order:
+                duplicate = await _find_duplicate(session, parsed)
+                if duplicate is not None:
+                    session.add(
+                        ActionLog(
+                            order_id=duplicate.id,
+                            actor=ActorType.DISPATCHER,
+                            actor_tg_id=dispatcher_tg_id,
+                            action="duplicate_skipped",
+                            details=f"chat={message.chat_id} msg={message.id} sub={index}",
+                        )
+                    )
+                    await session.commit()
+                    log.info(
+                        "Дубль заказа #%s пропущен: %s -> %s (chat=%s msg=%s sub=%s)",
+                        duplicate.id,
+                        duplicate.from_city,
+                        duplicate.to_city,
+                        message.chat_id,
+                        message.id,
+                        index,
+                    )
+                    result_ids.append(duplicate.id)
+                    continue
+
+                order = Order(
+                    source_chat_id=message.chat_id,
+                    source_message_id=message.id,
+                    source_sub_index=index,
+                    dispatcher_tg_id=dispatcher_tg_id,
+                    dispatcher_username=dispatcher_username,
+                    raw_text=_order_raw_text(parsed, text),
                 )
-                return duplicate.id
+                session.add(order)
+            else:
+                order = existing
+                order.raw_text = _order_raw_text(parsed, text)
 
-            order = Order(
-                source_chat_id=message.chat_id,
-                source_message_id=message.id,
-                dispatcher_tg_id=dispatcher_tg_id,
-                dispatcher_username=dispatcher_username,
-                raw_text=text,
+            apply_parsed_fields(order, parsed)
+            await session.flush()
+
+            session.add(
+                ActionLog(
+                    order_id=order.id,
+                    actor=ActorType.DISPATCHER,
+                    actor_tg_id=dispatcher_tg_id,
+                    action="order_created" if is_new_order else "order_edited",
+                    details=f"missing_fields={parsed.missing_fields}" if parsed.missing_fields else None,
+                )
             )
-            session.add(order)
-        else:
-            order.raw_text = text
+            result_ids.append(order.id)
 
-        apply_parsed_fields(order, parsed)
-        await session.flush()
-
-        session.add(
-            ActionLog(
-                order_id=order.id,
-                actor=ActorType.DISPATCHER,
-                actor_tg_id=dispatcher_tg_id,
-                action="order_created" if is_new_order else "order_edited",
-                details=f"missing_fields={parsed.missing_fields}" if parsed.missing_fields else None,
+            log.info(
+                "%s заказ #%s: %s -> %s, статус=%s",
+                "Создан" if is_new_order else "Обновлён",
+                order.id,
+                order.from_city,
+                order.to_city,
+                order.status.value,
             )
-        )
+
+        # Правка сократила число заявок в сообщении — лишние из прошлой
+        # версии больше не актуальны.
+        for leftover_index, leftover_order in existing_by_index.items():
+            if leftover_index >= len(parsed_list) and leftover_order.status != OrderStatus.CANCELLED:
+                leftover_order.status = OrderStatus.CANCELLED
+                session.add(
+                    ActionLog(
+                        order_id=leftover_order.id,
+                        actor=ActorType.DISPATCHER,
+                        actor_tg_id=dispatcher_tg_id,
+                        action="cancelled_edited_out",
+                    )
+                )
+
         await session.commit()
-
-        log.info(
-            "%s заказ #%s: %s -> %s, статус=%s",
-            "Создан" if is_new_order else "Обновлён",
-            order.id,
-            order.from_city,
-            order.to_city,
-            order.status.value,
-        )
-        return order.id
+        return result_ids

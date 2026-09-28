@@ -1,96 +1,111 @@
-"""Структура, в которую LLM раскладывает свободный текст заявки диспетчера."""
+"""Структура, в которую LLM раскладывает свободный текст заявки диспетчера.
+
+Одно сообщение может содержать НЕСКОЛЬКО заявок сразу (диспетчер списком
+скидывает пачку поездок одним сообщением) — поэтому инструмент всегда
+возвращает МАССИВ заявок, даже если она одна. Пустой массив — сообщение не
+является заявкой вовсе (обычная переписка).
+"""
 
 from decimal import Decimal
 from typing import Optional
 
 from pydantic import BaseModel
 
-# Схема инструмента в формате Anthropic tool-use (record_order) — используется
-# напрямую для property/required ниже, а PARSE_ORDER_TOOL_OPENAI оборачивает
-# её в формат OpenAI function-calling (DashScope compatible-mode).
-_RECORD_ORDER_NAME = "record_order"
-_RECORD_ORDER_DESCRIPTION = "Записать разобранные поля заявки на перевозку."
-_RECORD_ORDER_PARAMETERS = {
-    "type": "object",
-    "properties": {
-            "is_order": {
-                "type": "boolean",
-                "description": (
-                    "Это новая заявка на перевозку (есть маршрут и/или похоже, что диспетчер "
-                    "передаёт заказ), а НЕ обычная переписка в чате — вопрос, подтверждение, "
-                    "'ок', реплай на чьё-то сообщение и т.п. Если сомневаетесь — false."
-                ),
-            },
-            "pickup_date": {
-                "type": "string",
-                "description": "Дата подачи в формате YYYY-MM-DD. Если не указан год — текущий или ближайший будущий.",
-            },
-            "pickup_time": {
-                "type": "string",
-                "description": "Время подачи HH:MM (24ч). Пусто, если не указано.",
-            },
-            "from_city": {"type": "string", "description": "Город/населённый пункт отправления."},
-            "from_address": {
-                "type": "string",
-                "description": "Полный адрес отправления, если указан (улица/аэропорт/вокзал и т.п.). Иначе пусто.",
-            },
-            "to_city": {"type": "string", "description": "Город/населённый пункт назначения."},
-            "to_address": {"type": "string", "description": "Полный адрес назначения, если указан. Иначе пусто."},
-            "flight_or_train": {
-                "type": "string",
-                "description": "Номер рейса или поезда, если указан. Иначе пусто.",
-            },
-            "car_class": {
-                "type": "string",
-                "description": "Класс/тип авто, ТОЛЬКО если явно нестандартный (минивэн, бизнес, грузовой и т.п.). Обычный седан/эконом — пусто.",
-            },
-            "passengers": {
-                "type": ["integer", "null"],
-                "description": "Число пассажиров, если указано. Иначе null (не оставлять поле пустым).",
-            },
-            "luggage": {
-                "type": "string",
-                "description": "Особенности багажа, ТОЛЬКО если он объёмный/нестандартный (лыжи, велосипед, много чемоданов). Иначе пусто.",
-            },
-            "has_pets": {"type": "boolean", "description": "Едут с животным."},
-            "needs_child_seat": {"type": "boolean", "description": "Нужно детское кресло."},
-            "client_name": {"type": "string", "description": "Имя клиента, если указано."},
-            "client_phone": {"type": "string", "description": "Телефон клиента, если указан."},
-            "client_price": {
-                "type": ["number", "null"],
-                "description": "Стоимость для клиента, руб., если указана. Иначе null (не оставлять поле пустым).",
-            },
-            "is_urgent": {"type": "boolean", "description": "Заявка помечена как срочная."},
-            "missing_fields": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Какие ключевые поля отсутствуют или неоднозначны (например 'нет времени подачи', 'не указана точная стоимость'). Пусто, если заявка полная.",
-            },
+_RECORD_ORDERS_NAME = "record_orders"
+_RECORD_ORDERS_DESCRIPTION = (
+    "Записать все заявки на перевозку, найденные в этом сообщении. Если в "
+    "сообщении несколько поездок (списком, через пустую строку и т.п.) — "
+    "каждая идёт отдельным элементом массива orders, не смешивать их поля "
+    "в одну заявку. Если сообщение не является заявкой (обычная переписка, "
+    "вопрос, подтверждение, 'ок' и т.п.) — массив orders пустой."
+)
+
+_ORDER_ITEM_PROPERTIES = {
+    "raw_snippet": {
+        "type": "string",
+        "description": (
+            "Точная часть исходного текста сообщения, относящаяся именно к "
+            "этой поездке (скопировать как есть). Если в сообщении всего "
+            "одна заявка — это всё сообщение целиком."
+        ),
     },
-    "required": ["is_order", "missing_fields"],
+    "pickup_date": {
+        "type": "string",
+        "description": "Дата подачи в формате YYYY-MM-DD. Если не указан год — текущий или ближайший будущий.",
+    },
+    "pickup_time": {
+        "type": "string",
+        "description": "Время подачи HH:MM (24ч). Пусто, если не указано.",
+    },
+    "from_city": {"type": "string", "description": "Город/населённый пункт отправления."},
+    "from_address": {
+        "type": "string",
+        "description": "Полный адрес отправления, если указан (улица/аэропорт/вокзал и т.п.). Иначе пусто.",
+    },
+    "to_city": {"type": "string", "description": "Город/населённый пункт назначения."},
+    "to_address": {"type": "string", "description": "Полный адрес назначения, если указан. Иначе пусто."},
+    "flight_or_train": {
+        "type": "string",
+        "description": "Номер рейса или поезда, если указан. Иначе пусто.",
+    },
+    "car_class": {
+        "type": "string",
+        "description": "Класс/тип авто, ТОЛЬКО если явно нестандартный (минивэн, бизнес, грузовой и т.п.). Обычный седан/эконом — пусто.",
+    },
+    "passengers": {
+        "type": ["integer", "null"],
+        "description": "Число пассажиров, если указано. Иначе null (не оставлять поле пустым).",
+    },
+    "luggage": {
+        "type": "string",
+        "description": "Особенности багажа, ТОЛЬКО если он объёмный/нестандартный (лыжи, велосипед, много чемоданов). Иначе пусто.",
+    },
+    "has_pets": {"type": "boolean", "description": "Едут с животным."},
+    "needs_child_seat": {"type": "boolean", "description": "Нужно детское кресло."},
+    "client_name": {"type": "string", "description": "Имя клиента, если указано."},
+    "client_phone": {"type": "string", "description": "Телефон клиента, если указан."},
+    "client_price": {
+        "type": ["number", "null"],
+        "description": "Стоимость для клиента, руб., если указана. Иначе null (не оставлять поле пустым).",
+    },
+    "is_urgent": {"type": "boolean", "description": "Заявка помечена как срочная."},
+    "missing_fields": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Какие ключевые поля отсутствуют или неоднозначны (например 'нет времени подачи', 'не указана точная стоимость'). Пусто, если заявка полная.",
+    },
 }
 
-# Формат Anthropic tool-use (Claude Messages API).
-PARSE_ORDER_TOOL = {
-    "name": _RECORD_ORDER_NAME,
-    "description": _RECORD_ORDER_DESCRIPTION,
-    "input_schema": _RECORD_ORDER_PARAMETERS,
+_ORDERS_ARRAY_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "orders": {
+            "type": "array",
+            "description": "Массив заявок. Пусто, если сообщение не заявка.",
+            "items": {
+                "type": "object",
+                "properties": _ORDER_ITEM_PROPERTIES,
+                "required": ["missing_fields"],
+            },
+        },
+    },
+    "required": ["orders"],
 }
 
 # Формат OpenAI function-calling (DashScope compatible-mode и любой другой
 # OpenAI-совместимый провайдер).
-PARSE_ORDER_TOOL_OPENAI = {
+PARSE_ORDERS_TOOL_OPENAI = {
     "type": "function",
     "function": {
-        "name": _RECORD_ORDER_NAME,
-        "description": _RECORD_ORDER_DESCRIPTION,
-        "parameters": _RECORD_ORDER_PARAMETERS,
+        "name": _RECORD_ORDERS_NAME,
+        "description": _RECORD_ORDERS_DESCRIPTION,
+        "parameters": _ORDERS_ARRAY_PARAMETERS,
     },
 }
 
 
 class ParsedOrder(BaseModel):
-    is_order: bool = True
+    raw_snippet: Optional[str] = None
     pickup_date: Optional[str] = None
     pickup_time: Optional[str] = None
     from_city: Optional[str] = None
