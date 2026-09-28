@@ -1,31 +1,58 @@
 {% extends "base.html" %}
-{% block title %}Заказы для водителей{% endblock %}
+{% block title %}Лента заказов — Подача{% endblock %}
 {% block content %}
-
-<form class="toolbar" method="get" action="/">
-  <input type="text" name="q" value="{{ q }}" placeholder="Поиск: город, телефон, диспетчер...">
-  <button type="submit">Найти</button>
-</form>
 
 {% for key in ["overdue", "today", "tomorrow", "later", "no_date"] %}
   {% set orders = buckets[key] %}
   {% if orders %}
-    <div class="section-title {{ key }}">{{ bucket_titles[key] }} ({{ orders|length }})</div>
+    <div class="section-title {{ key }}">
+      <span class="section-dot"></span>{{ bucket_titles[key] }}
+      <span class="section-count">{{ orders|length }}</span>
+    </div>
     <div class="grid">
       {% for order in orders %}
-        <a class="order-link" href="/orders/{{ order.id }}">
-          <div class="card">
-            <div class="route">{{ order.from_city or "?" }} → {{ order.to_city or "?" }}</div>
-            <div class="muted">
-              {% if order.pickup_at %}{{ order.pickup_at.strftime("%d.%m %H:%M") }}{% else %}время не указано{% endif %}
+        <a class="card {{ 'overdue' if is_overdue(order) else '' }}" href="/orders/{{ order.id }}">
+          <div class="card-top">
+            <div>
+              <div class="card-time">{{ order.pickup_at.strftime("%H:%M") if order.pickup_at else "—" }}</div>
+              <div class="card-subtext">{{ pickup_subtext(order, key) }}</div>
             </div>
-            {% if order.status.value == "needs_clarification" %}
-              <div style="margin-top: 6px;"><span class="badge" style="background:#fff7ed;color:#d97706;">Уточняется</span></div>
-            {% endif %}
-            {% if order.passengers %}<div class="muted" style="margin-top: 6px;">{{ order.passengers }} чел.</div>{% endif %}
-            {% if order.client_price %}
-              <div class="route" style="margin-top: 4px;">{{ order.client_price }} ₽</div>
-            {% endif %}
+            {% if order.client_price %}<div class="card-price">{{ "%.0f"|format(order.client_price) }} ₽</div>{% endif %}
+          </div>
+
+          {% if order.status.value == "needs_clarification" %}
+            <div style="margin-top: 8px;"><span class="badge" style="background:#fff7ed;color:#d97706;">Уточняется</span></div>
+          {% endif %}
+
+          <div class="route-block">
+            <div class="route-point">
+              <span class="route-marker from"></span>
+              <div>
+                <div class="route-point-city">{{ order.from_city or "?" }}</div>
+                {% if order.from_address %}<div class="route-point-address">{{ order.from_address }}</div>{% endif %}
+              </div>
+            </div>
+            <div class="route-point">
+              <span class="route-marker to"></span>
+              <div>
+                <div class="route-point-city">{{ order.to_city or "?" }}</div>
+                {% if order.to_address %}<div class="route-point-address">{{ order.to_address }}</div>{% endif %}
+              </div>
+            </div>
+          </div>
+
+          {% set tags = order_tags(order) %}
+          {% if tags %}
+            <div class="tags-row">
+              {% for text, dark in tags %}
+                <span class="pill {{ 'dark' if dark else '' }}">{{ text }}</span>
+              {% endfor %}
+            </div>
+          {% endif %}
+
+          <div class="card-footer">
+            <span class="card-footer-meta">{{ relative_ago(order.created_at) }}</span>
+            <span class="card-footer-more">Подробнее →</span>
           </div>
         </a>
       {% endfor %}
@@ -34,7 +61,7 @@
 {% endfor %}
 
 {% if buckets.values() | map("length") | sum == 0 %}
-  <div class="empty">Заказов не найдено.</div>
+  <div class="empty">{% if q %}По запросу «{{ q }}» ничего не найдено.{% else %}Заказов пока нет.{% endif %}</div>
 {% endif %}
 
 {% endblock %}

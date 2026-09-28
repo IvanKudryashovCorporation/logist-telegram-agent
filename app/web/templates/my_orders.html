@@ -1,27 +1,64 @@
 {% extends "base.html" %}
-{% block title %}Мои заказы{% endblock %}
+{% block title %}Мои заказы — Подача{% endblock %}
 {% block content %}
 
-<div class="section-title" style="margin-top: 0;">Мои заказы ({{ orders|length }})</div>
+<div class="hint">Заказы, которые вы взяли. Хранятся на этом устройстве, без регистрации. Другим водителям они больше не видны.</div>
 
-{% if orders %}
-  <div class="grid">
-    {% for order in orders %}
-      <a class="order-link" href="/orders/{{ order.id }}">
-        <div class="card">
-          <div class="route">{{ order.from_city or "?" }} → {{ order.to_city or "?" }}</div>
-          <div class="muted">
-            {% if order.pickup_at %}{{ order.pickup_at.strftime("%d.%m %H:%M") }}{% else %}время не указано{% endif %}
+{% for key in ["overdue", "today", "tomorrow", "later", "no_date"] %}
+  {% set orders = buckets[key] %}
+  {% if orders %}
+    <div class="section-title {{ key }}">
+      <span class="section-dot"></span>{{ bucket_titles[key] }}
+      <span class="section-count">{{ orders|length }}</span>
+    </div>
+    <div class="grid">
+      {% for order in orders %}
+        <a class="card {{ 'overdue' if is_overdue(order) else '' }}" href="/orders/{{ order.id }}">
+          <div class="card-top">
+            <div>
+              <div class="card-time">{{ order.pickup_at.strftime("%H:%M") if order.pickup_at else "—" }}</div>
+              <div class="card-subtext">{{ pickup_subtext(order, key) }}</div>
+            </div>
+            {% if order.client_price %}<div class="card-price">{{ "%.0f"|format(order.client_price) }} ₽</div>{% endif %}
           </div>
-          {% if order.passengers %}<div class="muted" style="margin-top: 6px;">{{ order.passengers }} чел.</div>{% endif %}
-          {% if order.client_price %}
-            <div class="route" style="margin-top: 4px;">{{ order.client_price }} ₽</div>
+
+          <div class="route-block">
+            <div class="route-point">
+              <span class="route-marker from"></span>
+              <div>
+                <div class="route-point-city">{{ order.from_city or "?" }}</div>
+                {% if order.from_address %}<div class="route-point-address">{{ order.from_address }}</div>{% endif %}
+              </div>
+            </div>
+            <div class="route-point">
+              <span class="route-marker to"></span>
+              <div>
+                <div class="route-point-city">{{ order.to_city or "?" }}</div>
+                {% if order.to_address %}<div class="route-point-address">{{ order.to_address }}</div>{% endif %}
+              </div>
+            </div>
+          </div>
+
+          {% set tags = order_tags(order) %}
+          {% if tags %}
+            <div class="tags-row">
+              {% for text, dark in tags %}
+                <span class="pill {{ 'dark' if dark else '' }}">{{ text }}</span>
+              {% endfor %}
+            </div>
           {% endif %}
-        </div>
-      </a>
-    {% endfor %}
-  </div>
-{% else %}
+
+          <div class="card-footer">
+            <span class="card-footer-meta">взят {{ relative_ago(order.taken_at) }}</span>
+            <span class="card-footer-more">Подробнее →</span>
+          </div>
+        </a>
+      {% endfor %}
+    </div>
+  {% endif %}
+{% endfor %}
+
+{% if buckets.values() | map("length") | sum == 0 %}
   <div class="empty">Пока пусто — на странице заказа нажмите «Взять заказ», он появится здесь.</div>
 {% endif %}
 

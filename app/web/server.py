@@ -15,7 +15,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.db.base import SessionLocal
 from app.models import ORDER_STATUS_LABELS, Order, OrderStatus
@@ -96,22 +96,95 @@ def dispatcher_link(order: Order) -> str | None:
 templates.env.globals["dispatcher_link"] = dispatcher_link
 
 
-@app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request, q: str = ""):
-    _token, new_token = _driver_token(request)
+def _duration_str(minutes: int) -> str:
+    if minutes < 60:
+        return f"{minutes} мин"
+    hours, rem = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours} ч" + (f" {rem} мин" if rem else "")
+    days = hours // 24
+    return f"{days} дн"
 
-    async with SessionLocal() as session:
-        stmt = (
-            select(Order)
+
+def is_overdue(order: Order) -> bool:
+    """Подача уже прошла по времени — красим карточку независимо от бакета
+    (бакет группирует по дате, а не по факту "уже прошло")."""
+    return bool(order.pickup_at and order.pickup_at < datetime.utcnow())
+
+
+def pickup_subtext(order: Order, bucket: str) -> str:
+    """Короткая подпись под временем подачи — как давно/скоро подача."""
+    if order.pickup_at is None:
+        return "время не указано"
+    if bucket == "tomorrow":
+        return "завтра"
+    if bucket == "later":
+        return order.pickup_at.strftime("%d.%m")
+    delta_min = int((order.pickup_at - datetime.utcnow()).total_seconds() // 60)
+    if delta_min >= 0:
+        return f"через {_duration_str(delta_min)}"
+    return f"просрочено на {_duration_str(-delta_min)}"
+
+
+def relative_ago(dt: datetime | None) -> str:
+    """«N мин назад» и т.п. — для времени поступления заявки."""
+    if dt is None:
+        return ""
+    now = datetime.now(dt.tzinfo) if dt.tzinfo else datetime.utcnow()
+    minutes = max(0, int((now - dt).total_seconds() // 60))
+    if minutes < 1:
+        return "только что"
+    if minutes < 60:
+        return f"{minutes} мин назад"
+    hours, rem = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours} ч назад"
+    days = hours // 24
+    return f"{days} дн назад"
+
+
+def order_tags(order: Order) -> list[tuple[str, bool]]:
+    """Короткие теги для карточки: (текст, основной_ли/тёмный)."""
+    tags: list[tuple[str, bool]] = []
+    if order.passengers:
+        tags.append((f"{order.passengers} пасс.", True))
+    if order.car_class:
+        tags.append((order.car_class, False))
+    if order.flight_or_train:
+        tags.append(("Рейс", False))
+    if order.needs_child_seat:
+        tags.append(("Кресло", False))
+    if order.has_pets:
+        tags.append(("Животное", False))
+    return tags
+
+
+templates.env.globals["pickup_subtext"] = pickup_subtext
+templates.env.globals["is_overdue"] = is_overdue
+templates.env.globals["relative_ago"] = relative_ago
+templates.env.globals["order_tags"] = order_tags
+
+
+async def _header_counts(session, token: str) -> dict:
+    lenta_count = (
+        await session.execute(
+            select(func.count())
+            .select_from(Order)
             .where(Order.status != OrderStatus.CANCELLED, Order.taken_by_token.is_(None))
-            .order_by(Order.pickup_at.is_(None), Order.pickup_at)
         )
-        orders = (await session.execute(stmt)).scalars().all()
+    ).scalar_one()
+    my_count = (
+        await session.execute(
+            select(func.count()).select_from(Order).where(Order.taken_by_token == token)
+        )
+    ).scalar_one()
+    groups_count = (
+        await session.execute(select(func.count(func.distinct(Order.source_chat_id))))
+    ).scalar_one()
+    return {"lenta_count": lenta_count, "my_count": my_count, "groups_count": groups_count}
 
-    q = q.strip()
-    if q:
-        orders = [o for o in orders if _matches_query(o, q)]
 
+def _bucketize(orders: list[Order]) -> dict[str, list[Order]]:
     today = date.today()
     buckets: dict[str, list[Order]] = {
         "overdue": [],
@@ -122,20 +195,43 @@ async def dashboard(request: Request, q: str = ""):
     }
     for order in orders:
         buckets[_order_bucket(order, today)].append(order)
+    return buckets
+
+
+BUCKET_TITLES = {
+    "overdue": "Просрочено",
+    "today": "Сегодня",
+    "tomorrow": "Завтра",
+    "later": "Позже",
+    "no_date": "Без даты",
+}
+
+
+@app.get("/", response_class=HTMLResponse)
+async def dashboard(request: Request, q: str = ""):
+    token, new_token = _driver_token(request)
+
+    async with SessionLocal() as session:
+        stmt = (
+            select(Order)
+            .where(Order.status != OrderStatus.CANCELLED, Order.taken_by_token.is_(None))
+            .order_by(Order.pickup_at.is_(None), Order.pickup_at)
+        )
+        orders = (await session.execute(stmt)).scalars().all()
+        counts = await _header_counts(session, token)
+
+    q = q.strip()
+    if q:
+        orders = [o for o in orders if _matches_query(o, q)]
 
     html = templates.TemplateResponse(
         "orders_list.html",
         {
             "request": request,
-            "buckets": buckets,
+            "buckets": _bucketize(orders),
             "q": q,
-            "bucket_titles": {
-                "overdue": "Просрочено",
-                "today": "Сегодня",
-                "tomorrow": "Завтра",
-                "later": "Позже",
-                "no_date": "Без даты",
-            },
+            "bucket_titles": BUCKET_TITLES,
+            **counts,
         },
     )
     _set_driver_cookie(html, new_token)
@@ -147,10 +243,19 @@ async def my_orders(request: Request):
     token, new_token = _driver_token(request)
 
     async with SessionLocal() as session:
-        stmt = select(Order).where(Order.taken_by_token == token).order_by(Order.taken_at.desc())
+        stmt = select(Order).where(Order.taken_by_token == token).order_by(Order.pickup_at.is_(None), Order.pickup_at)
         orders = (await session.execute(stmt)).scalars().all()
+        counts = await _header_counts(session, token)
 
-    html = templates.TemplateResponse("my_orders.html", {"request": request, "orders": orders})
+    html = templates.TemplateResponse(
+        "my_orders.html",
+        {
+            "request": request,
+            "buckets": _bucketize(orders),
+            "bucket_titles": BUCKET_TITLES,
+            **counts,
+        },
+    )
     _set_driver_cookie(html, new_token)
     return html
 
@@ -163,6 +268,7 @@ async def order_detail(request: Request, order_id: int):
         order = await session.get(Order, order_id)
         if order is None:
             return HTMLResponse("Заказ не найден", status_code=404)
+        counts = await _header_counts(session, token)
 
     html = templates.TemplateResponse(
         "order_detail.html",
@@ -171,6 +277,7 @@ async def order_detail(request: Request, order_id: int):
             "order": order,
             "is_mine": order.taken_by_token == token,
             "is_taken_by_someone_else": bool(order.taken_by_token) and order.taken_by_token != token,
+            **counts,
         },
     )
     _set_driver_cookie(html, new_token)

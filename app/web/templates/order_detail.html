@@ -1,54 +1,115 @@
 {% extends "base.html" %}
-{% block title %}Заказ #{{ order.id }}{% endblock %}
+{% block title %}Заказ #{{ order.id }} — Подача{% endblock %}
 {% block content %}
 
-<a href="/" class="muted">&larr; ко всем заказам</a>
+<a href="/" class="back-link">&larr; ко всем заказам</a>
 
-<div class="card" style="margin-top: 10px;">
-  <div class="route">{{ order.from_city or "?" }} → {{ order.to_city or "?" }}</div>
-  {% if order.status.value == "needs_clarification" %}
-    <div class="badge" style="background:#fff7ed;color:#d97706;">Часть данных не разобралась — сверьтесь с текстом заявки ниже</div>
-  {% endif %}
+<div class="detail-card">
+  <div class="detail-header">
+    <div>
+      <div class="detail-title">Заказ №{{ order.id }}</div>
+      <div class="detail-subtitle">{{ relative_ago(order.created_at) }}</div>
+    </div>
+    {% if order.status.value == "needs_clarification" %}
+      <span class="badge" style="background:#fff7ed;color:#d97706;">Часть данных не разобралась</span>
+    {% endif %}
+  </div>
 
-  <table style="margin-top: 10px;">
-    <tr><th>Подача</th><td>{{ order.pickup_at.strftime("%d.%m.%Y %H:%M") if order.pickup_at else "не указана" }}</td></tr>
-    <tr><th>Откуда</th><td>{{ order.from_address or order.from_city or "—" }}</td></tr>
-    <tr><th>Куда</th><td>{{ order.to_address or order.to_city or "—" }}</td></tr>
-    {% if order.flight_or_train %}<tr><th>Рейс/поезд</th><td>{{ order.flight_or_train }}</td></tr>{% endif %}
-    <tr><th>Пассажиров</th><td>{{ order.passengers or "—" }}</td></tr>
-    {% if order.car_class %}<tr><th>Класс авто</th><td>{{ order.car_class }}</td></tr>{% endif %}
-    {% if order.luggage %}<tr><th>Багаж</th><td>{{ order.luggage }}</td></tr>{% endif %}
-    {% if order.has_pets %}<tr><th></th><td>С животным</td></tr>{% endif %}
-    {% if order.needs_child_seat %}<tr><th></th><td>Нужно детское кресло</td></tr>{% endif %}
-    <tr><th>Цена</th><td>{{ order.client_price or "—" }} ₽</td></tr>
-    <tr><th>Клиент</th><td>{{ order.client_name or "—" }}, {{ order.client_phone or "—" }}</td></tr>
-    <tr><th>Исходный текст</th><td class="muted">{{ order.raw_text }}</td></tr>
-  </table>
+  <div class="kv-grid">
+    <div>
+      <div class="kv-label">Подача</div>
+      <div class="kv-value">{{ order.pickup_at.strftime("%H:%M, %d.%m") if order.pickup_at else "не указана" }}</div>
+    </div>
+    <div>
+      <div class="kv-label">Цена</div>
+      <div class="kv-value">{{ "%.0f"|format(order.client_price) ~ " ₽" if order.client_price else "—" }}</div>
+      <div class="card-subtext">как в заявке</div>
+    </div>
+  </div>
 
-  <div class="actions-row" style="margin-top: 14px;">
+  <div class="detail-route">
+    <div class="route-point">
+      <span class="route-marker from"></span>
+      <div>
+        <div class="kv-label">Откуда</div>
+        <div class="route-point-city">{{ order.from_city or "?" }}</div>
+        {% if order.from_address %}<div class="route-point-address">{{ order.from_address }}</div>{% endif %}
+      </div>
+    </div>
+    <div class="route-point">
+      <span class="route-marker to"></span>
+      <div>
+        <div class="kv-label">Куда</div>
+        <div class="route-point-city">{{ order.to_city or "?" }}</div>
+        {% if order.to_address %}<div class="route-point-address">{{ order.to_address }}</div>{% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="fields-grid">
+    <div>
+      <div class="field-label">Пассажиры</div>
+      <div class="field-value">{{ order.passengers or "—" }}{{ " чел." if order.passengers else "" }}</div>
+    </div>
+    <div>
+      <div class="field-label">Класс авто</div>
+      <div class="field-value">{{ order.car_class or "—" }}</div>
+    </div>
+    <div>
+      <div class="field-label">Багаж</div>
+      <div class="field-value">{{ order.luggage or "—" }}</div>
+    </div>
+    <div>
+      <div class="field-label">Рейс / поезд</div>
+      <div class="field-value">{{ order.flight_or_train or "—" }}</div>
+    </div>
+    <div>
+      <div class="field-label">Детское кресло</div>
+      <div class="field-value">{{ "Да" if order.needs_child_seat else "Нет" }}</div>
+    </div>
+    <div>
+      <div class="field-label">Животные</div>
+      <div class="field-value">{{ "Да" if order.has_pets else "Нет" }}</div>
+    </div>
+    <div>
+      <div class="field-label">Клиент</div>
+      <div class="field-value">{{ order.client_name or "—" }}</div>
+    </div>
+    <div>
+      <div class="field-label">Телефон</div>
+      <div class="field-value">{{ order.client_phone or "—" }}</div>
+    </div>
+  </div>
+
+  <div class="raw-text-block">
+    <div class="raw-text-label">Исходный текст заявки</div>
+    <div class="raw-text">{{ order.raw_text }}</div>
+  </div>
+
+  <div class="actions-row">
     {% set link = dispatcher_link(order) %}
     {% if link %}
-      <a href="{{ link }}"><button>Написать диспетчеру</button></a>
+      <a href="{{ link }}" class="btn">Написать диспетчеру</a>
     {% endif %}
 
     {% if is_mine %}
       <span class="badge" style="background:#f0fdf4;color:#16a34a;">В моих заказах</span>
       <form method="post" action="/orders/{{ order.id }}/release">
-        <button style="background:#fff;color:var(--text);border-color:var(--border);">Отменить взятие</button>
+        <button type="submit" class="btn-secondary">Отменить взятие</button>
       </form>
     {% elif is_taken_by_someone_else %}
       <span class="badge" style="background:#fee2e2;color:#dc2626;">Уже взят другим водителем</span>
     {% else %}
       <form method="post" action="/orders/{{ order.id }}/take">
-        <button style="background:#16a34a;border-color:#16a34a;">Взять заказ</button>
+        <button type="submit" class="btn-ok">Взять заказ</button>
       </form>
     {% endif %}
   </div>
 
   {% if not link %}
-    <div class="muted" style="margin-top: 10px;">Не удалось определить аккаунт диспетчера — заявка от {{ order.dispatcher_username or order.dispatcher_tg_id or "неизвестного отправителя" }}.</div>
+    <div class="hint" style="margin-top: 12px;">Не удалось определить аккаунт диспетчера — заявка от {{ order.dispatcher_username or order.dispatcher_tg_id or "неизвестного отправителя" }}.</div>
   {% elif not order.dispatcher_username %}
-    <div class="muted" style="margin-top: 10px;">
+    <div class="hint" style="margin-top: 12px;">
       У диспетчера нет публичного @username — ссылка может не открыться сама в мобильном браузере.
       Если не сработало, откройте страницу в приложении Telegram (через "поделиться" → "открыть в
       приложении") или ответьте прямо на объявление в группе, откуда пришла заявка.
