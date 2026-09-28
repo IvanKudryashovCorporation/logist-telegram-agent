@@ -36,13 +36,13 @@ class Settings(BaseSettings):
     # это поле — только для разового переноса старой настройки из .env.
     work_group_chat_id: OptionalInt = None
 
-    # LLM
-    # Внимание: НЕ называть ANTHROPIC_*  — эти имена зарезервированы окружением
-    # песочницы разработки и имеют приоритет над .env, значения будут подменены.
+    # LLM — любой OpenAI-совместимый chat/completions API (сейчас DashScope).
+    # Внимание: НЕ называть ANTHROPIC_*/OPENAI_*  — такие имена зарезервированы
+    # окружением песочницы разработки и имеют приоритет над .env, значения
+    # будут подменены.
     llm_api_key: str = ""
-    llm_model: str = "claude-haiku-4-5-20251001"
-    # Задайте, если ключ выдан прокси-сервисом, а не напрямую console.anthropic.com
-    llm_base_url: str = ""
+    llm_model: str = "qwen3.8-max-0902"
+    llm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
     # БД
     database_url: str = "sqlite+aiosqlite:///./logist.db"
