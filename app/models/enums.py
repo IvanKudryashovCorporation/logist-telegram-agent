@@ -10,6 +10,7 @@ class OrderStatus(str, enum.Enum):
     NEW = "new"                                   # Новая, разобрана полностью
     NEEDS_CLARIFICATION = "needs_clarification"    # LLM не смог разобрать часть полей
     CANCELLED = "cancelled"                        # Скрыта вручную из веб-панели (неактуальна)
+    AGREED = "agreed"                              # Водитель договорился с диспетчером — заказ закрыт
 
 
 #: Человекочитаемые подписи статусов — для веб-панели.
@@ -17,6 +18,7 @@ ORDER_STATUS_LABELS = {
     OrderStatus.NEW: "Новая",
     OrderStatus.NEEDS_CLARIFICATION: "Нужно уточнить",
     OrderStatus.CANCELLED: "Скрыта",
+    OrderStatus.AGREED: "Договорились",
 }
 
 

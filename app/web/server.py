@@ -566,8 +566,29 @@ async def release_order(request: Request, order_id: int):
         if order is not None and order.taken_by_token == token:
             order.taken_by_token = None
             order.taken_at = None
+            if order.status == OrderStatus.AGREED:
+                order.status = OrderStatus.NEW
             await session.commit()
 
     redirect = RedirectResponse(url="/my", status_code=303)
+    _set_driver_cookie(redirect, new_token)
+    return redirect
+
+
+@app.post("/orders/{order_id}/agree")
+async def agree_order(request: Request, order_id: int):
+    """Водитель подтвердил, что договорился с диспетчером — заказ
+    окончательно закрыт (для остальных он и так уже не виден, раз взят,
+    но статус фиксирует итог отдельно от простого "взял, но не договорился").
+    "Отменить" по-прежнему может откатить это обратно, если передумали."""
+    token, new_token = _driver_token(request)
+
+    async with SessionLocal() as session:
+        order = await session.get(Order, order_id)
+        if order is not None and order.taken_by_token == token:
+            order.status = OrderStatus.AGREED
+            await session.commit()
+
+    redirect = RedirectResponse(url=f"/orders/{order_id}", status_code=303)
     _set_driver_cookie(redirect, new_token)
     return redirect

@@ -95,7 +95,14 @@
         <button type="submit" class="btn-ok">{{ "Написать диспетчеру" if link else "Взять заказ" }}</button>
       </form>
       {% if is_mine %}
-        <span class="badge" style="background:#f0fdf4;color:#16a34a;">В моих заказах</span>
+        {% if order.status.value == "agreed" %}
+          <span class="badge" style="background:#f0fdf4;color:#16a34a;">Договорились</span>
+        {% else %}
+          <span class="badge" style="background:#f0fdf4;color:#16a34a;">В моих заказах</span>
+          <form method="post" action="/orders/{{ order.id }}/agree">
+            <button type="submit" class="btn-ok">Договорился о заказе</button>
+          </form>
+        {% endif %}
         <form method="post" action="/orders/{{ order.id }}/release">
           <button type="submit" class="btn-secondary">Отменить взятие</button>
         </form>

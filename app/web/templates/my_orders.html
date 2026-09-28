@@ -22,6 +22,10 @@
             {% if order.client_price %}<div class="card-price">{{ "%.0f"|format(order.client_price) }} ₽</div>{% endif %}
           </div>
 
+          {% if order.status.value == "agreed" %}
+            <div style="margin-top: 8px;"><span class="badge" style="background:#f0fdf4;color:#16a34a;">Договорились</span></div>
+          {% endif %}
+
           <div class="route-block">
             <div class="route-point">
               <span class="route-marker from"></span>
