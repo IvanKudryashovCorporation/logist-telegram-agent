@@ -110,3 +110,9 @@ def split_city_terms(raw: str) -> list[str]:
     """Несколько городов через запятую — водитель может искать сразу по
     паре направлений."""
     return [t.strip() for t in raw.split(",") if t.strip()]
+
+
+#: Полные названия городов из справочника — базовый список для автодополнения
+#: в фильтре на сайте (дополняется городами, реально встречающимися в
+#: заявках, см. app/web/server.py).
+KNOWN_CITIES: list[str] = sorted(set(CITY_ALIASES.values()))

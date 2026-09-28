@@ -8,6 +8,7 @@
 Цены показываются 1 в 1 из заявки, без наценки.
 """
 
+import json
 import uuid
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
@@ -20,7 +21,7 @@ from sqlalchemy import func, or_, select
 
 from app.db.base import SessionLocal
 from app.models import ORDER_STATUS_LABELS, Order, OrderStatus
-from app.city_aliases import city_matches, split_city_terms
+from app.city_aliases import KNOWN_CITIES, city_matches, split_city_terms
 
 # Диспетчеры пишут время подачи как есть, по местным часам (Крым/Кубань/
 # Кавминводы — везде МСК, UTC+3, без перевода). pickup_at хранится в БД
@@ -40,6 +41,7 @@ TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 app = FastAPI(title="Заказы для водителей")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 templates.env.globals["status_labels"] = ORDER_STATUS_LABELS
+templates.env.filters["tojson"] = lambda v: json.dumps(v, ensure_ascii=False)
 
 DRIVER_COOKIE = "driver_id"
 DRIVER_COOKIE_MAX_AGE = 60 * 60 * 24 * 365 * 2  # 2 года
@@ -305,6 +307,18 @@ async def _header_counts(session, token: str) -> dict:
     return {"lenta_count": lenta_count, "my_count": my_count, "groups_count": groups_count}
 
 
+async def _known_cities(session) -> list[str]:
+    """Справочник городов + реально встречающиеся в заявках — для
+    автодополнения в полях "Откуда"/"Куда" на сайте."""
+    from_cities = (
+        await session.execute(select(Order.from_city).where(Order.from_city.is_not(None)).distinct())
+    ).scalars().all()
+    to_cities = (
+        await session.execute(select(Order.to_city).where(Order.to_city.is_not(None)).distinct())
+    ).scalars().all()
+    return sorted(set(KNOWN_CITIES) | set(from_cities) | set(to_cities))
+
+
 def _bucketize(orders: list[Order]) -> dict[str, list[Order]]:
     today = _now_msk().date()
     buckets: dict[str, list[Order]] = {
@@ -358,6 +372,7 @@ async def dashboard(
         )
         orders = (await session.execute(stmt)).scalars().all()
         counts = await _header_counts(session, token)
+        known_cities = await _known_cities(session)
 
     q = q.strip()
     if q:
@@ -372,6 +387,7 @@ async def dashboard(
             "q": q,
             "filters": filters,
             "bucket_titles": BUCKET_TITLES,
+            "known_cities": known_cities,
             **counts,
         },
     )

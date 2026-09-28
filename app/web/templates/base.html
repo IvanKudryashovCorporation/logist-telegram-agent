@@ -483,6 +483,61 @@
       font-family: inherit;
     }
 
+    /* ── Выбор города: подсказки + чипы ── */
+    .city-picker { display: flex; flex-direction: column; gap: 6px; }
+    .city-picker-input {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 14px;
+      font-family: inherit;
+      color: var(--text);
+    }
+    .city-suggestions {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--card);
+      max-height: 180px;
+      overflow-y: auto;
+    }
+    .city-suggestion {
+      display: block;
+      width: 100%;
+      text-align: left;
+      padding: 7px 12px;
+      border: none;
+      background: transparent;
+      font-size: 13.5px;
+      font-family: inherit;
+      color: var(--text);
+      cursor: pointer;
+    }
+    .city-suggestion:hover { background: var(--accent-soft); }
+    .city-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .city-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 6px 3px 10px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 12.5px;
+      font-weight: 600;
+    }
+    .city-chip-x {
+      border: none;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      font-size: 15px;
+      line-height: 1;
+      padding: 2px;
+      display: flex;
+      align-items: center;
+    }
+
     @media (max-width: 640px) {
       header { padding: 12px 16px; }
       main { padding: 16px 16px 48px; }
@@ -519,17 +574,27 @@
             <input type="hidden" name="q" value="{{ q or '' }}">
             <div>
               <label>Откуда</label>
-              <input type="text" name="from_city" value="{{ filters.from_city }}" placeholder="Город(а) через запятую">
+              <div class="city-picker">
+                <input type="text" class="city-picker-input" placeholder="Введите город" autocomplete="off">
+                <div class="city-suggestions" hidden></div>
+                <div class="city-chips"></div>
+                <input type="hidden" name="from_city" value="{{ filters.from_city }}">
+              </div>
             </div>
             <div>
               <label>Куда</label>
-              <input type="text" name="to_city" value="{{ filters.to_city }}" placeholder="Город(а) через запятую">
+              <div class="city-picker">
+                <input type="text" class="city-picker-input" placeholder="Введите город" autocomplete="off">
+                <div class="city-suggestions" hidden></div>
+                <div class="city-chips"></div>
+                <input type="hidden" name="to_city" value="{{ filters.to_city }}">
+              </div>
             </div>
             <div>
               <label>Пассажиров (мин.)</label>
               <input type="number" min="1" name="passengers" value="{{ filters.passengers or '' }}" placeholder="Любое">
             </div>
-            <div class="field-span-2 date-range-field" id="dateRangeField">
+            <div class="date-range-field" id="dateRangeField">
               <label>Дата подачи</label>
               <button type="button" class="date-range-trigger" id="dateRangeTrigger">
                 <span id="dateRangeLabel">Любая дата</span>
@@ -575,6 +640,7 @@
             </div>
           </form>
         </details>
+        <script id="knownCitiesData" type="application/json">{{ (known_cities or []) | tojson | safe }}</script>
       {% endif %}
     </div>
   </header>
@@ -727,6 +793,126 @@
 
       updateLabel();
       updateHint();
+    })();
+
+    (function () {
+      var citiesDataEl = document.getElementById('knownCitiesData');
+      if (!citiesDataEl) return; // фильтров нет на этой странице (не лента)
+
+      var KNOWN_CITIES;
+      try { KNOWN_CITIES = JSON.parse(citiesDataEl.textContent || '[]'); } catch (e) { KNOWN_CITIES = []; }
+
+      function norm(s) { return s.trim().toLowerCase(); }
+
+      document.querySelectorAll('.city-picker').forEach(function (root) {
+        var textInput = root.querySelector('.city-picker-input');
+        var suggestionsBox = root.querySelector('.city-suggestions');
+        var chipsBox = root.querySelector('.city-chips');
+        var hiddenInput = root.querySelector('input[type="hidden"]');
+
+        var selected = (hiddenInput.value || '')
+          .split(',')
+          .map(function (s) { return s.trim(); })
+          .filter(Boolean);
+
+        function syncHidden() {
+          hiddenInput.value = selected.join(', ');
+        }
+
+        function renderChips() {
+          chipsBox.innerHTML = '';
+          selected.forEach(function (city) {
+            var chip = document.createElement('span');
+            chip.className = 'city-chip';
+
+            var label = document.createElement('span');
+            label.textContent = city;
+            chip.appendChild(label);
+
+            var removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.className = 'city-chip-x';
+            removeBtn.setAttribute('aria-label', 'Убрать ' + city + ' из фильтра');
+            removeBtn.textContent = '×';
+            removeBtn.addEventListener('click', function () {
+              selected = selected.filter(function (c) { return c !== city; });
+              syncHidden();
+              renderChips();
+            });
+            chip.appendChild(removeBtn);
+
+            chipsBox.appendChild(chip);
+          });
+        }
+
+        function hideSuggestions() {
+          suggestionsBox.hidden = true;
+          suggestionsBox.innerHTML = '';
+        }
+
+        function addCity(city) {
+          city = city.trim();
+          if (!city) return;
+          var exists = selected.some(function (c) { return norm(c) === norm(city); });
+          if (!exists) {
+            selected.push(city);
+            syncHidden();
+            renderChips();
+          }
+          textInput.value = '';
+          hideSuggestions();
+        }
+
+        function showSuggestions(query) {
+          var q = norm(query);
+          if (!q) { hideSuggestions(); return; }
+
+          var matches = KNOWN_CITIES.filter(function (city) {
+            return norm(city).indexOf(q) !== -1 && !selected.some(function (c) { return norm(c) === norm(city); });
+          }).slice(0, 8);
+
+          if (!matches.length) { hideSuggestions(); return; }
+
+          suggestionsBox.innerHTML = '';
+          matches.forEach(function (city) {
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'city-suggestion';
+            btn.textContent = city;
+            btn.addEventListener('mousedown', function (e) {
+              // mousedown, не click — срабатывает раньше blur текстового поля.
+              e.preventDefault();
+              addCity(city);
+            });
+            suggestionsBox.appendChild(btn);
+          });
+          suggestionsBox.hidden = false;
+        }
+
+        textInput.addEventListener('input', function () {
+          showSuggestions(textInput.value);
+        });
+        textInput.addEventListener('focus', function () {
+          if (textInput.value.trim()) showSuggestions(textInput.value);
+        });
+        textInput.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            if (textInput.value.trim()) addCity(textInput.value);
+          } else if (e.key === 'Escape') {
+            hideSuggestions();
+          } else if (e.key === 'Backspace' && !textInput.value && selected.length) {
+            selected.pop();
+            syncHidden();
+            renderChips();
+          }
+        });
+        textInput.addEventListener('blur', function () {
+          setTimeout(hideSuggestions, 150);
+        });
+
+        renderChips();
+      });
     })();
   </script>
 </body>
