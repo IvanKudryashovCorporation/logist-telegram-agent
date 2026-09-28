@@ -17,7 +17,7 @@
           <div class="card-top">
             <div>
               <div class="card-time">{{ order.pickup_at.strftime("%H:%M") if order.pickup_at else "—" }}</div>
-              <div class="card-subtext">{{ pickup_subtext(order, key) }}</div>
+              <div class="card-subtext">{{ pickup_subtext(order) }}</div>
             </div>
             {% if order.client_price %}<div class="card-price">{{ "%.0f"|format(order.client_price) }} ₽</div>{% endif %}
           </div>

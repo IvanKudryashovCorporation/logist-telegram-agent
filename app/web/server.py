@@ -235,10 +235,15 @@ def is_overdue(order: Order) -> bool:
     return bool(order.pickup_at and order.pickup_at < _now_msk())
 
 
-def pickup_subtext(order: Order, bucket: str) -> str:
-    """Короткая подпись под временем подачи — как давно/скоро подача."""
+def pickup_subtext(order: Order) -> str:
+    """Короткая подпись под временем подачи — как давно/скоро подача.
+
+    Список больше не группируется по дню (Сегодня/Завтра/...), поэтому
+    бакет определяется прямо здесь, по факту даты подачи.
+    """
     if order.pickup_at is None:
         return "время не указано"
+    bucket = _order_bucket(order, _now_msk().date())
     if bucket == "tomorrow":
         return "завтра"
     if bucket == "later":
@@ -293,7 +298,14 @@ async def _header_counts(session, token: str) -> dict:
         await session.execute(
             select(func.count())
             .select_from(Order)
-            .where(Order.status != OrderStatus.CANCELLED, Order.taken_by_token.is_(None))
+            .where(
+                Order.status != OrderStatus.CANCELLED,
+                Order.taken_by_token.is_(None),
+                # То же условие, что и в самой ленте — иначе счётчик в шапке
+                # включает и заказы, чья подача уже прошла и которые в
+                # списке не показываются.
+                or_(Order.pickup_at.is_(None), Order.pickup_at >= _now_msk()),
+            )
         )
     ).scalar_one()
     my_count = (
@@ -436,10 +448,9 @@ async def dashboard(
         "orders_list.html",
         {
             "request": request,
-            "buckets": _bucketize(orders),
+            "orders": orders,
             "q": q,
             "filters": filters,
-            "bucket_titles": BUCKET_TITLES,
             "known_cities": known_cities,
             "sort": sort,
             "sort_labels": SORT_LABELS,
