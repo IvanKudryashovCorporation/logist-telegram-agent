@@ -26,7 +26,7 @@ def extract_contact_username(raw_text: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
-def _combine_pickup_at(pickup_date: Optional[str], pickup_time: Optional[str]) -> Optional[datetime]:
+def combine_pickup_at(pickup_date: Optional[str], pickup_time: Optional[str]) -> Optional[datetime]:
     if not pickup_date:
         return None
     time_part = pickup_time or "00:00"
@@ -39,7 +39,7 @@ def _combine_pickup_at(pickup_date: Optional[str], pickup_time: Optional[str]) -
 def apply_parsed_fields(order: Order, parsed: ParsedOrder) -> None:
     """Переносит поля из ParsedOrder в Order и выставляет статус по полноте данных."""
     order.contact_username = extract_contact_username(order.raw_text) or order.contact_username
-    order.pickup_at = _combine_pickup_at(parsed.pickup_date, parsed.pickup_time) or order.pickup_at
+    order.pickup_at = combine_pickup_at(parsed.pickup_date, parsed.pickup_time) or order.pickup_at
     order.from_city = parsed.from_city or order.from_city
     order.from_address = parsed.from_address or order.from_address
     order.to_city = parsed.to_city or order.to_city

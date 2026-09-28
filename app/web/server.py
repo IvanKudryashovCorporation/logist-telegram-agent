@@ -20,7 +20,7 @@ from sqlalchemy import func, or_, select
 
 from app.db.base import SessionLocal
 from app.models import ORDER_STATUS_LABELS, Order, OrderStatus
-from app.web.city_aliases import city_matches, split_city_terms
+from app.city_aliases import city_matches, split_city_terms
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 

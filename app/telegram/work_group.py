@@ -9,14 +9,50 @@ import logging
 
 from telethon import TelegramClient, events
 
+from app.city_aliases import expand_city_term
 from app.db.base import SessionLocal
-from app.models import ActionLog, ActorType, Order
+from app.models import ActionLog, ActorType, Order, OrderStatus
 from app.parsing.llm_parser import parse_order_text
-from app.parsing.order_builder import apply_parsed_fields
+from app.parsing.order_builder import apply_parsed_fields, combine_pickup_at
+from app.parsing.schema import ParsedOrder
 from app.telegram.dedup import mark_processed, unmark_processed
 from sqlalchemy import select
 
 log = logging.getLogger("agent.work_group")
+
+
+async def _find_duplicate(session, parsed: ParsedOrder) -> Order | None:
+    """Тот же маршрут и та же точная подача уже есть в активной ленте —
+    разные диспетчеры часто публикуют один и тот же рейс порознь, в разных
+    группах, и текстом чуть по-разному (разная цена, сокращённые города).
+    Сравниваем города через тот же справочник сокращений, что и фильтр
+    на сайте, а не как есть, — иначе "Симф" и "Симферополь" не совпадут.
+    """
+    pickup_at = combine_pickup_at(parsed.pickup_date, parsed.pickup_time)
+    if not parsed.from_city or not parsed.to_city or pickup_at is None:
+        return None
+
+    from_canon = expand_city_term(parsed.from_city).lower()
+    to_canon = expand_city_term(parsed.to_city).lower()
+
+    candidates = (
+        await session.execute(
+            select(Order).where(
+                Order.status != OrderStatus.CANCELLED,
+                Order.pickup_at == pickup_at,
+            )
+        )
+    ).scalars().all()
+
+    for candidate in candidates:
+        if not candidate.from_city or not candidate.to_city:
+            continue
+        if (
+            expand_city_term(candidate.from_city).lower() == from_canon
+            and expand_city_term(candidate.to_city).lower() == to_canon
+        ):
+            return candidate
+    return None
 
 
 def register_work_group_handlers(client: TelegramClient, chat_ids: list[int]) -> None:
@@ -82,6 +118,29 @@ async def _upsert_order(message, is_edit: bool) -> int | None:
         if order is None:
             if not parsed.is_order:
                 return  # обычное сообщение в чате, не заявка
+
+            duplicate = await _find_duplicate(session, parsed)
+            if duplicate is not None:
+                session.add(
+                    ActionLog(
+                        order_id=duplicate.id,
+                        actor=ActorType.DISPATCHER,
+                        actor_tg_id=dispatcher_tg_id,
+                        action="duplicate_skipped",
+                        details=f"chat={message.chat_id} msg={message.id}",
+                    )
+                )
+                await session.commit()
+                log.info(
+                    "Дубль заказа #%s пропущен: %s -> %s (chat=%s msg=%s)",
+                    duplicate.id,
+                    duplicate.from_city,
+                    duplicate.to_city,
+                    message.chat_id,
+                    message.id,
+                )
+                return duplicate.id
+
             order = Order(
                 source_chat_id=message.chat_id,
                 source_message_id=message.id,
