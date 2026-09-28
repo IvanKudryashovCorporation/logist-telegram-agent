@@ -413,9 +413,12 @@
               <label>Пассажиров (мин.)</label>
               <input type="number" min="1" name="passengers" value="{{ filters.passengers or '' }}" placeholder="Любое">
             </div>
-            <div>
+            <div class="field-span-2">
               <label>Дата подачи</label>
-              <input type="date" name="date" value="{{ filters.date.isoformat() if filters.date else '' }}">
+              <div class="filters-row-pair">
+                <input type="date" name="date_from" value="{{ filters.date_from.isoformat() if filters.date_from else '' }}">
+                <input type="date" name="date_to" value="{{ filters.date_to.isoformat() if filters.date_to else '' }}">
+              </div>
             </div>
             <div class="field-span-2">
               <label>Время подачи</label>

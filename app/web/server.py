@@ -90,7 +90,8 @@ class Filters:
         from_city: str = "",
         to_city: str = "",
         passengers: str = "",
-        date: str = "",
+        date_from: str = "",
+        date_to: str = "",
         time_from: str = "",
         time_to: str = "",
         price_min: str = "",
@@ -99,7 +100,8 @@ class Filters:
         self.from_city = from_city.strip()
         self.to_city = to_city.strip()
         self.passengers = self._parse_int(passengers)
-        self.date = self._parse_date(date)
+        self.date_from = self._parse_date(date_from)
+        self.date_to = self._parse_date(date_to)
         self.time_from = self._parse_time(time_from)
         self.time_to = self._parse_time(time_to)
         self.price_min = self._parse_decimal(price_min)
@@ -141,7 +143,8 @@ class Filters:
                 self.from_city,
                 self.to_city,
                 self.passengers,
-                self.date,
+                self.date_from,
+                self.date_to,
                 self.time_from,
                 self.time_to,
                 self.price_min,
@@ -161,7 +164,9 @@ class Filters:
                 return False
         if self.passengers is not None and (order.passengers or 0) < self.passengers:
             return False
-        if self.date is not None and (order.pickup_at is None or order.pickup_at.date() != self.date):
+        if self.date_from is not None and (order.pickup_at is None or order.pickup_at.date() < self.date_from):
+            return False
+        if self.date_to is not None and (order.pickup_at is None or order.pickup_at.date() > self.date_to):
             return False
         if self.time_from is not None and (order.pickup_at is None or order.pickup_at.time() < self.time_from):
             return False
@@ -315,14 +320,17 @@ async def dashboard(
     from_city: str = "",
     to_city: str = "",
     passengers: str = "",
-    date: str = "",
+    date_from: str = "",
+    date_to: str = "",
     time_from: str = "",
     time_to: str = "",
     price_min: str = "",
     price_max: str = "",
 ):
     token, new_token = _driver_token(request)
-    filters = Filters(from_city, to_city, passengers, date, time_from, time_to, price_min, price_max)
+    filters = Filters(
+        from_city, to_city, passengers, date_from, date_to, time_from, time_to, price_min, price_max
+    )
 
     async with SessionLocal() as session:
         stmt = (
