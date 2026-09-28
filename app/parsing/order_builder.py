@@ -8,6 +8,7 @@ import re
 from datetime import datetime
 from typing import Optional
 
+from app.city_aliases import expand_city_term
 from app.models import Order, OrderStatus
 from app.parsing.schema import ParsedOrder
 
@@ -40,9 +41,12 @@ def apply_parsed_fields(order: Order, parsed: ParsedOrder) -> None:
     """Переносит поля из ParsedOrder в Order и выставляет статус по полноте данных."""
     order.contact_username = extract_contact_username(order.raw_text) or order.contact_username
     order.pickup_at = combine_pickup_at(parsed.pickup_date, parsed.pickup_time) or order.pickup_at
-    order.from_city = parsed.from_city or order.from_city
+    # Раскрываем сокращение сразу при сохранении ("Симф" -> "Симферополь") —
+    # иначе один и тот же город хранится по-разному в разных заявках и
+    # выглядит как два разных города в автодополнении на сайте.
+    order.from_city = (expand_city_term(parsed.from_city) if parsed.from_city else None) or order.from_city
     order.from_address = parsed.from_address or order.from_address
-    order.to_city = parsed.to_city or order.to_city
+    order.to_city = (expand_city_term(parsed.to_city) if parsed.to_city else None) or order.to_city
     order.to_address = parsed.to_address or order.to_address
     order.flight_or_train = parsed.flight_or_train or order.flight_or_train
     order.car_class = parsed.car_class or order.car_class

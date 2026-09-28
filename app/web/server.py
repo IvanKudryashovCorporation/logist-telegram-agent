@@ -21,7 +21,7 @@ from sqlalchemy import func, or_, select
 
 from app.db.base import SessionLocal
 from app.models import ORDER_STATUS_LABELS, Order, OrderStatus
-from app.city_aliases import KNOWN_CITIES, city_coords, city_matches, split_city_terms
+from app.city_aliases import KNOWN_CITIES, city_coords, city_matches, expand_city_term, split_city_terms
 
 # Диспетчеры пишут время подачи как есть, по местным часам (Крым/Кубань/
 # Кавминводы — везде МСК, UTC+3, без перевода). pickup_at хранится в БД
@@ -316,7 +316,11 @@ async def _known_cities(session) -> list[str]:
     to_cities = (
         await session.execute(select(Order.to_city).where(Order.to_city.is_not(None)).distinct())
     ).scalars().all()
-    return sorted(set(KNOWN_CITIES) | set(from_cities) | set(to_cities))
+    # На всякий случай раскрываем сокращения и здесь — часть заказов в базе
+    # ещё может хранить город как есть (до этого фикса), "Симф" и
+    # "Симферополь" не должны попадать в подсказки как два разных города.
+    real_cities = {expand_city_term(c) for c in [*from_cities, *to_cities]}
+    return sorted(set(KNOWN_CITIES) | real_cities)
 
 
 SORT_LABELS = {
