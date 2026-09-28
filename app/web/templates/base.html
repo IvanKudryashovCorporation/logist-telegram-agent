@@ -76,6 +76,7 @@
       box-shadow: 0 0 0 3px rgba(22,163,74,0.15);
     }
     .header-controls {
+      position: relative;
       display: flex;
       align-items: center;
       gap: 12px;
@@ -310,7 +311,11 @@
     }
 
     /* ── Фильтры ── */
-    .filters-details { position: relative; flex-shrink: 0; }
+    /* Позиционируется НЕ относительно .filters-details (кнопка может
+       оказаться где угодно в широком flex-ряду), а относительно всего
+       .header-controls (он же — контейнер position:relative, max-width:1100,
+       центрированный) — так панель никогда не съезжает за край экрана. */
+    .filters-details { flex-shrink: 0; }
     .filters-details summary {
       list-style: none;
       cursor: pointer;
@@ -333,7 +338,7 @@
     .filters-panel {
       position: absolute;
       top: calc(100% + 8px);
-      left: 0;
+      right: 0;
       z-index: 30;
       width: min(560px, calc(100vw - 48px));
       padding: 16px;
@@ -368,7 +373,7 @@
       .header-top { margin-bottom: 10px; }
       .kv-grid, .fields-grid { grid-template-columns: 1fr 1fr; }
       .detail-card { padding: 16px; padding-bottom: 90px; }
-      .filters-panel { grid-template-columns: repeat(2, 1fr); width: calc(100vw - 32px); left: -16px; }
+      .filters-panel { grid-template-columns: repeat(2, 1fr); width: calc(100vw - 32px); right: 0; }
     }
   </style>
 </head>
@@ -398,11 +403,11 @@
             <input type="hidden" name="q" value="{{ q or '' }}">
             <div>
               <label>Откуда</label>
-              <input type="text" name="from_city" value="{{ filters.from_city }}" placeholder="Город">
+              <input type="text" name="from_city" value="{{ filters.from_city }}" placeholder="Город(а) через запятую">
             </div>
             <div>
               <label>Куда</label>
-              <input type="text" name="to_city" value="{{ filters.to_city }}" placeholder="Город">
+              <input type="text" name="to_city" value="{{ filters.to_city }}" placeholder="Город(а) через запятую">
             </div>
             <div>
               <label>Пассажиров (мин.)</label>

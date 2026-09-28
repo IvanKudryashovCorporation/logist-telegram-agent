@@ -88,27 +88,24 @@
 
   <div class="actions-row">
     {% set link = dispatcher_link(order) %}
-    {% if link %}
-      <a href="{{ link }}" class="btn">Написать диспетчеру</a>
-    {% endif %}
-
-    {% if is_mine %}
-      <span class="badge" style="background:#f0fdf4;color:#16a34a;">В моих заказах</span>
-      <form method="post" action="/orders/{{ order.id }}/release">
-        <button type="submit" class="btn-secondary">Отменить взятие</button>
-      </form>
-    {% elif is_taken_by_someone_else %}
+    {% if is_taken_by_someone_else %}
       <span class="badge" style="background:#fee2e2;color:#dc2626;">Уже взят другим водителем</span>
     {% else %}
-      <form method="post" action="/orders/{{ order.id }}/take">
-        <button type="submit" class="btn-ok">Взять заказ</button>
+      <form method="post" action="/orders/{{ order.id }}/take-and-contact">
+        <button type="submit" class="btn-ok">{{ "Написать диспетчеру" if link else "Взять заказ" }}</button>
       </form>
+      {% if is_mine %}
+        <span class="badge" style="background:#f0fdf4;color:#16a34a;">В моих заказах</span>
+        <form method="post" action="/orders/{{ order.id }}/release">
+          <button type="submit" class="btn-secondary">Отменить взятие</button>
+        </form>
+      {% endif %}
     {% endif %}
   </div>
 
   {% if not link %}
-    <div class="hint" style="margin-top: 12px;">Не удалось определить аккаунт диспетчера — заявка от {{ order.dispatcher_username or order.dispatcher_tg_id or "неизвестного отправителя" }}.</div>
-  {% elif not order.dispatcher_username %}
+    <div class="hint" style="margin-top: 12px;">Не удалось определить аккаунт диспетчера — заявка от {{ order.dispatcher_username or order.dispatcher_tg_id or "неизвестного отправителя" }}. Кнопка выше просто возьмёт заказ.</div>
+  {% elif not order.contact_username and not order.dispatcher_username %}
     <div class="hint" style="margin-top: 12px;">
       У диспетчера нет публичного @username — ссылка может не открыться сама в мобильном браузере.
       Если не сработало, откройте страницу в приложении Telegram (через "поделиться" → "открыть в

@@ -4,11 +4,26 @@
 водителей, не посредник.
 """
 
+import re
 from datetime import datetime
 from typing import Optional
 
 from app.models import Order, OrderStatus
 from app.parsing.schema import ParsedOrder
+
+# "Писать @username" / "пишите t.me/username" / "писать: @username" — в
+# рабочих группах диспетчер часто указывает, кому именно писать по заявке,
+# и это не всегда тот, кто прислал сообщение (пересылка, публикация от
+# имени бота группы и т.п.). Такой контакт приоритетнее отправителя.
+_CONTACT_RE = re.compile(
+    r"(?:писать|пишите|пиши)\s*[:\-]?\s*(?:https?://)?(?:t\.me/|@)([A-Za-z0-9_]{4,32})",
+    re.IGNORECASE,
+)
+
+
+def extract_contact_username(raw_text: str) -> Optional[str]:
+    match = _CONTACT_RE.search(raw_text)
+    return match.group(1) if match else None
 
 
 def _combine_pickup_at(pickup_date: Optional[str], pickup_time: Optional[str]) -> Optional[datetime]:
@@ -23,6 +38,7 @@ def _combine_pickup_at(pickup_date: Optional[str], pickup_time: Optional[str]) -
 
 def apply_parsed_fields(order: Order, parsed: ParsedOrder) -> None:
     """Переносит поля из ParsedOrder в Order и выставляет статус по полноте данных."""
+    order.contact_username = extract_contact_username(order.raw_text) or order.contact_username
     order.pickup_at = _combine_pickup_at(parsed.pickup_date, parsed.pickup_time) or order.pickup_at
     order.from_city = parsed.from_city or order.from_city
     order.from_address = parsed.from_address or order.from_address

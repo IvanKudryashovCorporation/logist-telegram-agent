@@ -28,6 +28,11 @@ class Order(Base, TimestampMixin):
     # "Написать диспетчеру" на сайте.
     dispatcher_tg_id: Mapped[Optional[int]] = mapped_column(BigInteger)
     dispatcher_username: Mapped[Optional[str]] = mapped_column(String(64))
+    # Если в тексте заявки явно указано "писать @аккаунт" — это и есть
+    # реальный диспетчер по этому заказу, даже если сообщение отправил
+    # кто-то другой (пересылка/публикация от имени группы и т.п.).
+    # Приоритетнее dispatcher_username в dispatcher_link().
+    contact_username: Mapped[Optional[str]] = mapped_column(String(64))
     raw_text: Mapped[str] = mapped_column(Text, nullable=False)
 
     # --- Маршрут и время ---

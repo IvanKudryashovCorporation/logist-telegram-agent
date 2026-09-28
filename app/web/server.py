@@ -20,6 +20,7 @@ from sqlalchemy import func, or_, select
 
 from app.db.base import SessionLocal
 from app.models import ORDER_STATUS_LABELS, Order, OrderStatus
+from app.web.city_aliases import city_matches, split_city_terms
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
@@ -73,6 +74,7 @@ def _matches_query(order: Order, q: str) -> bool:
             order.from_address,
             order.to_address,
             order.dispatcher_username,
+            order.contact_username,
         ]
         if v
     ).lower()
@@ -149,10 +151,14 @@ class Filters:
         )
 
     def matches(self, order: Order) -> bool:
-        if self.from_city and self.from_city.lower() not in (order.from_city or "").lower():
-            return False
-        if self.to_city and self.to_city.lower() not in (order.to_city or "").lower():
-            return False
+        if self.from_city:
+            terms = split_city_terms(self.from_city)
+            if terms and not any(city_matches(t, order.from_city) for t in terms):
+                return False
+        if self.to_city:
+            terms = split_city_terms(self.to_city)
+            if terms and not any(city_matches(t, order.to_city) for t in terms):
+                return False
         if self.passengers is not None and (order.passengers or 0) < self.passengers:
             return False
         if self.date is not None and (order.pickup_at is None or order.pickup_at.date() != self.date):
@@ -171,12 +177,18 @@ class Filters:
 def dispatcher_link(order: Order) -> str | None:
     """Ссылка на диалог с диспетчером в Telegram, если известен его аккаунт.
 
+    contact_username — явное "писать @..." из текста заявки — приоритетнее
+    отправителя сообщения: часто заявку публикует не тот, кому по ней
+    фактически нужно писать (пересылка, бот группы и т.п.).
+
     https://t.me/<username> — предпочтительно: работает в любом браузере,
     как в приложении, так и без него (откроет web.telegram.org). tg://user?id=
     оставлен запасным для диспетчеров без публичного username — многие
     мобильные браузеры блокируют этот "сырой" протокол при переходе с сайта,
     поэтому им пользуемся только когда другого варианта нет.
     """
+    if order.contact_username:
+        return f"https://t.me/{order.contact_username}"
     if order.dispatcher_username:
         return f"https://t.me/{order.dispatcher_username}"
     if order.dispatcher_tg_id:
@@ -406,6 +418,36 @@ async def take_order(request: Request, order_id: int):
             await session.commit()
 
     redirect = RedirectResponse(url=f"/orders/{order_id}", status_code=303)
+    _set_driver_cookie(redirect, new_token)
+    return redirect
+
+
+@app.post("/orders/{order_id}/take-and-contact")
+async def take_and_contact(request: Request, order_id: int):
+    """Единая кнопка "Написать диспетчеру": берёт заказ себе (если ещё
+    свободен) и сразу открывает диалог с диспетчером в Telegram."""
+    token, new_token = _driver_token(request)
+
+    async with SessionLocal() as session:
+        order = await session.get(Order, order_id)
+        if order is None:
+            return HTMLResponse("Заказ не найден", status_code=404)
+
+        if order.taken_by_token is not None and order.taken_by_token != token:
+            # Уже взят другим водителем — просто открываем карточку заказа,
+            # без перехода к диспетчеру.
+            redirect = RedirectResponse(url=f"/orders/{order_id}", status_code=303)
+            _set_driver_cookie(redirect, new_token)
+            return redirect
+
+        if order.taken_by_token is None:
+            order.taken_by_token = token
+            order.taken_at = datetime.utcnow()
+            await session.commit()
+
+        link = dispatcher_link(order)
+
+    redirect = RedirectResponse(url=link or f"/orders/{order_id}", status_code=303)
     _set_driver_cookie(redirect, new_token)
     return redirect
 
