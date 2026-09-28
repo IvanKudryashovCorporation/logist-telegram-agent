@@ -333,9 +333,9 @@
     .filters-panel {
       position: absolute;
       top: calc(100% + 8px);
-      right: 0;
+      left: 0;
       z-index: 30;
-      width: min(560px, 82vw);
+      width: min(560px, calc(100vw - 48px));
       padding: 16px;
       background: var(--card);
       border: 1px solid var(--border);
@@ -368,7 +368,7 @@
       .header-top { margin-bottom: 10px; }
       .kv-grid, .fields-grid { grid-template-columns: 1fr 1fr; }
       .detail-card { padding: 16px; padding-bottom: 90px; }
-      .filters-panel { grid-template-columns: repeat(2, 1fr); width: 88vw; right: -12px; }
+      .filters-panel { grid-template-columns: repeat(2, 1fr); width: calc(100vw - 32px); left: -16px; }
     }
   </style>
 </head>
