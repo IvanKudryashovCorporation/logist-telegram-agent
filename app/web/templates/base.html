@@ -367,8 +367,11 @@
       margin-top: 4px;
     }
 
-    /* ── Календарь диапазона дат ── */
-    .date-range-field { position: relative; }
+    /* ── Календарь диапазона дат ──
+       Раскрывается ВНУТРИ обычного потока (не всплывающим окном
+       поверх), поэтому ничего никуда не "съезжает" и не может закрыться
+       случайно от клика мимо — только явным повторным нажатием на поле. */
+    .date-range-field { grid-column: 1 / -1; }
     .date-range-trigger {
       width: 100%;
       text-align: left;
@@ -383,16 +386,14 @@
       cursor: pointer;
     }
     .date-range-trigger:hover { border-color: var(--accent); }
+    .date-range-trigger[aria-expanded="true"] { border-color: var(--accent); }
     .date-range-calendar {
-      position: absolute;
-      top: calc(100% + 6px);
-      left: 0;
-      z-index: 40;
-      width: 280px;
-      background: var(--card);
+      margin-top: 8px;
+      width: 100%;
+      max-width: 320px;
+      background: var(--bg);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      box-shadow: 0 8px 24px rgba(0,0,0,0.12);
       padding: 12px;
     }
     .drc-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
@@ -454,11 +455,23 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 10px;
       margin-top: 10px;
       padding-top: 10px;
       border-top: 1px solid var(--border);
     }
     .drc-hint { font-size: 11.5px; color: var(--muted); }
+    .drc-footer-actions { display: flex; align-items: center; gap: 14px; }
+    .drc-done {
+      border: none;
+      background: transparent;
+      color: var(--accent);
+      font-size: 12.5px;
+      font-weight: 700;
+      cursor: pointer;
+      padding: 0;
+      font-family: inherit;
+    }
     .drc-clear {
       border: none;
       background: transparent;
@@ -535,7 +548,10 @@
                 <div class="drc-grid" id="drcGrid"></div>
                 <div class="drc-footer">
                   <span class="drc-hint" id="drcHint">Выберите дату начала</span>
-                  <button type="button" class="drc-clear" id="drcClear">Сбросить</button>
+                  <div class="drc-footer-actions">
+                    <button type="button" class="drc-clear" id="drcClear">Сбросить</button>
+                    <button type="button" class="drc-done" id="drcDone">Готово</button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -579,6 +595,7 @@
       var fromInput = document.getElementById('dateFromInput');
       var toInput = document.getElementById('dateToInput');
       var clearBtn = document.getElementById('drcClear');
+      var doneBtn = document.getElementById('drcDone');
 
       var MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
       var today = new Date();
@@ -670,9 +687,10 @@
               updateLabel();
               updateHint();
               render();
-              if (rangeStart && rangeEnd) {
-                setTimeout(function () { calendar.hidden = true; }, 150);
-              }
+              // Календарь остаётся открытым, пока водитель сам его не
+              // закроет — ни автозакрытия по таймеру, ни по клику мимо
+              // (это и раздражало: закрывался раньше, чем успевали
+              // выбрать вторую дату).
             };
           })(d));
 
@@ -680,30 +698,31 @@
         }
       }
 
-      trigger.addEventListener('click', function (e) {
-        e.stopPropagation();
+      trigger.addEventListener('click', function () {
         calendar.hidden = !calendar.hidden;
+        trigger.setAttribute('aria-expanded', calendar.hidden ? 'false' : 'true');
         if (!calendar.hidden) render();
       });
-      calendar.addEventListener('click', function (e) { e.stopPropagation(); });
-      document.addEventListener('click', function () { calendar.hidden = true; });
 
       document.querySelectorAll('.drc-nav').forEach(function (btn) {
-        btn.addEventListener('click', function (e) {
-          e.stopPropagation();
+        btn.addEventListener('click', function () {
           viewDate.setMonth(viewDate.getMonth() + Number(btn.dataset.dir));
           render();
         });
       });
 
-      clearBtn.addEventListener('click', function (e) {
-        e.stopPropagation();
+      clearBtn.addEventListener('click', function () {
         rangeStart = null;
         rangeEnd = null;
         updateInputs();
         updateLabel();
         updateHint();
         render();
+      });
+
+      doneBtn.addEventListener('click', function () {
+        calendar.hidden = true;
+        trigger.setAttribute('aria-expanded', 'false');
       });
 
       updateLabel();
