@@ -2,7 +2,7 @@
 {% block title %}Лента заказов — Подача{% endblock %}
 {% block content %}
 
-{% for key in ["overdue", "today", "tomorrow", "later", "no_date"] %}
+{% for key in ["today", "tomorrow", "later", "no_date"] %}
   {% set orders = buckets[key] %}
   {% if orders %}
     <div class="section-title {{ key }}">

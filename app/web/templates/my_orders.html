@@ -4,7 +4,7 @@
 
 <div class="hint">Заказы, которые вы взяли. Хранятся на этом устройстве, без регистрации. Другим водителям они больше не видны.</div>
 
-{% for key in ["overdue", "today", "tomorrow", "later", "no_date"] %}
+{% for key in ["today", "tomorrow", "later", "no_date"] %}
   {% set orders = buckets[key] %}
   {% if orders %}
     <div class="section-title {{ key }}">

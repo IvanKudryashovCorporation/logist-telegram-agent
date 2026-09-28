@@ -9,13 +9,14 @@
 """
 
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.db.base import SessionLocal
 from app.models import ORDER_STATUS_LABELS, Order, OrderStatus
@@ -50,9 +51,10 @@ def _order_bucket(order: Order, today: date) -> str:
     if order.pickup_at is None:
         return "no_date"
     pickup_date = order.pickup_at.date()
-    if pickup_date < today:
-        return "overdue"
-    if pickup_date == today:
+    # Просроченные (дата в прошлом) группируем вместе с сегодняшними —
+    # отдельной секции для них больше нет, а карточка красится через
+    # is_overdue() независимо от бакета.
+    if pickup_date <= today:
         return "today"
     if pickup_date == today + timedelta(days=1):
         return "tomorrow"
@@ -75,6 +77,95 @@ def _matches_query(order: Order, q: str) -> bool:
         if v
     ).lower()
     return q.lower() in haystack
+
+
+class Filters:
+    """Структурные фильтры ленты: откуда/куда, дата и время подачи, цена,
+    мин. число пассажиров. Все поля опциональны и комбинируются по И."""
+
+    def __init__(
+        self,
+        from_city: str = "",
+        to_city: str = "",
+        passengers: str = "",
+        date: str = "",
+        time_from: str = "",
+        time_to: str = "",
+        price_min: str = "",
+        price_max: str = "",
+    ) -> None:
+        self.from_city = from_city.strip()
+        self.to_city = to_city.strip()
+        self.passengers = self._parse_int(passengers)
+        self.date = self._parse_date(date)
+        self.time_from = self._parse_time(time_from)
+        self.time_to = self._parse_time(time_to)
+        self.price_min = self._parse_decimal(price_min)
+        self.price_max = self._parse_decimal(price_max)
+
+    @staticmethod
+    def _parse_int(v: str) -> int | None:
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _parse_date(v: str) -> date | None:
+        try:
+            return datetime.strptime(v, "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _parse_time(v: str) -> time | None:
+        try:
+            return datetime.strptime(v, "%H:%M").time()
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _parse_decimal(v: str) -> Decimal | None:
+        try:
+            return Decimal(v)
+        except (TypeError, ValueError, InvalidOperation):
+            return None
+
+    @property
+    def active_count(self) -> int:
+        return sum(
+            1
+            for v in [
+                self.from_city,
+                self.to_city,
+                self.passengers,
+                self.date,
+                self.time_from,
+                self.time_to,
+                self.price_min,
+                self.price_max,
+            ]
+            if v is not None and v != ""
+        )
+
+    def matches(self, order: Order) -> bool:
+        if self.from_city and self.from_city.lower() not in (order.from_city or "").lower():
+            return False
+        if self.to_city and self.to_city.lower() not in (order.to_city or "").lower():
+            return False
+        if self.passengers is not None and (order.passengers or 0) < self.passengers:
+            return False
+        if self.date is not None and (order.pickup_at is None or order.pickup_at.date() != self.date):
+            return False
+        if self.time_from is not None and (order.pickup_at is None or order.pickup_at.time() < self.time_from):
+            return False
+        if self.time_to is not None and (order.pickup_at is None or order.pickup_at.time() > self.time_to):
+            return False
+        if self.price_min is not None and (order.client_price is None or order.client_price < self.price_min):
+            return False
+        if self.price_max is not None and (order.client_price is None or order.client_price > self.price_max):
+            return False
+        return True
 
 
 def dispatcher_link(order: Order) -> str | None:
@@ -187,7 +278,6 @@ async def _header_counts(session, token: str) -> dict:
 def _bucketize(orders: list[Order]) -> dict[str, list[Order]]:
     today = date.today()
     buckets: dict[str, list[Order]] = {
-        "overdue": [],
         "today": [],
         "tomorrow": [],
         "later": [],
@@ -199,7 +289,6 @@ def _bucketize(orders: list[Order]) -> dict[str, list[Order]]:
 
 
 BUCKET_TITLES = {
-    "overdue": "Просрочено",
     "today": "Сегодня",
     "tomorrow": "Завтра",
     "later": "Позже",
@@ -208,13 +297,30 @@ BUCKET_TITLES = {
 
 
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request, q: str = ""):
+async def dashboard(
+    request: Request,
+    q: str = "",
+    from_city: str = "",
+    to_city: str = "",
+    passengers: str = "",
+    date: str = "",
+    time_from: str = "",
+    time_to: str = "",
+    price_min: str = "",
+    price_max: str = "",
+):
     token, new_token = _driver_token(request)
+    filters = Filters(from_city, to_city, passengers, date, time_from, time_to, price_min, price_max)
 
     async with SessionLocal() as session:
         stmt = (
             select(Order)
-            .where(Order.status != OrderStatus.CANCELLED, Order.taken_by_token.is_(None))
+            .where(
+                Order.status != OrderStatus.CANCELLED,
+                Order.taken_by_token.is_(None),
+                # Подача уже прошла — заказ больше не актуален для ленты.
+                or_(Order.pickup_at.is_(None), Order.pickup_at >= datetime.utcnow()),
+            )
             .order_by(Order.pickup_at.is_(None), Order.pickup_at)
         )
         orders = (await session.execute(stmt)).scalars().all()
@@ -223,6 +329,7 @@ async def dashboard(request: Request, q: str = ""):
     q = q.strip()
     if q:
         orders = [o for o in orders if _matches_query(o, q)]
+    orders = [o for o in orders if filters.matches(o)]
 
     html = templates.TemplateResponse(
         "orders_list.html",
@@ -230,6 +337,7 @@ async def dashboard(request: Request, q: str = ""):
             "request": request,
             "buckets": _bucketize(orders),
             "q": q,
+            "filters": filters,
             "bucket_titles": BUCKET_TITLES,
             **counts,
         },

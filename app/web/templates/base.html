@@ -299,11 +299,67 @@
     .btn-ok { background: var(--ok); border-color: var(--ok); }
     form { display: inline-block; margin: 0; }
 
-    input[type="text"] {
+    input[type="text"], input[type="number"], input[type="date"], input[type="time"] {
       padding: 8px 12px;
       border: 1px solid var(--border);
       border-radius: 8px;
       font-size: 14px;
+      width: 100%;
+      font-family: inherit;
+      color: var(--text);
+    }
+
+    /* ── Фильтры ── */
+    .filters-details { position: relative; flex-shrink: 0; }
+    .filters-details summary {
+      list-style: none;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13.5px;
+      font-weight: 600;
+      color: var(--muted);
+      padding: 8px 14px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--bg);
+      user-select: none;
+      white-space: nowrap;
+    }
+    .filters-details summary::-webkit-details-marker { display: none; }
+    .filters-details summary::marker { content: ""; }
+    .filters-details[open] summary { color: var(--text); border-color: var(--accent); }
+    .filters-panel {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      z-index: 30;
+      width: min(560px, 82vw);
+      padding: 16px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+    .filters-panel .field-span-2 { grid-column: span 2; }
+    .filters-panel label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      color: var(--muted);
+      display: block;
+      margin-bottom: 4px;
+    }
+    .filters-row-pair { display: flex; gap: 8px; }
+    .filters-actions {
+      grid-column: 1 / -1;
+      display: flex;
+      gap: 10px;
+      margin-top: 4px;
     }
 
     @media (max-width: 640px) {
@@ -312,6 +368,7 @@
       .header-top { margin-bottom: 10px; }
       .kv-grid, .fields-grid { grid-template-columns: 1fr 1fr; }
       .detail-card { padding: 16px; padding-bottom: 90px; }
+      .filters-panel { grid-template-columns: repeat(2, 1fr); width: 88vw; right: -12px; }
     }
   </style>
 </head>
@@ -331,6 +388,51 @@
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
         <input type="text" name="q" value="{{ q or '' }}" placeholder="Город, телефон или цена">
       </form>
+      {% if filters is defined %}
+        <details class="filters-details" {{ 'open' if filters.active_count else '' }}>
+          <summary>
+            Фильтры
+            {% if filters.active_count %}<span class="tab-count">{{ filters.active_count }}</span>{% endif %}
+          </summary>
+          <form class="filters-panel" method="get" action="/">
+            <input type="hidden" name="q" value="{{ q or '' }}">
+            <div>
+              <label>Откуда</label>
+              <input type="text" name="from_city" value="{{ filters.from_city }}" placeholder="Город">
+            </div>
+            <div>
+              <label>Куда</label>
+              <input type="text" name="to_city" value="{{ filters.to_city }}" placeholder="Город">
+            </div>
+            <div>
+              <label>Пассажиров (мин.)</label>
+              <input type="number" min="1" name="passengers" value="{{ filters.passengers or '' }}" placeholder="Любое">
+            </div>
+            <div>
+              <label>Дата подачи</label>
+              <input type="date" name="date" value="{{ filters.date.isoformat() if filters.date else '' }}">
+            </div>
+            <div class="field-span-2">
+              <label>Время подачи</label>
+              <div class="filters-row-pair">
+                <input type="time" name="time_from" value="{{ filters.time_from.strftime('%H:%M') if filters.time_from else '' }}">
+                <input type="time" name="time_to" value="{{ filters.time_to.strftime('%H:%M') if filters.time_to else '' }}">
+              </div>
+            </div>
+            <div class="field-span-2">
+              <label>Цена, ₽</label>
+              <div class="filters-row-pair">
+                <input type="number" min="0" name="price_min" value="{{ filters.price_min or '' }}" placeholder="От">
+                <input type="number" min="0" name="price_max" value="{{ filters.price_max or '' }}" placeholder="До">
+              </div>
+            </div>
+            <div class="filters-actions">
+              <button type="submit">Применить</button>
+              <a href="/{{ '?q=' + q if q else '' }}" class="btn btn-secondary">Сбросить фильтры</a>
+            </div>
+          </form>
+        </details>
+      {% endif %}
     </div>
   </header>
   <main>
