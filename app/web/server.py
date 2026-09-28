@@ -22,6 +22,19 @@ from app.db.base import SessionLocal
 from app.models import ORDER_STATUS_LABELS, Order, OrderStatus
 from app.city_aliases import city_matches, split_city_terms
 
+# Диспетчеры пишут время подачи как есть, по местным часам (Крым/Кубань/
+# Кавминводы — везде МСК, UTC+3, без перевода). pickup_at хранится в БД
+# как это "гражданское" московское время, БЕЗ конвертации в UTC при разборе
+# (см. combine_pickup_at в app/parsing/order_builder.py) — поэтому сравнивать
+# его нужно с "сейчас по МСК", а не с datetime.utcnow() напрямую, иначе
+# обратный отсчёт до подачи систематически врёт на 3 часа.
+MSK_OFFSET = timedelta(hours=3)
+
+
+def _now_msk() -> datetime:
+    return datetime.utcnow() + MSK_OFFSET
+
+
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
 app = FastAPI(title="Заказы для водителей")
@@ -217,7 +230,7 @@ def _duration_str(minutes: int) -> str:
 def is_overdue(order: Order) -> bool:
     """Подача уже прошла по времени — красим карточку независимо от бакета
     (бакет группирует по дате, а не по факту "уже прошло")."""
-    return bool(order.pickup_at and order.pickup_at < datetime.utcnow())
+    return bool(order.pickup_at and order.pickup_at < _now_msk())
 
 
 def pickup_subtext(order: Order, bucket: str) -> str:
@@ -228,7 +241,7 @@ def pickup_subtext(order: Order, bucket: str) -> str:
         return "завтра"
     if bucket == "later":
         return order.pickup_at.strftime("%d.%m")
-    delta_min = int((order.pickup_at - datetime.utcnow()).total_seconds() // 60)
+    delta_min = int((order.pickup_at - _now_msk()).total_seconds() // 60)
     if delta_min >= 0:
         return f"через {_duration_str(delta_min)}"
     return f"просрочено на {_duration_str(-delta_min)}"
@@ -293,7 +306,7 @@ async def _header_counts(session, token: str) -> dict:
 
 
 def _bucketize(orders: list[Order]) -> dict[str, list[Order]]:
-    today = date.today()
+    today = _now_msk().date()
     buckets: dict[str, list[Order]] = {
         "today": [],
         "tomorrow": [],
@@ -339,7 +352,7 @@ async def dashboard(
                 Order.status != OrderStatus.CANCELLED,
                 Order.taken_by_token.is_(None),
                 # Подача уже прошла — заказ больше не актуален для ленты.
-                or_(Order.pickup_at.is_(None), Order.pickup_at >= datetime.utcnow()),
+                or_(Order.pickup_at.is_(None), Order.pickup_at >= _now_msk()),
             )
             .order_by(Order.pickup_at.is_(None), Order.pickup_at)
         )
