@@ -419,16 +419,21 @@
       text-align: center;
       margin-bottom: 4px;
     }
-    .drc-grid { display: grid; grid-template-columns: repeat(7, 1fr); row-gap: 2px; }
+    .drc-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); row-gap: 2px; }
     .drc-day {
       position: relative;
+      width: 100%;
+      min-width: 0;
       height: 30px;
+      padding: 0;
+      margin: 0;
       border: none;
       background: transparent;
       font-size: 13px;
       color: var(--text);
       cursor: pointer;
       font-family: inherit;
+      box-sizing: border-box;
     }
     .drc-day:disabled { visibility: hidden; cursor: default; }
     .drc-day:hover:not(:disabled) .drc-day-num { background: var(--accent-soft); }
