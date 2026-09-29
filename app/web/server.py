@@ -23,6 +23,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.db.base import SessionLocal
 from app.web import admin as admin_module
+from app.web import auth as auth_module
 from app.web import routes as public_routes
 from app.web.rate_limit import RateLimitMiddleware
 
@@ -87,6 +88,7 @@ def create_app() -> FastAPI:
     application.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     application.include_router(public_routes.router)
+    application.include_router(auth_module.router)
     application.include_router(admin_module.router)
 
     @application.get("/healthz")

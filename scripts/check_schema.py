@@ -46,7 +46,7 @@ EXPECTED_INDEXES = (
     "ix_pending_messages_due",
 )
 
-EXPECTED_TABLES = ("orders", "pending_messages", "parse_stats", "work_groups", "action_logs")
+EXPECTED_TABLES = ("orders", "pending_messages", "parse_stats", "work_groups", "action_logs", "drivers")
 
 
 async def _inspect_schema() -> tuple[list[str], set[str], set[str], set[str]]:

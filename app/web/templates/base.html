@@ -13,6 +13,18 @@
       <div class="logo">П</div>
       <div class="app-name">Подача</div>
       <div class="live-badge"><span class="live-dot"></span>Live · {{ groups_count or 0 }} групп</div>
+      {% if telegram_login_enabled %}
+        {% if is_logged_in %}
+          <form method="post" action="/auth/logout">
+            <button type="submit" class="btn btn-secondary header-logout">Выйти</button>
+          </form>
+        {% else %}
+          <div class="auth-buttons">
+            <a href="/login?next={{ request.url.path | urlencode }}" class="btn btn-secondary">Войти</a>
+            <a href="/login?next={{ request.url.path | urlencode }}" class="btn">Зарегистрироваться</a>
+          </div>
+        {% endif %}
+      {% endif %}
     </div>
     <div class="header-controls">
       <div class="tabs">

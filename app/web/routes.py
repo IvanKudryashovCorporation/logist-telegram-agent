@@ -11,9 +11,11 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from sqlalchemy import select
 
+from app.config import settings
 from app.db.base import SessionLocal
-from app.models import Order
+from app.models import Driver, Order
 from app.timeutil import now_msk_naive
 from app.web import queries
 from app.web.deps import (
@@ -21,7 +23,9 @@ from app.web.deps import (
     clear_flash,
     driver_token,
     is_admin,
+    logged_in_telegram_id,
     pop_flash,
+    resolve_driver,
     set_flash,
 )
 from app.web.filters import Filters
@@ -58,11 +62,22 @@ def _order_url(order_id: int, back: str = "") -> str:
     return f"{url}?back={quote(back, safe='')}" if back else url
 
 
+def _login_redirect(request: Request) -> RedirectResponse:
+    """Карточка заказа/«Мои заказы» требуют входа — уводим на /login с
+    возвратом на ту же страницу после успешной авторизации."""
+    target = request.url.path
+    if request.url.query:
+        target = f"{target}?{request.url.query}"
+    return RedirectResponse(f"/login?next={quote(target, safe='')}", status_code=303)
+
+
 def _base_context(request: Request, counts: dict, notice: Optional[str] = None) -> dict:
     """Общий контекст для всех страниц (шапка, счётчики, flash-сообщение)."""
     return {
         "request": request,
         "notice": notice,
+        "telegram_login_enabled": settings.telegram_login_enabled,
+        "is_logged_in": logged_in_telegram_id(request) is not None,
         "is_admin": is_admin(request),
         **counts,
     }
@@ -133,11 +148,24 @@ async def feed(
 
 @router.get("/my", response_class=HTMLResponse)
 async def my_orders_page(request: Request):
-    token, new_token = driver_token(request)
+    token, new_token, login_required = resolve_driver(request)
+    if login_required:
+        return _login_redirect(request)
 
+    driver = None
+    stats = None
     async with SessionLocal() as session:
         orders = await queries.my_orders(session, token)
         counts = await queries.header_counts(session, token)
+        if settings.telegram_login_enabled:
+            telegram_id = logged_in_telegram_id(request)
+            driver = (
+                await session.execute(
+                    select(Driver).where(Driver.telegram_id == telegram_id)
+                )
+            ).scalar_one_or_none()
+            if driver is not None:
+                stats = await queries.driver_stats(session, token, driver.created_at)
 
     today = now_msk_naive().date()
     buckets: dict[str, list] = {"today": [], "tomorrow": [], "later": [], "no_date": []}
@@ -146,7 +174,8 @@ async def my_orders_page(request: Request):
 
     html = templates.TemplateResponse(
         "my_orders.html",
-        _base_context(request, counts, pop_flash(request)) | {"buckets": buckets},
+        _base_context(request, counts, pop_flash(request))
+        | {"buckets": buckets, "driver": driver, "stats": stats},
     )
     attach_driver_cookie(html, new_token)
     clear_flash(html)
@@ -155,7 +184,9 @@ async def my_orders_page(request: Request):
 
 @router.get("/orders/{order_id}", response_class=HTMLResponse)
 async def order_detail(request: Request, order_id: int, back: str = ""):
-    token, new_token = driver_token(request)
+    token, new_token, login_required = resolve_driver(request)
+    if login_required:
+        return _login_redirect(request)
 
     async with SessionLocal() as session:
         order = await session.get(Order, order_id)
@@ -204,7 +235,9 @@ def _redirect(url: str, new_token: Optional[str], notice: str = "") -> Response:
 @router.post("/orders/{order_id}/take")
 async def take_order(request: Request, order_id: int, back: str = ""):
     """«Взять заказ» без перехода в Telegram (оставлено для прямых ссылок)."""
-    token, new_token = driver_token(request)
+    token, new_token, login_required = resolve_driver(request)
+    if login_required:
+        return _login_redirect(request)
 
     async with SessionLocal() as session:
         result = await queries.take_order(session, order_id, token)
@@ -219,7 +252,9 @@ async def take_order(request: Request, order_id: int, back: str = ""):
 async def take_and_contact(request: Request, order_id: int, back: str = ""):
     """Единая кнопка «Написать диспетчеру»: берёт заказ себе (если ещё свободен)
     и сразу открывает диалог с диспетчером в Telegram."""
-    token, new_token = driver_token(request)
+    token, new_token, login_required = resolve_driver(request)
+    if login_required:
+        return _login_redirect(request)
 
     async with SessionLocal() as session:
         order = await session.get(Order, order_id)
@@ -246,7 +281,9 @@ async def take_and_contact(request: Request, order_id: int, back: str = ""):
 
 @router.post("/orders/{order_id}/release")
 async def release_order(request: Request, order_id: int):
-    token, new_token = driver_token(request)
+    token, new_token, login_required = resolve_driver(request)
+    if login_required:
+        return _login_redirect(request)
 
     async with SessionLocal() as session:
         result = await queries.release_order(session, order_id, token)
@@ -260,7 +297,9 @@ async def agree_order(request: Request, order_id: int, back: str = ""):
 
     «Отменить взятие» по-прежнему откатывает это обратно, если передумали.
     """
-    token, new_token = driver_token(request)
+    token, new_token, login_required = resolve_driver(request)
+    if login_required:
+        return _login_redirect(request)
 
     async with SessionLocal() as session:
         result = await queries.agree_order(session, order_id, token)
@@ -287,7 +326,9 @@ async def order_feedback(request: Request, order_id: int, back: str = ""):
     несуществующие рейсы или давно не отвечает, — а именно это убивает
     доверие водителей к ленте.
     """
-    token, new_token = driver_token(request)
+    token, new_token, login_required = resolve_driver(request)
+    if login_required:
+        return _login_redirect(request)
     form = await request.form()
     reason_key = str(form.get("reason") or "").strip()
     reason = FEEDBACK_REASONS.get(reason_key, reason_key)

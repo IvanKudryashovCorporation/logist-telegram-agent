@@ -1,5 +1,6 @@
 """Модели данных. Импорт всех моделей нужен, чтобы Alembic их видел."""
 
+from app.models.driver import Driver
 from app.models.enums import (
     HIDDEN_STATUSES,
     OPEN_STATUSES,
@@ -21,6 +22,7 @@ __all__ = [
     "ORDER_STATUS_LABELS",
     "ActionLog",
     "ActorType",
+    "Driver",
     "Order",
     "OrderStatus",
     "ParseOutcome",

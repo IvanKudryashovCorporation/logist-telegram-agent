@@ -118,6 +118,90 @@ def is_admin(request: Request) -> bool:
     )
 
 
+# --- Вход через Telegram Login Widget ----------------------------------------
+#
+# driver_id (анонимная cookie выше) НЕ участвует во входе: она не подписана,
+# и если бы мы просто клали в неё "tg:<id>" после логина, любой посетитель мог
+# бы вручную выставить себе driver_id=tg:<чужой_id> в браузере и открыть чужой
+# профиль/статистику или "взять" заказ от чужого имени. Поэтому личность
+# вошедшего водителя всегда читается ТОЛЬКО из подписанной driver_session —
+# driver_id при этом продолжает жить как раньше, для анонимного листания ленты.
+
+DRIVER_SESSION_COOKIE = "driver_session"
+DRIVER_SESSION_MAX_AGE = 60 * 60 * 24 * 365  # год
+
+
+def driver_session_cookie_value(
+    telegram_id: int, *, now: Optional[int] = None, ttl: int = DRIVER_SESSION_MAX_AGE
+) -> str:
+    """``<telegram_id>.<unix_ts_expires>.<hmac>``."""
+    expires = int(now if now is not None else time.time()) + ttl
+    payload = f"{telegram_id}.{expires}"
+    return f"{payload}.{_sign(payload)}"
+
+
+def verify_driver_session(value: Optional[str], *, now: Optional[int] = None) -> Optional[int]:
+    """Возвращает telegram_id, если подпись верна и срок не истёк, иначе None."""
+    if not value:
+        return None
+    parts = value.split(".")
+    if len(parts) != 3:
+        return None
+    telegram_id_raw, expires_raw, signature = parts
+    if not hmac.compare_digest(_sign(f"{telegram_id_raw}.{expires_raw}"), signature):
+        return None
+    try:
+        telegram_id = int(telegram_id_raw)
+        expires = int(expires_raw)
+    except ValueError:
+        return None
+    if expires <= int(now if now is not None else time.time()):
+        return None
+    return telegram_id
+
+
+def set_driver_session_cookie(response: Response, telegram_id: int) -> None:
+    response.set_cookie(
+        DRIVER_SESSION_COOKIE,
+        driver_session_cookie_value(telegram_id),
+        max_age=DRIVER_SESSION_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        secure=_is_https(),
+    )
+
+
+def clear_driver_session_cookie(response: Response) -> None:
+    response.delete_cookie(DRIVER_SESSION_COOKIE)
+
+
+def logged_in_telegram_id(request: Request) -> Optional[int]:
+    """telegram_id вошедшего водителя, или None (не вошёл / вход выключен)."""
+    if not settings.telegram_login_enabled:
+        return None
+    return verify_driver_session(request.cookies.get(DRIVER_SESSION_COOKIE))
+
+
+def resolve_driver(request: Request) -> tuple[Optional[str], Optional[str], bool]:
+    """Identity для страниц, которым нужен "хозяин" (карточка заказа, "Мои заказы").
+
+    Возвращает ``(token, новый_анонимный_токен_если_надо_поставить, нужен_вход)``.
+
+    Пока вход через Telegram не настроен (``TELEGRAM_LOGIN_*`` пусты в .env) —
+    поведение точно как раньше: анонимная cookie, вход никогда не требуется.
+    Как только настроен — на privileged-страницы без действительной
+    driver_session не пускаем вовсе (см. предупреждение выше про подделку).
+    """
+    if not settings.telegram_login_enabled:
+        token, new_token = driver_token(request)
+        return token, new_token, False
+
+    telegram_id = logged_in_telegram_id(request)
+    if telegram_id is None:
+        return None, None, True
+    return f"tg:{telegram_id}", None, False
+
+
 def check_admin_password(candidate: str) -> bool:
     """Сверка пароля админки без утечки длины/префикса через время ответа."""
     if not settings.admin_enabled:

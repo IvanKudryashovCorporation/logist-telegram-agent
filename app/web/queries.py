@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.city_aliases import KNOWN_CITIES, city_coords, expand_city_term
 from app.config import settings
-from app.models import HIDDEN_STATUSES, ActionLog, ActorType, Order, OrderStatus
+from app.models import HIDDEN_STATUSES, ActionLog, ActorType, Driver, Order, OrderStatus
 from app.timeutil import now_msk_naive, now_utc_naive
 from app.web.filters import Filters
 
@@ -434,4 +434,70 @@ async def my_orders(session: AsyncSession, token: str) -> list:
         .order_by(Order.pickup_at.is_(None), Order.pickup_at.asc())
     )
     return list(rows.scalars().all())
+
+
+async def upsert_driver(session: AsyncSession, payload: dict) -> Driver:
+    """Создаёт или обновляет водителя по данным Telegram Login Widget.
+
+    ``payload`` — уже ПРОВЕРЕННЫЕ (verify_telegram_login) данные виджета,
+    ключи id/username/first_name/last_name/photo_url как есть из Telegram.
+    Имя/фото могут смениться — обновляем их при каждом входе, а не только
+    при первой регистрации.
+    """
+    telegram_id = int(payload["id"])
+    driver = (
+        await session.execute(select(Driver).where(Driver.telegram_id == telegram_id))
+    ).scalar_one_or_none()
+
+    if driver is None:
+        driver = Driver(telegram_id=telegram_id)
+        session.add(driver)
+
+    driver.username = payload.get("username") or None
+    driver.first_name = payload.get("first_name") or None
+    driver.last_name = payload.get("last_name") or None
+    driver.photo_url = payload.get("photo_url") or None
+    driver.last_login_at = now_utc_naive()
+
+    await session.commit()
+    await session.refresh(driver)
+    return driver
+
+
+@dataclass
+class DriverStats:
+    taken_total: int
+    agreed_total: int
+    earned_total: float
+    member_since: object  # datetime — object, чтобы не тащить сюда лишний импорт типов
+
+
+async def driver_stats(session: AsyncSession, token: str, member_since) -> DriverStats:
+    """Статистика для профиля: сколько взял, сколько закрыл, сколько заработал.
+
+    "Заработал" — сумма client_price по заказам, которые водитель довёл до
+    "Договорились". Агрегатор передаёт заявки 1 в 1 без наценки и не участвует
+    в оплате, поэтому это не факт поступления денег, а честная оценка по тем
+    ценам, что были в заявках, — другой цифры у нас просто нет.
+    """
+    taken_total = (
+        await session.execute(
+            select(func.count()).select_from(Order).where(Order.taken_by_token == token)
+        )
+    ).scalar_one()
+
+    agreed_total, earned_total = (
+        await session.execute(
+            select(func.count(), func.coalesce(func.sum(Order.client_price), 0))
+            .select_from(Order)
+            .where(Order.taken_by_token == token, Order.status == OrderStatus.AGREED)
+        )
+    ).one()
+
+    return DriverStats(
+        taken_total=taken_total,
+        agreed_total=agreed_total,
+        earned_total=float(earned_total or 0),
+        member_since=member_since,
+    )
 

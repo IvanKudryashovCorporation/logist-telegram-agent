@@ -102,6 +102,27 @@ class Settings(BaseSettings):
     #: поэтому смена пароля автоматически «разлогинивает» все сессии.
     session_secret: str = ""
 
+    # --- Вход через Telegram (Login Widget) ---
+    #: Токен ОБЫЧНОГО Telegram-бота из @BotFather (НЕ userbot-аккаунт агента!) —
+    #: нужен только для проверки подписи данных от виджета входа. Пусто —
+    #: вход выключен целиком: лента видна всем, но карточка заказа и "Мои
+    #: заказы" недоступны (как будто виджета никогда не было).
+    telegram_login_bot_token: str = ""
+    #: Username бота без @ — виджету нужно знать, через какого бота логинить.
+    telegram_login_bot_username: str = ""
+
+    @property
+    def telegram_login_enabled(self) -> bool:
+        # SESSION_SECRET обязателен явно: без него подпись сессии водителя
+        # уходила бы в f"admin::{admin_password}" — при выключенной админке
+        # (admin_password пуст) это предсказуемый секрет "admin::", и сессию
+        # правда важно, а не только админ-cookie на 12 часов.
+        return bool(
+            self.telegram_login_bot_token.strip()
+            and self.telegram_login_bot_username.strip()
+            and self.session_secret.strip()
+        )
+
     # --- Фоновая очистка протухших заявок ---
     #: Через сколько часов после времени подачи заявка становится EXPIRED.
     expire_grace_hours: int = 6

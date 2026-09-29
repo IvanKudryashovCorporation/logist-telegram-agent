@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Вход — Подача{% endblock %}
+{% block content %}
+
+<div class="login-page">
+  {% if telegram_login_enabled %}
+    <div class="detail-card login-card-block">
+      <div class="detail-title">Вход через Telegram</div>
+      <p class="hint" style="margin-top: 8px;">
+        Без пароля и регистрации отдельной анкетой — просто подтвердите вход
+        в приложении Telegram. Если аккаунта на сайте ещё нет, он заведётся
+        автоматически при первом входе.
+      </p>
+      <div class="telegram-login-widget" style="margin-top: 16px;">
+        <script async src="https://telegram.org/js/telegram-widget.js?22"
+          data-telegram-login="{{ bot_username }}"
+          data-size="large"
+          data-radius="10"
+          data-auth-url="/auth/telegram?next={{ next | urlencode }}"
+          data-request-access="write"></script>
+      </div>
+      <p class="hint" style="margin-top: 16px;">
+        Зачем вход: карточка заказа и «Мои заказы» показывают контакты
+        клиента и позволяют взять заказ — это должно быть привязано к
+        конкретному человеку, а не к анонимному браузеру.
+      </p>
+    </div>
+  {% else %}
+    <div class="detail-card login-card-block">
+      <div class="detail-title">Вход временно недоступен</div>
+      <p class="hint" style="margin-top: 8px;">
+        Вход через Telegram ещё не настроен на этой стороне — загляните позже.
+      </p>
+    </div>
+  {% endif %}
+  <a href="/" class="back-link" style="margin-top: 16px;">&larr; ко всем заказам</a>
+</div>
+
+{% endblock %}

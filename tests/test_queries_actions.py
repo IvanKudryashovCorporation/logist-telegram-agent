@@ -135,9 +135,11 @@ async def test_sort_by_date_ascending(session, make_order):
     await make_order(pickup_at=base + timedelta(hours=9))
 
     page = await queries.fetch_feed(session, sort="date", page=1, page_size=50)
-    hours = [order.pickup_at.hour for order in page.items]
+    # По datetime целиком, не по голому часу: час без даты ломается, когда
+    # +9 часов к base перескакивает через полночь на следующие сутки.
+    pickups = [order.pickup_at for order in page.items]
 
-    assert hours == sorted(hours)
+    assert pickups == sorted(pickups)
 
 
 async def test_sort_recent_is_stable_for_same_second(session, make_order):
