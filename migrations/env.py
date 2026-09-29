@@ -11,9 +11,9 @@ from alembic import context
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.config import settings  # noqa: E402
-from app.db.base import Base  # noqa: E402
-import app.models  # noqa: E402,F401  импорт регистрирует все модели в метаданных
+from app.config import settings
+from app.db.base import Base
+import app.models  # noqa: F401  импорт регистрирует все модели в метаданных
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

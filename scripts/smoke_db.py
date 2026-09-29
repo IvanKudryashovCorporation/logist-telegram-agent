@@ -30,7 +30,6 @@ async def main() -> None:
             client_name="Иван",
             client_phone="+79990000000",
             client_price=Decimal("14000"),
-            driver_payment=Decimal("14000"),  # 1 в 1, без наценки
             status=OrderStatus.NEW,
         )
         session.add(order)

@@ -1,0 +1,208 @@
+{% extends "admin_base.html" %}
+{% block title %}Сводка — админка «Подача»{% endblock %}
+
+{% block content %}
+<div class="metrics">
+  <div class="metric">
+    <div class="metric-value">{{ statuses.total }}</div>
+    <div class="metric-label">всего заказов</div>
+  </div>
+  <div class="metric ok">
+    <div class="metric-value">{{ statuses.taken }}</div>
+    <div class="metric-label">взято водителями</div>
+  </div>
+  <div class="metric {{ 'bad' if statuses.with_problems else '' }}">
+    <div class="metric-value">{{ statuses.with_problems }}</div>
+    <div class="metric-label">с жалобами</div>
+  </div>
+  <div class="metric {{ 'warn' if parse.incomplete_rate > 0.2 else 'ok' }}">
+    <div class="metric-value">{{ "%.0f"|format(parse.incomplete_rate * 100) }}%</div>
+    <div class="metric-label">неполных полей ({{ parse.days }} дн.)</div>
+  </div>
+  <div class="metric {{ 'ok' if parse.prefilter_saving > 0 else '' }}">
+    <div class="metric-value">{{ "%.0f"|format(parse.prefilter_saving * 100) }}%</div>
+    <div class="metric-label">отсечено предфильтром</div>
+  </div>
+  <div class="metric">
+    <div class="metric-value">{{ parse.total_tokens }}</div>
+    <div class="metric-label">токенов за {{ parse.days }} дн.</div>
+  </div>
+  <div class="metric {{ 'bad' if queue.failed else '' }}">
+    <div class="metric-value">{{ queue.failed }}</div>
+    <div class="metric-label">в очереди без надежды</div>
+  </div>
+  <div class="metric">
+    <div class="metric-value">{{ parse.avg_latency_ms }} мс</div>
+    <div class="metric-label">средняя задержка LLM</div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Заказы по статусам</h2>
+  <table>
+    <thead>
+      <tr><th>Статус</th><th class="num">Кол-во</th><th class="num">Доля</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for value, count in statuses.by_status.items() %}
+        <tr>
+          <td>
+            <span class="tag {{ 'ok' if value == 'agreed' else ('warn' if value == 'needs_clarification' else ('bad' if value == 'cancelled' else '')) }}">{{ statuses.status_labels[value] }}</span>
+            <span class="muted mono">{{ value }}</span>
+          </td>
+          <td class="num">{{ count }}</td>
+          <td class="num muted">{{ "%.1f"|format(count * 100 / statuses.total) if statuses.total else "0" }}%</td>
+          <td class="nowrap"><a href="/admin/orders?status={{ value }}">смотреть →</a></td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Качество разбора за {{ parse.days }} дней</h2>
+  <table>
+    <tbody>
+      <tr><th>Обработано сообщений</th><td class="num">{{ parse.processed }}</td></tr>
+      <tr><th>Из них обращений к LLM</th><td class="num">{{ parse.llm_calls }}</td></tr>
+      <tr><th>Отсечено предфильтром (экономия)</th><td class="num">{{ parse.prefiltered }}</td></tr>
+      <tr><th>Найдено заявок</th><td class="num">{{ parse.orders_found }}</td></tr>
+      <tr><th>Неполных полей всего</th><td class="num">{{ parse.missing_fields }}</td></tr>
+      <tr><th>Ошибки и постановки в очередь</th>
+        <td class="num {{ 'error-text' if parse.errors else '' }}">{{ parse.errors }}</td></tr>
+      <tr><th>Токены: prompt / completion</th>
+        <td class="num">{{ parse.prompt_tokens }} / {{ parse.completion_tokens }}</td></tr>
+    </tbody>
+  </table>
+
+  <h3>По исходам</h3>
+  <table>
+    <thead><tr><th>Исход</th><th class="num">Кол-во</th><th class="num">Доля</th></tr></thead>
+    <tbody>
+      {% for outcome, count in parse.by_outcome.items() %}
+        <tr>
+          <td>
+            <span class="tag {{ 'ok' if outcome == 'order' else ('info' if outcome == 'prefiltered' else ('bad' if outcome in ['error', 'queued'] else '')) }}">{{ outcome }}</span>
+          </td>
+          <td class="num">{{ count }}</td>
+          <td class="num muted">{{ "%.1f"|format(count * 100 / parse.processed) if parse.processed else "0" }}%</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if not parse.processed %}
+    <p class="muted">
+      Статистики нет: либо агент ещё не разбирал сообщения,
+      либо выключен <span class="mono">PARSE_STATS_ENABLED</span>.
+    </p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Очередь повторного разбора</h2>
+  <table>
+    <thead><tr><th>Состояние</th><th class="num">Кол-во</th><th></th></tr></thead>
+    <tbody>
+      <tr>
+        <td><span class="tag info">pending</span> <span class="muted">ждёт попытки, воркер повторит сам</span></td>
+        <td class="num">{{ queue.pending }}</td>
+        <td class="nowrap"><a href="/admin/queue?status=pending">смотреть →</a></td>
+      </tr>
+      <tr>
+        <td><span class="tag bad">failed</span> <span class="muted">попытки исчерпаны — нужен человек</span></td>
+        <td class="num {{ 'error-text' if queue.failed else '' }}">{{ queue.failed }}</td>
+        <td class="nowrap"><a href="/admin/queue?status=failed">смотреть →</a></td>
+      </tr>
+      <tr>
+        <td><span class="tag ok">done</span> <span class="muted">разобрано с повторной попытки</span></td>
+        <td class="num">{{ queue.done }}</td>
+        <td class="nowrap"><a href="/admin/queue?status=done">смотреть →</a></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="card" id="problems">
+  <h2>Жалобы водителей</h2>
+  {% if problems %}
+    <p class="muted">
+      Водители помечают заявку, когда диспетчер не отвечает или цена неактуальна.
+      Это единственный сигнал, что лента «врёт».
+    </p>
+    <table>
+      <thead>
+        <tr><th>Заказ</th><th>Маршрут</th><th>Подача</th><th>Статус</th><th>Жалоба</th><th>Обновлён</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for order in problems %}
+          <tr>
+            <td class="num mono">
+              <a href="/orders/{{ order.id }}" target="_blank" rel="noopener">#{{ order.id }}</a>
+            </td>
+            <td>{{ order.from_city or '?' }} → {{ order.to_city or '?' }}</td>
+            <td class="nowrap">{{ order.pickup_at.strftime('%d.%m %H:%M') if order.pickup_at else '—' }}</td>
+            <td class="nowrap"><span class="tag {{ 'bad' if order.status.value == 'cancelled' else ('ok' if order.status.value == 'agreed' else '') }}">{{ order.status.value }}</span></td>
+            <td class="error-text pre-wrap">{{ order.problem_note or '—' }}</td>
+            <td class="nowrap muted">{{ order.updated_at.strftime('%d.%m %H:%M') if order.updated_at else '—' }}</td>
+            <td class="nowrap">
+              {% if order.status.value != 'cancelled' %}
+                <form method="post" action="/admin/orders/{{ order.id }}/hide">
+                  <button type="submit" class="btn danger">Скрыть</button>
+                </form>
+              {% else %}
+                <form method="post" action="/admin/orders/{{ order.id }}/unhide">
+                  <button type="submit" class="btn">Вернуть</button>
+                </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">Жалоб нет.</div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Служебное</h2>
+  <table>
+    <tbody>
+      <tr>
+        <th>Кэш разбора: hits / misses / размер</th>
+        <td class="num">
+          {{ cache.hits }} / {{ cache.misses }} / {{ cache.size }}
+          {% if cache.hits or cache.misses %}
+            <span class="muted">· попаданий {{ "%.0f"|format(cache.hits * 100 / (cache.hits + cache.misses)) }}%</span>
+          {% endif %}
+        </td>
+      </tr>
+      <tr>
+        <th>Rate limit</th>
+        <td class="num">
+          {% if rate_limit.enabled %}
+            <span class="tag ok">включён</span>
+            GET {{ rate_limit.get_limit_per_min }}/мин · POST {{ rate_limit.post_limit_per_min }}/мин
+          {% else %}
+            <span class="tag warn">выключен</span>
+          {% endif %}
+        </td>
+      </tr>
+      <tr>
+        <th>Отклонено запросов (429) всего</th>
+        <td class="num {{ 'error-text' if rate_limit.rejected_total else '' }}">{{ rate_limit.rejected_total }}</td>
+      </tr>
+      <tr>
+        <th>Клиентов в памяти лимитера</th>
+        <td class="num">{{ rate_limit.tracked_clients }}</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="muted">
+    Счётчики кэша и лимитера живут в памяти процесса и обнуляются при перезапуске.
+    Старую статистику разбора чистит <span class="mono">app/services/cleanup.py</span>
+    (параметр <span class="mono">STATS_RETENTION_DAYS</span>).
+  </p>
+</div>
+{% endblock %}

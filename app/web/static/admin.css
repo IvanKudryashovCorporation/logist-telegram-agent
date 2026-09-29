@@ -1,0 +1,210 @@
+/* Стили админки владельца.
+
+   Отдельный файл, а не часть style.css: админка — служебный интерфейс с
+   таблицами, и смешивать её с мобильной лентой заказов невыгодно никому.
+   Намеренно светлая тема и никаких «модных» эффектов: здесь читают цифры. */
+
+:root {
+  --ink: #0f172a;
+  --muted: #64748b;
+  --line: #e2e8f0;
+  --bg: #f8fafc;
+  --accent: #1d4ed8;
+  --ok: #16a34a;
+  --warn: #d97706;
+  --bad: #dc2626;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+}
+
+a { color: var(--accent); }
+
+.admin-shell { max-width: 1100px; margin: 0 auto; padding: 20px 16px 60px; }
+
+.admin-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.admin-title { font-size: 20px; font-weight: 700; margin-right: auto; }
+
+.admin-nav { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 20px; }
+
+.admin-nav a {
+  padding: 7px 12px;
+  border-radius: 9px;
+  background: #fff;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.admin-nav a.current { background: var(--ink); border-color: var(--ink); color: #fff; }
+
+.admin-nav a .count { opacity: 0.75; font-variant-numeric: tabular-nums; }
+
+/* Сводка: цифры крупно, подписи мелко */
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.metric {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+.metric-value { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.metric-label { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.metric.ok .metric-value { color: var(--ok); }
+.metric.warn .metric-value { color: var(--warn); }
+.metric.bad .metric-value { color: var(--bad); }
+
+.card {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 18px;
+}
+
+.card h2 { font-size: 15px; margin: 0 0 10px; }
+.card h3 { font-size: 13px; margin: 14px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+
+th, td { padding: 7px 8px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; white-space: nowrap; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tbody tr:hover { background: #f8fafc; }
+
+.tag {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #334155;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.tag.ok { background: #f0fdf4; color: var(--ok); }
+.tag.warn { background: #fffbeb; color: var(--warn); }
+.tag.bad { background: #fef2f2; color: var(--bad); }
+.tag.info { background: #eff6ff; color: var(--accent); }
+
+.btn {
+  display: inline-block;
+  padding: 6px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn:hover { border-color: #cbd5e1; }
+.btn.danger { color: var(--bad); border-color: #fecaca; }
+.btn.primary { background: var(--ink); border-color: var(--ink); color: #fff; }
+
+.filters-inline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+
+.filters-inline input, .filters-inline select {
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font-size: 13px;
+  background: #fff;
+}
+
+.muted { color: var(--muted); }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+.pre-wrap { white-space: pre-wrap; word-break: break-word; max-width: 420px; }
+.nowrap { white-space: nowrap; }
+.error-text { color: var(--bad); font-size: 12px; }
+.empty { padding: 18px; text-align: center; color: var(--muted); }
+
+.notice {
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: var(--accent);
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+
+.notice.warn { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+.notice.bad { background: #fef2f2; border-color: #fecaca; color: var(--bad); }
+
+/* Страница входа */
+.login-wrap { max-width: 340px; margin: 12vh auto; padding: 0 16px; }
+
+.login-card {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 22px;
+}
+
+.login-card h1 { font-size: 17px; margin: 0 0 4px; }
+.login-card p { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+
+.login-card input[type='password'] {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 15px;
+  margin-bottom: 12px;
+}
+
+.login-card button {
+  width: 100%;
+  padding: 10px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.pager { display: flex; gap: 6px; justify-content: center; margin-top: 16px; }
+
+.pager a, .pager span {
+  min-width: 34px;
+  padding: 7px 9px;
+  border-radius: 9px;
+  background: #fff;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+  text-decoration: none;
+}
+
+.pager span.current { background: var(--ink); border-color: var(--ink); color: #fff; }
+
+@media (max-width: 640px) {
+  .admin-shell { padding: 14px 10px 40px; }
+  th, td { padding: 6px 5px; }
+  .pre-wrap { max-width: 200px; }
+}

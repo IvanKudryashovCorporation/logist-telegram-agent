@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Вход в админку — Подача</title>
+  <link rel="stylesheet" href="/static/admin.css">
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="login-card">
+      <h1>Админка «Подачи»</h1>
+      <p>Пароль владельца сервиса. После входа сессия живёт на этом устройстве.</p>
+
+      {% if error %}
+        <div class="notice bad">{{ error }}</div>
+      {% endif %}
+
+      <form method="post" action="/admin/login">
+        <input type="password" name="password" placeholder="Пароль" autocomplete="current-password" autofocus required>
+        <button type="submit">Войти</button>
+      </form>
+
+      <p style="margin-top:14px;"><a href="/">← Вернуться на сайт</a></p>
+    </div>
+  </div>
+</body>
+</html>

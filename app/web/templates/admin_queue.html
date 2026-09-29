@@ -1,0 +1,89 @@
+{% extends "admin_base.html" %}
+{% block title %}Очередь разбора — админка «Подача»{% endblock %}
+
+{% block content %}
+<div class="card">
+  <h2>Очередь повторного разбора</h2>
+  <p class="muted">
+    Сюда попадают сообщения, которые Telethon доставил, а разобрать не удалось
+    (лимит LLM, таймаут, битый ответ). Telethon не переигрывает доставленные
+    события, поэтому без очереди такая заявка терялась бы навсегда.
+  </p>
+
+  <div class="admin-nav">
+    {% for value, label in [('failed', 'Без попыток'), ('pending', 'В работе'), ('done', 'Разобрано')] %}
+      <a href="/admin/queue?status={{ value }}" class="{{ 'current' if status == value else '' }}">
+        {{ label }} <span class="count">{{ counts[value] }}</span>
+      </a>
+    {% endfor %}
+  </div>
+
+  {% if items %}
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Источник</th>
+          <th>Текст</th>
+          <th class="num">Попыток</th>
+          <th>Следующая</th>
+          <th>Ошибка</th>
+          <th>Действия</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+          <tr>
+            <td class="num mono">#{{ item.id }}</td>
+            <td class="mono muted nowrap">
+              chat {{ item.chat_id }}<br>msg {{ item.message_id }}
+              {% if item.is_edit %}<span class="tag info">правка</span>{% endif %}
+            </td>
+            <td class="pre-wrap">{{ item.text }}</td>
+            <td class="num">{{ item.attempts }}</td>
+            <td class="nowrap muted">
+              {{ item.next_attempt_at.strftime('%d.%m %H:%M') if item.next_attempt_at else '—' }}
+            </td>
+            <td class="error-text pre-wrap">{{ item.last_error or '—' }}</td>
+            <td class="nowrap">
+              {% if item.status.value == 'failed' %}
+                <form method="post" action="/admin/queue/{{ item.id }}/retry">
+                  <button type="submit" class="btn primary">Повторить</button>
+                </form>
+              {% elif item.status.value == 'pending' %}
+                <form method="post" action="/admin/queue/{{ item.id }}/retry">
+                  <button type="submit" class="btn">Сбросить счётчик</button>
+                </form>
+              {% else %}
+                <span class="tag ok">готово</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    {% if items | length >= 100 %}
+      <p class="muted">Показаны последние 100 записей. Полный список — <span class="mono">scripts/retry_queue.py</span>.</p>
+    {% endif %}
+  {% else %}
+    <div class="empty">
+      {% if status == 'failed' %}
+        Пусто — все сообщения разобрались. Это нормальное состояние очереди.
+      {% else %}
+        Нет записей в этом состоянии.
+      {% endif %}
+    </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Как это работает</h2>
+  <p class="muted">
+    «Повторить» обнуляет счётчик попыток и ставит <span class="mono">next_attempt_at</span> на сейчас —
+    воркер (<span class="mono">app/telegram/queue_worker.py</span>) подхватит сообщение на следующем
+    проходе и перечитает его из Telegram заново, поэтому правки диспетчера тоже учитываются.
+    Нажимать имеет смысл после устранения причины: пополнили квоту LLM, поправили ключ, вернули сеть.
+  </p>
+</div>
+{% endblock %}

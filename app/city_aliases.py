@@ -7,6 +7,11 @@
 Черноморское побережье, плюс несколько крупных городов).
 """
 
+import re
+
+#: Префиксы-мусор перед названием города: «г. Симферополь», «город Керчь».
+_CITY_PREFIX_RE = re.compile(r"^(?:г\.|гор\.|город|city)\s+", re.IGNORECASE)
+
 CITY_ALIASES: dict[str, str] = {
     # Крым
     "симф": "Симферополь",
@@ -110,6 +115,52 @@ def split_city_terms(raw: str) -> list[str]:
     """Несколько городов через запятую — водитель может искать сразу по
     паре направлений."""
     return [t.strip() for t in raw.split(",") if t.strip()]
+
+
+def city_key(value: str | None) -> str:
+    """Нормализованная форма названия города — для сравнения прямо в SQL.
+
+    Приводим к нижнему регистру и убираем мусор («г.», «город»), чтобы
+    «Симферополь», «симферополь» и «г. Симферополь» давали один ключ.
+    ВАЖНО: используется именно Python-овский .lower(), потому что lower()
+    в SQLite понимает только ASCII и кириллицу не приводит.
+    """
+    if not value:
+        return ""
+    text = str(value).strip().lower()
+    text = _CITY_PREFIX_RE.sub("", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip(" .,;-")
+
+
+def canonical_city_variants(raw: str) -> list[str]:
+    """Все формы, которыми город из фильтра может быть записан в заявке.
+
+    Возвращает ключи (см. :func:`city_key`) в нижнем регистре: сам термин,
+    его каноническое раскрытие и все известные алиасы того же города. Дальше
+    SQL-фильтр ищет ``LIKE '%вариант%'`` по подготовленным колонкам
+    ``from_city_key``/``to_city_key`` — без функций регистра в самой БД.
+    """
+    term = (raw or "").strip()
+    if not term:
+        return []
+    variants: list[str] = []
+    seen: set[str] = set()
+
+    def _add(value: str | None) -> None:
+        key = city_key(value)
+        if key and key not in seen:
+            seen.add(key)
+            variants.append(key)
+
+    _add(term)
+    canonical = expand_city_term(term)
+    _add(canonical)
+    canonical_key = city_key(canonical)
+    for alias, alias_canonical in CITY_ALIASES.items():
+        if city_key(alias_canonical) == canonical_key:
+            _add(alias)
+    return variants
 
 
 #: Полные названия городов из справочника — базовый список для автодополнения

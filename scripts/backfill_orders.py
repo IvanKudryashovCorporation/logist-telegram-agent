@@ -16,8 +16,10 @@ from sqlalchemy import select
 
 from app.db.base import SessionLocal
 from app.models import WorkGroup
+from app.parsing.llm_parser import ParseUnavailable
 from app.telegram.client import build_client
-from app.telegram.work_group import _upsert_order
+from app.telegram.pending import enqueue
+from app.telegram.work_group import upsert_order_text
 
 
 async def backfill(limit: int, only_group_id: int | None) -> None:
@@ -43,9 +45,29 @@ async def backfill(limit: int, only_group_id: int | None) -> None:
             if not text or message.out or message.reply_to_msg_id is not None:
                 print(f"  [{message.id}] пропущено (пусто/реплай/своё)")
                 continue
+            sender_id = getattr(message.sender_id, "user_id", message.sender_id)
             try:
-                order_ids = await _upsert_order(message, is_edit=False)
-            except Exception as exc:
+                order_ids = await upsert_order_text(
+                    chat_id=group.tg_chat_id,
+                    message_id=message.id,
+                    text=text,
+                    dispatcher_tg_id=sender_id,
+                    dispatcher_username=getattr(message.sender, "username", None),
+                    is_edit=False,
+                )
+            except ParseUnavailable as exc:
+                # LLM недоступна — не теряем сообщение, а откладываем в очередь:
+                # воркер (или scripts.retry_queue) повторит разбор позже.
+                await enqueue(
+                    chat_id=group.tg_chat_id,
+                    message_id=message.id,
+                    text=text,
+                    is_edit=False,
+                    error=f"backfill: {exc}",
+                )
+                print(f"  [{message.id}] LLM недоступна, отложено в очередь: {exc}")
+                continue
+            except Exception as exc:  # noqa: BLE001 — сбой на одном сообщении не должен прерывать весь прогрев
                 print(f"  [{message.id}] ОШИБКА: {exc}")
                 continue
             if not order_ids:

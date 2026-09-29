@@ -8,7 +8,18 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Enum, Integer, Numeric, String, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Enum,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin
@@ -17,6 +28,18 @@ from app.models.enums import OrderStatus
 
 class Order(Base, TimestampMixin):
     __tablename__ = "orders"
+    __table_args__ = (
+        # Одна заявка из одного сообщения ровно одна — железная защита от дублей
+        # на уровне БД (in-memory дедупликация Telethon-событий переживает не
+        # каждый рестарт агента).
+        UniqueConstraint(
+            "source_chat_id", "source_message_id", "source_sub_index", name="uq_orders_source"
+        ),
+        # Основной запрос ленты и счётчика в шапке: status + taken_by_token + pickup_at.
+        Index("ix_orders_feed", "status", "taken_by_token", "pickup_at"),
+        # Поиск дублей при разборе: цена + окно по дате подачи.
+        Index("ix_orders_dedup", "client_price", "pickup_at"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
 
@@ -60,9 +83,25 @@ class Order(Base, TimestampMixin):
 
     # --- Деньги: 1 в 1 из заявки, без наценки ---
     client_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
-    # Оставлено как синоним client_price (совпадает с ним) — на случай, если
-    # в заявке отдельно указана сумма именно для водителя.
-    driver_payment: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
+
+    # --- Поисковый индекс ---
+    # Денормализованная строка для полнотекстового поиска на сайте: id, телефон,
+    # имя, города, адреса, @username — всё в нижнем регистре, через пробел.
+    # Нужна именно отдельная колонка, а не LOWER(...) в запросе: lower() в SQLite
+    # работает только для ASCII и «СИМФЕРОПОЛЬ» != «симферополь», а Python-овский
+    # .lower() при записи обрабатывает кириллицу корректно.
+    # Пересчитывается в app/search.py при каждом сохранении заказа.
+    search_text: Mapped[Optional[str]] = mapped_column(Text)
+    # Нормализованные (lower + без «г.») города — чтобы фильтр «откуда/куда»
+    # работал в SQL через LIKE, а не перебором всех строк в Python.
+    # Пересчитываются тем же app/search.py.
+    from_city_key: Mapped[Optional[str]] = mapped_column(String(128), index=True)
+    to_city_key: Mapped[Optional[str]] = mapped_column(String(128), index=True)
+    # Час подачи строкой 'HH:MM' — нужен, чтобы фильтр «время подачи» работал
+    # в SQL. Извлекать время из datetime переносимо не получается: в SQLite
+    # CAST(x AS TIME) приводит к NUMERIC, в PostgreSQL — к TIME, а единого
+    # выражения нет. Сравнение строк 'HH:MM' работает одинаково везде.
+    pickup_time_key: Mapped[Optional[str]] = mapped_column(String(5), index=True)
 
     # --- Состояние ---
     status: Mapped[OrderStatus] = mapped_column(
@@ -70,14 +109,19 @@ class Order(Base, TimestampMixin):
         default=OrderStatus.NEW,
         nullable=False,
     )
+    # Отметка «с заявкой что-то не так» — ставится в т.ч. водителями через
+    # кнопку «Цена неактуальна» на карточке заказа (см. /orders/{id}/feedback).
     has_problem: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     problem_note: Mapped[Optional[str]] = mapped_column(Text)
     is_urgent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # --- "Мои заказы" ---
     # Сайт без логина: водителя различаем по анонимной cookie в браузере
-    # (см. app/web/server.py). Кто взял заказ первым — тот и взял.
+    # (см. app/web/deps.py). Кто взял заказ первым — тот и взял; само взятие
+    # делается атомарным UPDATE ... WHERE taken_by_token IS NULL, поэтому
+    # гонки нет ни на SQLite, ни на PostgreSQL.
     taken_by_token: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    #: Наивный UTC (см. app/timeutil.py) — как и created_at.
     taken_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=False))
 
     def __repr__(self) -> str:

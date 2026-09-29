@@ -55,4 +55,26 @@
   <div class="empty">{% if q %}По запросу «{{ q }}» ничего не найдено.{% else %}Заказов пока нет.{% endif %}</div>
 {% endif %}
 
+{% if page_info and page_info.total %}
+  <div class="result-count">
+    Показано {{ page_info.items|length }} из {{ page_info.total }}
+    {% if filters.active_count or q %}(фильтры активны){% endif %}
+  </div>
+{% endif %}
+
+{% if page_info and page_info.pages > 1 %}
+  <nav class="pager" aria-label="Страницы">
+    {% if page_info.has_prev %}
+      <a class="pager-btn" href="?{{ page_query|urlencode }}&amp;page={{ page_info.page - 1 }}">&larr;</a>
+    {% endif %}
+    {% for number in page_info.window %}
+      <a class="pager-btn {{ 'current' if number == page_info.page else '' }}"
+         href="?{{ page_query|urlencode }}&amp;page={{ number }}">{{ number }}</a>
+    {% endfor %}
+    {% if page_info.has_next %}
+      <a class="pager-btn" href="?{{ page_query|urlencode }}&amp;page={{ page_info.page + 1 }}">&rarr;</a>
+    {% endif %}
+  </nav>
+{% endif %}
+
 {% endblock %}

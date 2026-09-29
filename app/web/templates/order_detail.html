@@ -12,6 +12,10 @@
     </div>
     {% if order.status.value == "needs_clarification" %}
       <span class="badge" style="background:#fff7ed;color:#d97706;">Часть данных не разобралась</span>
+    {% elif order.status.value == "expired" %}
+      <span class="badge" style="background:#f1f5f9;color:#475569;">Время подачи прошло</span>
+    {% elif order.status.value == "cancelled" %}
+      <span class="badge" style="background:#f1f5f9;color:#475569;">Снята с ленты</span>
     {% endif %}
   </div>
 
@@ -73,17 +77,20 @@
     </div>
     <div>
       <div class="field-label">Клиент</div>
-      <div class="field-value">{{ order.client_name or "—" }}</div>
+      <div class="field-value">{{ client_name_display or "—" }}</div>
     </div>
     <div>
       <div class="field-label">Телефон</div>
-      <div class="field-value">{{ order.client_phone or "—" }}</div>
+      <div class="field-value">{{ phone_display or "—" }}</div>
+      {% if not is_mine and phone_display %}
+        <div class="card-subtext">полный номер — после «Взять заказ»</div>
+      {% endif %}
     </div>
   </div>
 
   <div class="raw-text-block">
     <div class="raw-text-label">Исходный текст заявки</div>
-    <div class="raw-text">{{ order.raw_text }}</div>
+    <div class="raw-text">{{ raw_text_display }}</div>
   </div>
 
   <div class="actions-row">
@@ -109,6 +116,27 @@
       {% endif %}
     {% endif %}
   </div>
+
+  {% if is_mine %}
+    <details class="feedback-block" {{ 'open' if order.has_problem else '' }}>
+      <summary>Что-то не так с заявкой?</summary>
+      {% if order.has_problem %}
+        <div class="hint">Ваша жалоба уже отправлена владельцу: {{ order.problem_note }}</div>
+      {% else %}
+        <form method="post" action="/orders/{{ order.id }}/feedback" class="feedback-form">
+          <div class="feedback-reasons">
+            <label><input type="radio" name="reason" value="price_outdated" required> Цена неактуальна</label>
+            <label><input type="radio" name="reason" value="no_answer"> Диспетчер не отвечает</label>
+            <label><input type="radio" name="reason" value="taken_already"> Рейс уже занят</label>
+            <label><input type="radio" name="reason" value="wrong_data"> Данные в заявке неверные</label>
+          </div>
+          <input type="text" name="note" maxlength="300" placeholder="Комментарий (необязательно)">
+          <button type="submit" class="btn-secondary">Отправить владельцу</button>
+        </form>
+        <div class="hint">Жалобы видны только владельцу сервиса — это способ убрать из ленты мёртвые заявки.</div>
+      {% endif %}
+    </details>
+  {% endif %}
 
   {% if not link %}
     <div class="hint" style="margin-top: 12px;">Не удалось определить аккаунт диспетчера — заявка от {{ order.dispatcher_username or order.dispatcher_tg_id or "неизвестного отправителя" }}. Кнопка выше просто возьмёт заказ.</div>

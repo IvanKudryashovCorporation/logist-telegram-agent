@@ -20,3 +20,12 @@ openai==1.57.4
 fastapi==0.115.6
 uvicorn[standard]==0.32.1
 jinja2==3.1.4
+# ОБЯЗАТЕЛЬНО: без него FastAPI не может разобрать тело формы, а формы у нас —
+# вход в админку (/admin/login) и жалоба водителя (/orders/{id}/feedback).
+python-multipart==0.0.17
+
+# Тесты и линтер (в проде не нужны)
+pytest==9.1.1
+pytest-asyncio==1.4.0
+httpx==0.28.1
+ruff==0.16.9

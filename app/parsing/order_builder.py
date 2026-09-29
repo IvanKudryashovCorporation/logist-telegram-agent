@@ -11,6 +11,7 @@ from typing import Optional
 from app.city_aliases import expand_city_term
 from app.models import Order, OrderStatus
 from app.parsing.schema import ParsedOrder
+from app.search import refresh_derived
 
 # "Писать @username" / "пишите t.me/username" / "писать: @username" — в
 # рабочих группах диспетчер часто указывает, кому именно писать по заявке,
@@ -59,10 +60,15 @@ def apply_parsed_fields(order: Order, parsed: ParsedOrder) -> None:
     order.is_urgent = parsed.is_urgent or order.is_urgent
 
     if parsed.client_price is not None:
+        # Цена переносится 1 в 1 из заявки, без наценки: это агрегатор для
+        # водителей, а не посредник.
         order.client_price = parsed.client_price
-        order.driver_payment = parsed.client_price  # без наценки, 1 в 1
 
     if order.status in (OrderStatus.NEW, OrderStatus.NEEDS_CLARIFICATION):
         order.status = (
             OrderStatus.NEEDS_CLARIFICATION if parsed.missing_fields else OrderStatus.NEW
         )
+
+    # search_text / from_city_key / to_city_key обязаны соответствовать
+    # только что записанным полям, иначе поиск и фильтры на сайте «слепнут».
+    refresh_derived(order)

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {# Админка не должна попадать в индекс и не должна наследовать кэш ленты. #}
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block title %}Админка — Подача{% endblock %}</title>
+  <link rel="stylesheet" href="/static/admin.css">
+</head>
+<body>
+  <div class="admin-shell">
+    <div class="admin-top">
+      <div class="admin-title">Подача · админка</div>
+      <a class="btn" href="/" target="_blank" rel="noopener">Открыть сайт</a>
+      <form method="post" action="/admin/logout">
+        <button type="submit" class="btn">Выйти</button>
+      </form>
+    </div>
+
+    <nav class="admin-nav">
+      <a href="/admin" class="{{ 'current' if section == 'dashboard' else '' }}">Сводка</a>
+      <a href="/admin/orders" class="{{ 'current' if section == 'orders' else '' }}">Заказы</a>
+      <a href="/admin/queue?status=failed" class="{{ 'current' if section == 'queue' else '' }}">
+        Очередь разбора
+        {% if counts is defined and counts.failed %}<span class="count">{{ counts.failed }}</span>{% endif %}
+      </a>
+      <a href="/admin#problems">Жалобы</a>
+    </nav>
+
+    {% if notice %}<div class="notice {{ notice_kind or '' }}">{{ notice }}</div>{% endif %}
+
+    {% block content %}{% endblock %}
+  </div>
+</body>
+</html>

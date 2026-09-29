@@ -1,0 +1,92 @@
+{% extends "admin_base.html" %}
+{% block title %}Заказы — админка «Подача»{% endblock %}
+
+{% block content %}
+<div class="card">
+  <h2>Заказы</h2>
+
+  <form method="get" action="/admin/orders" class="filters-inline">
+    <select name="status">
+      <option value="">Все статусы</option>
+      {% for value, label in status_choices %}
+        <option value="{{ value }}" {{ 'selected' if status == value else '' }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <input type="search" name="q" value="{{ q or '' }}" placeholder="Город, телефон, имя, #id">
+    <button type="submit" class="btn primary">Найти</button>
+    {% if status or q %}
+      <a class="btn" href="/admin/orders">Сбросить</a>
+    {% endif %}
+  </form>
+
+  <p class="muted">
+    Показано {{ orders | length }}{{ ' (последние 100)' if orders | length >= 100 else '' }}.
+    {% if status %}Фильтр по статусу: <b>{{ status }}</b>.{% endif %}
+    {% if q %}Поиск: <b>{{ q }}</b>.{% endif %}
+    В отличие от публичной ленты, здесь видны и скрытые заказы — иначе админ
+    не смог бы вернуть ошибочно скрытую заявку.
+  </p>
+
+  {% if orders %}
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Маршрут</th>
+          <th>Подача</th>
+          <th class="num">Цена</th>
+          <th>Клиент</th>
+          <th>Статус</th>
+          <th>Взял</th>
+          <th>Действия</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for order in orders %}
+          <tr>
+            <td class="num mono">
+              <a href="/orders/{{ order.id }}" target="_blank" rel="noopener">#{{ order.id }}</a>
+            </td>
+            <td>
+              {{ order.from_city or '?' }} → {{ order.to_city or '?' }}
+              {% if order.passengers %}<span class="muted">· {{ order.passengers }} пасс.</span>{% endif %}
+            </td>
+            <td class="nowrap">{{ order.pickup_at.strftime('%d.%m %H:%M') if order.pickup_at else '—' }}</td>
+            <td class="num">{{ "%.0f"|format(order.client_price) ~ ' ₽' if order.client_price else '—' }}</td>
+            <td class="nowrap">
+              {{ order.client_name or '—' }}<br>
+              <span class="muted mono">{{ order.client_phone or '' }}</span>
+            </td>
+            <td class="nowrap">
+              <span class="tag {{ 'ok' if order.status.value == 'agreed' else ('warn' if order.status.value == 'needs_clarification' else ('bad' if order.status.value == 'cancelled' else '')) }}">{{ status_labels[order.status] }}</span>
+              {% if order.has_problem %}
+                <span class="tag bad" title="{{ order.problem_note or '' }}">жалоба</span>
+              {% endif %}
+            </td>
+            <td class="mono muted">{{ order.taken_by_token[:8] ~ '…' if order.taken_by_token else '—' }}</td>
+            <td class="nowrap">
+              {% if order.status.value == 'cancelled' %}
+                <form method="post" action="/admin/orders/{{ order.id }}/unhide">
+                  <button type="submit" class="btn">Вернуть в ленту</button>
+                </form>
+              {% else %}
+                <form method="post" action="/admin/orders/{{ order.id }}/hide">
+                  <button type="submit" class="btn danger">Скрыть</button>
+                </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% if order.has_problem and order.problem_note %}
+            <tr>
+              <td></td>
+              <td colspan="7" class="error-text pre-wrap">Жалоба водителя: {{ order.problem_note }}</td>
+            </tr>
+          {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">Ничего не найдено по текущему фильтру.</div>
+  {% endif %}
+</div>
+{% endblock %}
