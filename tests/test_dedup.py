@@ -8,6 +8,7 @@
   агента не переживает, а дубль заявки в ленте водитель видит как обман.
 """
 
+import asyncio
 from datetime import datetime
 
 import pytest
@@ -15,7 +16,9 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.models import Order, OrderStatus
-from app.telegram import dedup
+from app.parsing.llm_parser import ParseResult
+from app.parsing.schema import ParsedOrder
+from app.telegram import dedup, work_group
 from app.telegram.work_group import _dedup_variant
 
 CHAT_ID = -1001234567890
@@ -173,3 +176,54 @@ async def test_same_message_id_in_different_chats_is_allowed(session):
 
     total = (await session.execute(select(func.count(Order.id)))).scalar_one()
     assert total == 2
+
+
+# --- Гонка между конкурентными сообщениями из разных групп -------------------
+
+
+async def test_concurrent_messages_same_route_price_time_are_deduped(session, monkeypatch):
+    """Три сообщения с одинаковым маршрутом/ценой/временем, пришедшие из трёх
+    разных групп практически одновременно, не должны создать три заказа.
+
+    Реальный кейс с прода: диспетчеры репостнули один и тот же рейс
+    (Рубановка -> Стерлитамак, 90000₽, 30.09 06:00) в три группы почти
+    вплотную по времени. Telethon разбирает события НЕЗАВИСИМЫМИ задачами —
+    без сериализации все три вызова успевали пройти проверку "дубликатов
+    нет" ДО того, как первый из них коммитил INSERT, и получались три
+    карточки одного и того же заказа. Тест намеренно вставляет задержку в
+    разбор, чтобы гарантированно открыть окно гонки, и проверяет, что
+    _dedup_lock в work_group.py его закрывает.
+    """
+
+    async def fake_parse_orders(text: str) -> ParseResult:
+        await asyncio.sleep(0.05)  # имитация сетевой задержки LLM
+        return ParseResult(
+            orders=[
+                ParsedOrder(
+                    pickup_date="2026-09-30",
+                    pickup_time="06:00",
+                    from_city="Рубановка",
+                    to_city="Стерлитамак",
+                    passengers=4,
+                    client_price=90000,
+                )
+            ]
+        )
+
+    monkeypatch.setattr(work_group, "parse_orders", fake_parse_orders)
+    monkeypatch.setattr(work_group.settings, "prefilter_enabled", False)
+
+    text = "Рубановка -> Стерлитамак 90000, 4 чел, минивэн, 30.09 06:00"
+    results = await asyncio.gather(
+        work_group.upsert_order_text(chat_id=-100111, message_id=1, text=text),
+        work_group.upsert_order_text(chat_id=-100222, message_id=1, text=text),
+        work_group.upsert_order_text(chat_id=-100333, message_id=1, text=text),
+    )
+
+    total = (await session.execute(select(func.count(Order.id)))).scalar_one()
+    assert total == 1, f"ожидали один заказ, получили {total} — дубль проскочил через гонку"
+
+    # Все три вызова обязаны вернуть id одного и того же заказа (первого
+    # созданного), а не создавать каждый свой.
+    order_id = results[0][0]
+    assert all(ids == [order_id] for ids in results)

@@ -7,6 +7,7 @@
 
 import logging
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -48,6 +49,13 @@ def _parse_coords(lat: str, lon: str) -> Optional[tuple[float, float]]:
     if not (-90.0 <= coords[0] <= 90.0 and -180.0 <= coords[1] <= 180.0):
         return None
     return coords
+
+
+def _order_url(order_id: int, back: str = "") -> str:
+    """Ссылка на карточку заказа, сохраняющая ``back`` (фильтры/сортировка
+    ленты, откуда пришёл водитель) через все действия на странице заказа."""
+    url = f"/orders/{order_id}"
+    return f"{url}?back={quote(back, safe='')}" if back else url
 
 
 def _base_context(request: Request, counts: dict, notice: Optional[str] = None) -> dict:
@@ -146,7 +154,7 @@ async def my_orders_page(request: Request):
 
 
 @router.get("/orders/{order_id}", response_class=HTMLResponse)
-async def order_detail(request: Request, order_id: int):
+async def order_detail(request: Request, order_id: int, back: str = ""):
     token, new_token = driver_token(request)
 
     async with SessionLocal() as session:
@@ -175,6 +183,7 @@ async def order_detail(request: Request, order_id: int):
             "phone_display": phone,
             "client_name_display": client_name,
             "raw_text_display": raw_text,
+            "back": back,
         },
     )
     attach_driver_cookie(html, new_token)
@@ -193,7 +202,7 @@ def _redirect(url: str, new_token: Optional[str], notice: str = "") -> Response:
 
 
 @router.post("/orders/{order_id}/take")
-async def take_order(request: Request, order_id: int):
+async def take_order(request: Request, order_id: int, back: str = ""):
     """«Взять заказ» без перехода в Telegram (оставлено для прямых ссылок)."""
     token, new_token = driver_token(request)
 
@@ -201,13 +210,13 @@ async def take_order(request: Request, order_id: int):
         result = await queries.take_order(session, order_id, token)
 
     return _redirect(
-        f"/orders/{order_id}", new_token,
+        _order_url(order_id, back), new_token,
         "" if result.ok else result.message,
     )
 
 
 @router.post("/orders/{order_id}/take-and-contact")
-async def take_and_contact(request: Request, order_id: int):
+async def take_and_contact(request: Request, order_id: int, back: str = ""):
     """Единая кнопка «Написать диспетчеру»: берёт заказ себе (если ещё свободен)
     и сразу открывает диалог с диспетчером в Telegram."""
     token, new_token = driver_token(request)
@@ -221,16 +230,18 @@ async def take_and_contact(request: Request, order_id: int):
         if not result.ok and result.reason == "taken_by_other":
             # Уже взят другим водителем — просто открываем карточку,
             # без перехода к диспетчеру.
-            return _redirect(f"/orders/{order_id}", new_token, result.message)
+            return _redirect(_order_url(order_id, back), new_token, result.message)
         link = dispatcher_link(order)
 
     if not result.ok and result.reason not in ("", "not_owner", "already_mine"):
         # Заказ закрыт/просрочен: к диспетчеру не пускаем, показываем причину.
         # "already_mine" сюда не относится: водитель просто нажал «Написать
         # диспетчеру» второй раз, заказ уже его — открываем диалог как обычно.
-        return _redirect(f"/orders/{order_id}", new_token, result.message)
+        return _redirect(_order_url(order_id, back), new_token, result.message)
 
-    return _redirect(link or f"/orders/{order_id}", new_token)
+    # Переход в Telegram — "back" здесь ни при чём, он пригодится, когда
+    # водитель вернётся на карточку заказа (её ссылки уже несут back).
+    return _redirect(link or _order_url(order_id, back), new_token)
 
 
 @router.post("/orders/{order_id}/release")
@@ -244,7 +255,7 @@ async def release_order(request: Request, order_id: int):
 
 
 @router.post("/orders/{order_id}/agree")
-async def agree_order(request: Request, order_id: int):
+async def agree_order(request: Request, order_id: int, back: str = ""):
     """Водитель подтвердил, что договорился с диспетчером — заказ закрыт.
 
     «Отменить взятие» по-прежнему откатывает это обратно, если передумали.
@@ -255,7 +266,7 @@ async def agree_order(request: Request, order_id: int):
         result = await queries.agree_order(session, order_id, token)
 
     return _redirect(
-        f"/orders/{order_id}", new_token, "" if result.ok else result.message
+        _order_url(order_id, back), new_token, "" if result.ok else result.message
     )
 
 
@@ -269,7 +280,7 @@ FEEDBACK_REASONS = {
 
 
 @router.post("/orders/{order_id}/feedback")
-async def order_feedback(request: Request, order_id: int):
+async def order_feedback(request: Request, order_id: int, back: str = ""):
     """Обратная связь водителя по заявке.
 
     Без этого владелец агрегатора не узнаёт, что диспетчер публикует
@@ -284,7 +295,7 @@ async def order_feedback(request: Request, order_id: int):
     text = " · ".join(part for part in (reason, note) if part)[:500]
 
     if not text:
-        return _redirect(f"/orders/{order_id}", new_token, "Выберите причину жалобы.")
+        return _redirect(_order_url(order_id, back), new_token, "Выберите причину жалобы.")
 
     async with SessionLocal() as session:
         result = await queries.report_problem(session, order_id, token, text)
@@ -292,6 +303,6 @@ async def order_feedback(request: Request, order_id: int):
     if result.ok:
         log.info("Жалоба на заказ #%s от водителя: %s", order_id, text)
     return _redirect(
-        f"/orders/{order_id}", new_token,
+        _order_url(order_id, back), new_token,
         "Спасибо, жалоба отправлена владельцу." if result.ok else result.message,
     )

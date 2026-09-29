@@ -5,6 +5,7 @@
 в шаблоне, неверный код ответа, сломанную cookie.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -64,6 +65,41 @@ async def test_feed_pagination_links_keep_filters(client, make_order):
     assert "sort=price" in response.text
     # WEB_PAGE_SIZE=5 в тестах, 12 заказов → страница 2 существует, страница 3 — последняя.
     assert "page=3" in response.text
+
+
+async def test_order_detail_back_link_preserves_feed_filters(client, make_order):
+    """Уходя с карточки заказа, водитель должен вернуться к тем же фильтрам
+    и сортировке, что были в ленте — а не на дашборд с настройками по
+    умолчанию."""
+    order = await make_order(from_city="Сочи", to_city="Адлер")
+
+    feed_response = await client.get("/?from_city=Сочи&sort=price")
+    assert f"/orders/{order.id}?back=" in feed_response.text
+
+    match = re.search(rf"/orders/{order.id}\?back=([^\"&]+)", feed_response.text)
+    assert match is not None, "ссылка на карточку не сохраняет текущий запрос"
+    back_param = match.group(1)
+
+    detail_response = await client.get(f"/orders/{order.id}?back={back_param}")
+    assert detail_response.status_code == 200
+    # Ссылка "← ко всем заказам" обязана вернуть на ту же ленту, а не на "/".
+    back_link_match = re.search(r'href="(/\?[^"]+)" class="back-link"', detail_response.text)
+    assert back_link_match is not None, "ссылка назад не сохранила текущий запрос"
+    back_href = back_link_match.group(1)
+    assert "sort=price" in back_href
+    assert "from_city=" in back_href
+    # Кнопка действия тоже должна нести back — иначе после неё это потеряется.
+    assert f"/orders/{order.id}/take-and-contact?back={back_param}" in detail_response.text
+
+
+async def test_order_detail_back_link_is_plain_without_query(client, make_order):
+    """Без фильтров в ленте ссылка назад — просто "/", без пустого "?"."""
+    order = await make_order()
+
+    response = await client.get(f"/orders/{order.id}")
+
+    assert response.status_code == 200
+    assert 'href="/" class="back-link"' in response.text
 
 
 async def test_feed_shows_result_count(client, make_order):

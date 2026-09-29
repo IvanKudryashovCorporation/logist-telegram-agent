@@ -5,7 +5,7 @@
 {% if orders %}
   <div class="grid">
     {% for order in orders %}
-      <a class="card {{ 'overdue' if is_overdue(order) else '' }}" href="/orders/{{ order.id }}">
+      <a class="card {{ 'overdue' if is_overdue(order) else '' }}" href="/orders/{{ order.id }}{% if request.url.query %}?back={{ request.url.query | urlencode }}{% endif %}">
         <div class="card-top">
           <div>
             <div class="card-time">{{ order.pickup_at.strftime("%H:%M") if order.pickup_at else "—" }}</div>

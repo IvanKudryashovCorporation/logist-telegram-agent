@@ -2,7 +2,7 @@
 {% block title %}Заказ #{{ order.id }} — Подача{% endblock %}
 {% block content %}
 
-<a href="/" class="back-link">&larr; ко всем заказам</a>
+<a href="/{% if back %}?{{ back }}{% endif %}" class="back-link">&larr; ко всем заказам</a>
 
 <div class="detail-card">
   <div class="detail-header">
@@ -98,7 +98,7 @@
     {% if is_taken_by_someone_else %}
       <span class="badge" style="background:#fee2e2;color:#dc2626;">Уже взят другим водителем</span>
     {% else %}
-      <form method="post" action="/orders/{{ order.id }}/take-and-contact">
+      <form method="post" action="/orders/{{ order.id }}/take-and-contact{% if back %}?back={{ back | urlencode }}{% endif %}">
         <button type="submit" class="btn-ok">{{ "Написать диспетчеру" if link else "Взять заказ" }}</button>
       </form>
       {% if is_mine %}
@@ -106,7 +106,7 @@
           <span class="badge" style="background:#f0fdf4;color:#16a34a;">Договорились</span>
         {% else %}
           <span class="badge" style="background:#f0fdf4;color:#16a34a;">В моих заказах</span>
-          <form method="post" action="/orders/{{ order.id }}/agree">
+          <form method="post" action="/orders/{{ order.id }}/agree{% if back %}?back={{ back | urlencode }}{% endif %}">
             <button type="submit" class="btn-ok">Договорился о заказе</button>
           </form>
         {% endif %}
@@ -123,7 +123,7 @@
       {% if order.has_problem %}
         <div class="hint">Ваша жалоба уже отправлена владельцу: {{ order.problem_note }}</div>
       {% else %}
-        <form method="post" action="/orders/{{ order.id }}/feedback" class="feedback-form">
+        <form method="post" action="/orders/{{ order.id }}/feedback{% if back %}?back={{ back | urlencode }}{% endif %}" class="feedback-form">
           <div class="feedback-reasons">
             <label><input type="radio" name="reason" value="price_outdated" required> Цена неактуальна</label>
             <label><input type="radio" name="reason" value="no_answer"> Диспетчер не отвечает</label>

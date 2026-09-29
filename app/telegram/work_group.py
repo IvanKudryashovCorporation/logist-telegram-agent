@@ -16,6 +16,7 @@
   понять, не «врёт» ли модель и сколько тратим токенов.
 """
 
+import asyncio
 import logging
 from datetime import timedelta
 from typing import Optional
@@ -51,6 +52,16 @@ log = logging.getLogger("agent.work_group")
 # диапазон то как начало, то как конец, так что ТОЧНОЕ совпадение datetime
 # пропускает реальные дубли. Сутки туда-сюда — тот же рейс.
 _DUPLICATE_DATE_TOLERANCE = timedelta(days=1)
+
+# Telethon раздаёт события НЕЗАВИСИМЫМИ задачами — сообщения из разных групп,
+# пришедшие почти одновременно, разбираются конкурентно, каждое в своей сессии
+# БД. _find_duplicate — это SELECT, а не атомарный UPDATE (нельзя вставить
+# заказ "только если такого ещё нет" одним запросом), поэтому без блокировки
+# два конкурентных вызова читают "дубликатов нет" ДО того, как первый из них
+# закоммитит INSERT — оба создают заказ, дубль всё равно проскакивает.
+# Сериализуем именно проверку+запись (не разбор LLM — он медленный, но гонки
+# не создаёт), чтобы commit одного вызова был виден SELECT'у следующего.
+_dedup_lock = asyncio.Lock()
 
 
 def _order_raw_text(parsed: ParsedOrder, fallback_text: str) -> str:
@@ -210,27 +221,31 @@ async def upsert_order_text(
             return []
 
         missing_total = sum(len(p.missing_fields) for p in parsed_list)
-        result_ids = await _save_orders(
-            db,
-            chat_id=chat_id,
-            message_id=message_id,
-            text=text,
-            parsed_list=parsed_list,
-            existing_by_index=existing_by_index,
-            dispatcher_tg_id=dispatcher_tg_id,
-            dispatcher_username=dispatcher_username,
-        )
+        # Держим лок до commit включительно — иначе SELECT дубля в соседней
+        # задаче видит "чисто" ещё не закоммиченную вставку этой (см. комментарий
+        # у _dedup_lock).
+        async with _dedup_lock:
+            result_ids = await _save_orders(
+                db,
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                parsed_list=parsed_list,
+                existing_by_index=existing_by_index,
+                dispatcher_tg_id=dispatcher_tg_id,
+                dispatcher_username=dispatcher_username,
+            )
 
-        await parse_stats.record(
-            db,
-            ParseOutcome.ORDER,
-            chat_id=chat_id,
-            message_id=message_id,
-            result=parse_result,
-            orders_found=len(parsed_list),
-            missing_fields=missing_total,
-        )
-        await db.commit()
+            await parse_stats.record(
+                db,
+                ParseOutcome.ORDER,
+                chat_id=chat_id,
+                message_id=message_id,
+                result=parse_result,
+                orders_found=len(parsed_list),
+                missing_fields=missing_total,
+            )
+            await db.commit()
         return result_ids
 
 
