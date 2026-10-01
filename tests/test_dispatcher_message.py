@@ -37,12 +37,12 @@ def test_message_without_price():
 
 def test_message_without_time():
     message = dispatcher_message(_order(pickup_at=None))
-    assert message == "Здравствуйте! Заказ Краснодар → Сочи, 3000 ₽ — актуально?"
+    assert message == "Здравствуйте! Заказ Краснодар → Сочи, в ближайшее время, 3000 ₽ — актуально?"
 
 
 def test_message_route_only():
     message = dispatcher_message(_order(pickup_at=None, client_price=None))
-    assert message == "Здравствуйте! Заказ Краснодар → Сочи — актуально?"
+    assert message == "Здравствуйте! Заказ Краснодар → Сочи, в ближайшее время — актуально?"
 
 
 def test_message_falls_back_to_addresses_then_id():
@@ -54,7 +54,7 @@ def test_message_falls_back_to_addresses_then_id():
     nothing = dispatcher_message(
         _order(from_city=None, to_city=None, pickup_at=None, client_price=None)
     )
-    assert nothing == "Здравствуйте! Заказ №7 — актуально?"
+    assert nothing == "Здравствуйте! Заказ №7, в ближайшее время — актуально?"
 
 
 def test_message_never_contains_client_contacts():

@@ -271,11 +271,18 @@ class ActionResult:
             "taken_by_other": "Заказ уже взял другой водитель — он пропал из общей ленты.",
             "not_owner": "Этот заказ взяли не вы.",
             "closed": "Заказ уже закрыт (скрыт или просрочен).",
+            "completed": "Заказ уже выполнен.",
+            "not_active": "Выполнить можно только заказ, по которому вы договорились.",
         }.get(self.reason, "")
 
 
 #: Взять нельзя то, что уже отработано.
-_NOT_TAKABLE = frozenset({OrderStatus.CANCELLED, OrderStatus.EXPIRED, OrderStatus.AGREED})
+_NOT_TAKABLE = frozenset(
+    {
+        OrderStatus.CANCELLED, OrderStatus.EXPIRED, OrderStatus.AGREED,
+        OrderStatus.IN_PROGRESS, OrderStatus.COMPLETED,
+    }
+)
 
 
 async def take_order(session: AsyncSession, order_id: int, token: str) -> ActionResult:
@@ -315,8 +322,8 @@ async def take_order(session: AsyncSession, order_id: int, token: str) -> Action
 async def release_order(session: AsyncSession, order_id: int, token: str) -> ActionResult:
     """Отменяет взятие — только если заказ взял именно этот водитель.
 
-    «Договорились» откатывается в «новую»: водитель передумал, и заказ снова
-    доступен остальным.
+    «Договорились» и «В работе» откатываются в «новую»: водитель передумал, и
+    заказ снова доступен остальным. «Выполнен» отменить нельзя.
 
     Два отдельных UPDATE вместо одного с ``case()`` — намеренно. SQLAlchemy
     хранит enum по ИМЕНИ (в БД лежит ``'NEW'``), а внутри ``case()`` тип
@@ -330,7 +337,7 @@ async def release_order(session: AsyncSession, order_id: int, token: str) -> Act
         .where(
             Order.id == order_id,
             Order.taken_by_token == token,
-            Order.status == OrderStatus.AGREED,
+            Order.status.in_((OrderStatus.AGREED, OrderStatus.IN_PROGRESS)),
         )
         .values(taken_by_token=None, taken_at=None, status=OrderStatus.NEW)
     )
@@ -338,7 +345,11 @@ async def release_order(session: AsyncSession, order_id: int, token: str) -> Act
         # Заказ был просто взят (не «договорились») — статус не трогаем.
         result = await session.execute(
             update(Order)
-            .where(Order.id == order_id, Order.taken_by_token == token)
+            .where(
+                Order.id == order_id,
+                Order.taken_by_token == token,
+                Order.status != OrderStatus.COMPLETED,  # выполненный не отменить
+            )
             .values(taken_by_token=None, taken_at=None)
         )
     if result.rowcount == 1:
@@ -355,24 +366,62 @@ async def release_order(session: AsyncSession, order_id: int, token: str) -> Act
 
 
 async def agree_order(session: AsyncSession, order_id: int, token: str) -> ActionResult:
-    """Водитель договорился с диспетчером — заказ закрыт."""
+    """«Договорился с диспетчером»: заказ достаётся водителю и закрывается.
+
+    Только это действие делает заказ «моим» — простой переход в чат к
+    диспетчеру («Написать диспетчеру») ничего не берёт. Присвоение и закрытие —
+    один ``UPDATE`` с условием «свободен или уже мой», поэтому два водителя,
+    одновременно нажавшие кнопку, не получат заказ оба (см. ``take_order``).
+    Повторное нажатие тем же водителем ничего не меняет. ``taken_at`` — момент
+    «Договорился»: от него считается «в работе» у заявки без точного времени.
+    """
     result = await session.execute(
         update(Order)
         .where(
             Order.id == order_id,
-            Order.taken_by_token == token,
-            Order.status != OrderStatus.CANCELLED,
+            or_(Order.taken_by_token.is_(None), Order.taken_by_token == token),
+            Order.status.notin_(_NOT_TAKABLE),
         )
-        .values(status=OrderStatus.AGREED)
+        .values(taken_by_token=token, taken_at=now_utc_naive(), status=OrderStatus.AGREED)
     )
     if result.rowcount == 1:
         session.add(
-            ActionLog(order_id=order_id, actor=ActorType.DRIVER, action="order_agreed")
+            ActionLog(
+                order_id=order_id, actor=ActorType.DRIVER, action="order_agreed",
+                details=f"token={token[:8]}",
+            )
         )
         await session.commit()
         return ActionResult(True, "", order_id)
     await session.rollback()
     return ActionResult(False, await _failure_reason(session, order_id, token), order_id)
+
+
+async def complete_order(session: AsyncSession, order_id: int, token: str) -> ActionResult:
+    """«Выполнил заказ»: доступно, когда заказ «Договорились» или уже «В работе»."""
+    result = await session.execute(
+        update(Order)
+        .where(
+            Order.id == order_id,
+            Order.taken_by_token == token,
+            Order.status.in_((OrderStatus.AGREED, OrderStatus.IN_PROGRESS)),
+        )
+        .values(status=OrderStatus.COMPLETED)
+    )
+    if result.rowcount == 1:
+        session.add(
+            ActionLog(
+                order_id=order_id, actor=ActorType.DRIVER, action="order_completed",
+                details=f"token={token[:8]}",
+            )
+        )
+        await session.commit()
+        return ActionResult(True, "", order_id)
+    await session.rollback()
+    reason = await _failure_reason(session, order_id, token)
+    if reason == "already_mine":
+        reason = "not_active"  # заказ мой, но ещё не «Договорились» (старое «взят»)
+    return ActionResult(False, reason, order_id)
 
 
 async def report_problem(
@@ -407,6 +456,8 @@ async def _failure_reason(session: AsyncSession, order_id: int, token: str) -> s
     order = await session.get(Order, order_id)
     if order is None:
         return "not_found"
+    if order.taken_by_token == token and order.status == OrderStatus.COMPLETED:
+        return "completed"
     if order.taken_by_token == token:
         # Заказ уже у этого водителя. Повторный клик — не ошибка, а
         # идемпотентность: без этой ветки показывалось «заказ закрыт».
@@ -459,18 +510,19 @@ async def upsert_driver(session: AsyncSession, payload: dict) -> Driver:
 @dataclass
 class DriverStats:
     taken_total: int
-    agreed_total: int
+    completed_total: int
     earned_total: float
     member_since: object  # datetime — object, чтобы не тащить сюда лишний импорт типов
 
 
 async def driver_stats(session: AsyncSession, token: str, member_since) -> DriverStats:
-    """Статистика для профиля: сколько взял, сколько закрыл, сколько заработал.
+    """Статистика для профиля: сколько взял, сколько выполнил, сколько заработал.
 
-    "Заработал" — сумма client_price по заказам, которые водитель довёл до
-    "Договорились". Агрегатор передаёт заявки 1 в 1 без наценки и не участвует
-    в оплате, поэтому это не факт поступления денег, а честная оценка по тем
-    ценам, что были в заявках, — другой цифры у нас просто нет.
+    "Заработал" — сумма client_price по заказам со статусом «Выполнен»
+    (водитель нажал «Выполнил» или прошло 72 часа после дедлайна). Агрегатор
+    передаёт заявки 1 в 1 без наценки и не участвует в оплате, поэтому это не
+    факт поступления денег, а честная оценка по тем ценам, что были в заявках, —
+    другой цифры у нас просто нет.
     """
     taken_total = (
         await session.execute(
@@ -478,17 +530,20 @@ async def driver_stats(session: AsyncSession, token: str, member_since) -> Drive
         )
     ).scalar_one()
 
-    agreed_total, earned_total = (
+    completed_total, earned_total = (
         await session.execute(
             select(func.count(), func.coalesce(func.sum(Order.client_price), 0))
             .select_from(Order)
-            .where(Order.taken_by_token == token, Order.status == OrderStatus.AGREED)
+            .where(
+                Order.taken_by_token == token,
+                Order.status == OrderStatus.COMPLETED,
+            )
         )
     ).one()
 
     return DriverStats(
         taken_total=taken_total,
-        agreed_total=agreed_total,
+        completed_total=completed_total,
         earned_total=float(earned_total or 0),
         member_since=member_since,
     )

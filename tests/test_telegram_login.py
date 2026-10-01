@@ -234,17 +234,22 @@ async def test_logout_revokes_access(client, make_order, telegram_login_on):
     assert response.headers["location"].startswith("/login")
 
 
-async def test_driver_stats_reflect_taken_and_agreed_orders(client, make_order, telegram_login_on):
+async def test_driver_stats_count_only_completed_orders_as_earned(
+    client, make_order, telegram_login_on
+):
     order_a = await make_order(price="1500")
     order_b = await make_order(price="2500")
     await client.get("/auth/telegram", params=_signed_params())
 
-    await client.post(f"/orders/{order_a.id}/take")
-    await client.post(f"/orders/{order_b.id}/take")
+    await client.post(f"/orders/{order_a.id}/agree")
     await client.post(f"/orders/{order_b.id}/agree")
 
-    response = await client.get("/my")
+    before = (await client.get("/my")).text
+    assert ">2<" in before  # заказов взял всего
+    assert "2500" not in before.split("заработано")[0].split("profile-stats")[-1]
 
-    assert response.status_code == 200
-    assert ">2<" in response.text  # заказов взял всего
-    assert "2500" in response.text  # заработано — только по "Договорились"
+    await client.post(f"/orders/{order_b.id}/complete")
+
+    after = (await client.get("/my")).text
+    assert "2500 ₽" in after  # заработано — только по «Выполнен»
+    assert "4000" not in after

@@ -245,6 +245,61 @@ async def test_agree_closes_order_and_release_reverts(session, make_order):
     assert reloaded.taken_by_token is None
 
 
+async def test_agree_takes_free_order_in_one_step(session, make_order):
+    order = await make_order()
+
+    result = await queries.agree_order(session, order.id, TOKEN_A)
+
+    assert result.ok is True
+    reloaded = await session.get(Order, order.id)
+    await session.refresh(reloaded)
+    assert reloaded.taken_by_token == TOKEN_A
+    assert reloaded.taken_at is not None
+    assert reloaded.status == OrderStatus.AGREED
+
+
+async def test_second_driver_cannot_agree_taken_order(session, make_order):
+    order = await make_order()
+    await queries.agree_order(session, order.id, TOKEN_A)
+
+    second = await queries.agree_order(session, order.id, TOKEN_B)
+
+    assert second.ok is False
+    assert second.reason == "taken_by_other"
+    assert (await session.get(Order, order.id)).taken_by_token == TOKEN_A
+
+
+async def test_repeat_agree_by_owner_is_harmless(session, make_order):
+    order = await make_order()
+    await queries.agree_order(session, order.id, TOKEN_A)
+
+    again = await queries.agree_order(session, order.id, TOKEN_A)
+
+    assert again.ok is False and again.reason == "already_mine"
+    assert again.message == ""
+
+
+@pytest.mark.parametrize("status", [OrderStatus.CANCELLED, OrderStatus.EXPIRED])
+async def test_cannot_agree_closed_order(session, make_order, status):
+    order = await make_order(status=status)
+
+    result = await queries.agree_order(session, order.id, TOKEN_A)
+
+    assert result.ok is False
+    assert (await session.get(Order, order.id)).taken_by_token is None
+
+
+async def test_agree_then_release_returns_order_to_feed(session, make_order):
+    order = await make_order()
+    await queries.agree_order(session, order.id, TOKEN_A)
+
+    released = await queries.release_order(session, order.id, TOKEN_A)
+
+    assert released.ok is True
+    page = await queries.fetch_feed(session, page=1, page_size=50)
+    assert order.id in {item.id for item in page.items}
+
+
 @pytest.mark.parametrize(
     ("status", "expected_reason"),
     [(OrderStatus.CANCELLED, "closed"), (OrderStatus.EXPIRED, "closed")],
@@ -392,3 +447,72 @@ async def test_all_status_writes_are_readable(session, make_order):
         reloaded = await fresh.get(Order, order.id)
         assert reloaded.taken_by_token == TOKEN_B
         assert reloaded.status in set(OrderStatus)
+
+
+# --- «Выполнил заказ», «В работе», отмена ------------------------------------
+
+
+async def test_complete_requires_agreed_or_in_progress(session, make_order):
+    order = await make_order()
+
+    not_mine = await queries.complete_order(session, order.id, TOKEN_A)
+    assert not_mine.ok is False
+
+    await queries.agree_order(session, order.id, TOKEN_A)
+    assert (await queries.complete_order(session, order.id, TOKEN_B)).ok is False  # чужой
+
+    done = await queries.complete_order(session, order.id, TOKEN_A)
+    assert done.ok is True
+    assert (await session.get(Order, order.id)).status == OrderStatus.COMPLETED
+
+
+async def test_complete_works_from_in_progress(session, make_order):
+    order = await make_order(status=OrderStatus.IN_PROGRESS, taken_by_token=TOKEN_A)
+
+    assert (await queries.complete_order(session, order.id, TOKEN_A)).ok is True
+    assert (await session.get(Order, order.id)).status == OrderStatus.COMPLETED
+
+
+async def test_cancel_works_for_agreed_and_in_progress_but_not_completed(session, make_order):
+    agreed = await make_order(status=OrderStatus.AGREED, taken_by_token=TOKEN_A)
+    working = await make_order(status=OrderStatus.IN_PROGRESS, taken_by_token=TOKEN_A)
+    done = await make_order(status=OrderStatus.COMPLETED, taken_by_token=TOKEN_A)
+
+    ids = (agreed.id, working.id, done.id)  # до release: он протухает атрибуты в сессии
+
+    assert (await queries.release_order(session, ids[0], TOKEN_A)).ok is True
+    assert (await queries.release_order(session, ids[1], TOKEN_A)).ok is True
+    refused = await queries.release_order(session, ids[2], TOKEN_A)
+
+    assert refused.ok is False
+    session.expire_all()
+    rows = {
+        o.id: o for o in (await session.execute(select(Order).where(Order.id.in_(ids)))).scalars()
+    }
+    assert rows[ids[0]].status == OrderStatus.NEW
+    assert rows[ids[1]].status == OrderStatus.NEW
+    assert rows[ids[2]].status == OrderStatus.COMPLETED
+    assert rows[ids[2]].taken_by_token == TOKEN_A
+
+
+async def test_in_progress_and_completed_orders_are_not_in_feed_or_takable(session, make_order):
+    working_id = (await make_order(status=OrderStatus.IN_PROGRESS)).id
+    done_id = (await make_order(status=OrderStatus.COMPLETED)).id
+
+    page = await queries.fetch_feed(session, page_size=50)
+    assert not ({working_id, done_id} & {item.id for item in page.items})
+    assert (await queries.agree_order(session, working_id, TOKEN_A)).ok is False
+    assert (await queries.agree_order(session, done_id, TOKEN_A)).ok is False
+
+
+async def test_stats_count_completed_only(session, make_order):
+    await make_order(price="1000", status=OrderStatus.AGREED, taken_by_token=TOKEN_A)
+    await make_order(price="2000", status=OrderStatus.IN_PROGRESS, taken_by_token=TOKEN_A)
+    await make_order(price="4000", status=OrderStatus.COMPLETED, taken_by_token=TOKEN_A)
+    await make_order(price="8000", status=OrderStatus.COMPLETED, taken_by_token=TOKEN_B)
+
+    stats = await queries.driver_stats(session, TOKEN_A, None)
+
+    assert stats.taken_total == 3
+    assert stats.completed_total == 1
+    assert stats.earned_total == 4000.0

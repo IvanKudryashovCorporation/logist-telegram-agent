@@ -16,6 +16,12 @@
       <span class="badge" style="background:#f1f5f9;color:#475569;">Время подачи прошло</span>
     {% elif order.status.value == "cancelled" %}
       <span class="badge" style="background:#f1f5f9;color:#475569;">Снята с ленты</span>
+    {% elif order.status.value == "agreed" %}
+      <span class="badge" style="background:#f0fdf4;color:#16a34a;">Договорились</span>
+    {% elif order.status.value == "in_progress" %}
+      <span class="badge" style="background:#eff6ff;color:#1d4ed8;">В работе</span>
+    {% elif order.status.value == "completed" %}
+      <span class="badge" style="background:#f1f5f9;color:#475569;">Выполнен</span>
     {% endif %}
   </div>
 
@@ -83,7 +89,7 @@
       <div class="field-label">Телефон</div>
       <div class="field-value">{{ phone_display or "—" }}</div>
       {% if not is_mine and phone_display %}
-        <div class="card-subtext">полный номер — после «Взять заказ»</div>
+        <div class="card-subtext">полный номер — после «Договорился с диспетчером»</div>
       {% endif %}
     </div>
   </div>
@@ -98,21 +104,27 @@
     {% if is_taken_by_someone_else %}
       <span class="badge" style="background:#fee2e2;color:#dc2626;">Уже взят другим водителем</span>
     {% else %}
-      <form id="contactForm" data-message="{{ dispatcher_text }}" method="post" action="/orders/{{ order.id }}/take-and-contact{% if back %}?back={{ back | urlencode }}{% endif %}">
-        <button type="submit" class="btn-ok">{{ "Написать диспетчеру" if link else "Взять заказ" }}</button>
-      </form>
-      {% if is_mine %}
-        {% if order.status.value == "agreed" %}
-          <span class="badge" style="background:#f0fdf4;color:#16a34a;">Договорились</span>
-        {% else %}
-          <span class="badge" style="background:#f0fdf4;color:#16a34a;">В моих заказах</span>
-          <form method="post" action="/orders/{{ order.id }}/agree{% if back %}?back={{ back | urlencode }}{% endif %}">
-            <button type="submit" class="btn-ok">Договорился о заказе</button>
+      {% if link %}
+        <form id="contactForm" data-message="{{ dispatcher_text }}" method="post" action="/orders/{{ order.id }}/contact{% if back %}?back={{ back | urlencode }}{% endif %}">
+          <button type="submit" class="btn-ok">Написать диспетчеру</button>
+        </form>
+      {% endif %}
+      {% if is_mine and order.status.value in ("agreed", "in_progress") %}
+        <form method="post" action="/orders/{{ order.id }}/complete{% if back %}?back={{ back | urlencode }}{% endif %}">
+          <button type="submit" class="btn-ok">Выполнил заказ</button>
+        </form>
+        <form method="post" action="/orders/{{ order.id }}/release">
+          <button type="submit" class="btn-secondary">Отменить</button>
+        </form>
+      {% elif not is_mine or order.status.value in ("new", "needs_clarification") %}
+        <form method="post" action="/orders/{{ order.id }}/agree{% if back %}?back={{ back | urlencode }}{% endif %}">
+          <button type="submit" class="btn-ok">Договорился с диспетчером</button>
+        </form>
+        {% if is_mine %}
+          <form method="post" action="/orders/{{ order.id }}/release">
+            <button type="submit" class="btn-secondary">Отменить</button>
           </form>
         {% endif %}
-        <form method="post" action="/orders/{{ order.id }}/release">
-          <button type="submit" class="btn-secondary">Отменить взятие</button>
-        </form>
       {% endif %}
     {% endif %}
   </div>
@@ -139,7 +151,7 @@
   {% endif %}
 
   {% if not link %}
-    <div class="hint" style="margin-top: 12px;">Не удалось определить аккаунт диспетчера — заявка от {{ order.dispatcher_username or order.dispatcher_tg_id or "неизвестного отправителя" }}. Кнопка выше просто возьмёт заказ.</div>
+    <div class="hint" style="margin-top: 12px;">Не удалось определить аккаунт диспетчера — заявка от {{ order.dispatcher_username or order.dispatcher_tg_id or "неизвестного отправителя" }}. Свяжитесь с ним через группу, а когда договоритесь — нажмите «Договорился с диспетчером».</div>
   {% elif not order.contact_username and not order.dispatcher_username %}
     <div class="hint" style="margin-top: 12px;">
       У диспетчера нет публичного @username — готовый текст в чат подставить нельзя, но при нажатии

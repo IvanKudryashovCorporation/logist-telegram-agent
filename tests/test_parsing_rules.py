@@ -63,7 +63,7 @@ def _fresh_order() -> Order:
 def test_asap_order_gets_flag_and_no_clarification_status():
     order = _fresh_order()
     parsed = ParsedOrder(
-        from_city="Осиново", to_city="Краснодар", client_price=25, pickup_asap=True,
+        from_city="Осиново", to_city="Краснодар", client_price=25,
         missing_fields=["нет времени подачи"],
     )
 
@@ -79,7 +79,7 @@ def test_asap_order_gets_flag_and_no_clarification_status():
 def test_asap_does_not_hide_other_missing_fields():
     order = _fresh_order()
     parsed = ParsedOrder(
-        from_city="Осиново", pickup_asap=True,
+        from_city="Осиново",
         missing_fields=["нет времени подачи", "не указана стоимость"],
     )
 
@@ -91,7 +91,7 @@ def test_asap_does_not_hide_other_missing_fields():
 def test_named_time_beats_asap_flag():
     order = _fresh_order()
     parsed = ParsedOrder(
-        from_city="A", to_city="B", client_price=5000, pickup_asap=True,
+        from_city="A", to_city="B", client_price=5000,
         pickup_date="2026-10-05", pickup_time="15:00",
     )
 
@@ -103,7 +103,7 @@ def test_named_time_beats_asap_flag():
 
 def test_edit_that_adds_a_time_clears_the_flag():
     order = _fresh_order()
-    apply_parsed_fields(order, ParsedOrder(from_city="A", to_city="B", pickup_asap=True))
+    apply_parsed_fields(order, ParsedOrder(from_city="A", to_city="B"))
     assert order.pickup_asap is True
 
     apply_parsed_fields(
@@ -114,12 +114,15 @@ def test_edit_that_adds_a_time_clears_the_flag():
     assert order.pickup_asap is False
 
 
-def test_order_without_time_and_without_asap_stays_unspecified():
+def test_order_without_any_time_is_treated_as_asap():
+    """«3ч» без времени суток, «сейчас» или время просто не названо — одно и то
+    же: заказ «в ближайшее время»."""
     order = _fresh_order()
 
     apply_parsed_fields(order, ParsedOrder(from_city="A", to_city="B", client_price=1000))
 
-    assert order.pickup_asap is False and order.pickup_at is None
+    assert order.pickup_asap is True and order.pickup_at is None
+    assert order.status == OrderStatus.NEW
 
 
 # --- Отображение --------------------------------------------------------------
@@ -136,12 +139,15 @@ def test_message_to_dispatcher_says_asap():
     )
 
 
-def test_pickup_subtext_for_asap_is_empty_but_unknown_time_is_flagged():
-    asap = Order(pickup_at=None, pickup_asap=True)
-    unknown = Order(pickup_at=None, pickup_asap=False)
+def test_pickup_subtext_is_empty_without_time():
+    assert pickup_subtext(Order(pickup_at=None, pickup_asap=True)) == ""
+    assert pickup_subtext(Order(pickup_at=None, pickup_asap=False)) == ""
 
-    assert pickup_subtext(asap) == ""
-    assert pickup_subtext(unknown) == "время не указано"
+
+def test_message_says_asap_even_if_flag_is_missing():
+    order = Order(id=7, from_city="Краснодар", to_city="Алушта", pickup_at=None, client_price=Decimal(10000))
+
+    assert "в ближайшее время" in dispatcher_message(order)
 
 
 async def test_detail_page_shows_asap_instead_of_not_specified(client, make_order):
@@ -208,7 +214,7 @@ async def test_order_381_end_to_end(session, monkeypatch):
             orders=[
                 ParsedOrder(
                     from_city="Осиново, ЛНР", to_city="Краснодар", passengers=1,
-                    client_price=25, pickup_asap=True, is_urgent=True,
+                    client_price=25, is_urgent=True,
                     missing_fields=["нет времени подачи"],
                 )
             ]
@@ -309,4 +315,4 @@ def test_pickup_label():
     assert label(datetime(2026, 10, 2, 0, 30)) == "завтра в 00:30"
     assert label(datetime(2026, 10, 7, 9, 5)) == "09:05, 07.10"
     assert label(None, asap=True) == "в ближайшее время"
-    assert label(None) == "не указана"
+    assert label(None) == "в ближайшее время"  # время определить не удалось

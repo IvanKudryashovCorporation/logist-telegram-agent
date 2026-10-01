@@ -17,12 +17,12 @@
         <div class="profile-stat-label">заказов взял всего</div>
       </div>
       <div class="profile-stat">
-        <div class="profile-stat-value">{{ stats.agreed_total }}</div>
-        <div class="profile-stat-label">довёл до «Договорились»</div>
+        <div class="profile-stat-value">{{ stats.completed_total }}</div>
+        <div class="profile-stat-label">выполнено</div>
       </div>
       <div class="profile-stat">
         <div class="profile-stat-value">{{ "%.0f"|format(stats.earned_total) }} ₽</div>
-        <div class="profile-stat-label">заработано (по ценам заявок)</div>
+        <div class="profile-stat-label">заработано (по выполненным)</div>
       </div>
     </div>
   </div>
@@ -42,14 +42,15 @@
         <a class="card {{ 'overdue' if is_overdue(order) else '' }}" href="/orders/{{ order.id }}">
           <div class="card-top">
             <div>
-              <div class="card-time {{ 'asap' if not order.pickup_at and order.pickup_asap else '' }}">{{ order.pickup_at.strftime("%H:%M") if order.pickup_at else ("В ближайшее время" if order.pickup_asap else "—") }}</div>
+              <div class="card-time {{ '' if order.pickup_at else 'asap' }}">{{ order.pickup_at.strftime("%H:%M") if order.pickup_at else "В ближайшее время" }}</div>
               <div class="card-subtext">{{ pickup_subtext(order) }}</div>
             </div>
             {% if order.client_price %}<div class="card-price">{{ "%.0f"|format(order.client_price) }} ₽</div>{% endif %}
           </div>
 
-          {% if order.status.value == "agreed" %}
-            <div style="margin-top: 8px;"><span class="badge" style="background:#f0fdf4;color:#16a34a;">Договорились</span></div>
+          {% if order.status.value in ("agreed", "in_progress", "completed") %}
+            {% set badge_colors = {"agreed": "background:#f0fdf4;color:#16a34a;", "in_progress": "background:#eff6ff;color:#1d4ed8;", "completed": "background:#f1f5f9;color:#475569;"} %}
+            <div style="margin-top: 8px;"><span class="badge" style="{{ badge_colors[order.status.value] }}">{{ status_labels[order.status] }}</span></div>
           {% endif %}
 
           <div class="route-block">

@@ -21,7 +21,7 @@ import logging
 from datetime import timedelta
 from typing import Optional
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import and_, delete, or_, select, update
 
 from app.config import settings
 from app.db.base import SessionLocal
@@ -42,17 +42,25 @@ _EXPIRE_BATCH = 500
 
 
 async def expire_stale_orders(
-    *, now: Optional[object] = None, grace_hours: Optional[int] = None
+    *,
+    now: Optional[object] = None,
+    grace_hours: Optional[int] = None,
+    asap_hours: Optional[int] = None,
 ) -> int:
-    """Переводит заявки с прошедшим временем подачи в ``EXPIRED``.
+    """Переводит протухшие заявки в ``EXPIRED``.
 
-    Возвращает число затронутых заказов. ``grace_hours`` — сколько часов после
-    времени подачи ещё держим заявку в ленте (диспетчер мог опоздать, а
-    водитель — забрать «по факту»).
+    Два правила: время подачи прошло (с запасом ``grace_hours`` — диспетчер мог
+    опоздать, а водитель — забрать «по факту») и заявка «в ближайшее время»
+    провисела дольше ``asap_hours`` с публикации — у неё нет времени подачи,
+    поэтому без отдельного срока она копилась бы в ленте вечно.
+
+    Возвращает число затронутых заказов.
     """
     reference = now if now is not None else now_msk_naive()
     hours = settings.expire_grace_hours if grace_hours is None else grace_hours
     cutoff = reference - timedelta(hours=max(0, hours))
+    asap_limit = settings.asap_expire_hours if asap_hours is None else asap_hours
+    asap_cutoff = now_utc_naive() - timedelta(hours=max(0, asap_limit))
 
     async with SessionLocal() as session:
         stale_ids = list(
@@ -63,6 +71,23 @@ async def expire_stale_orders(
                         Order.status.in_(OPEN_STATUSES),
                         Order.pickup_at.isnot(None),
                         Order.pickup_at < cutoff,
+                        Order.taken_by_token.is_(None),
+                    )
+                    .order_by(Order.id.asc())
+                    .limit(_EXPIRE_BATCH)
+                )
+            ).scalars().all()
+        )
+        # created_at — UTC, поэтому сравниваем с now_utc_naive(), а не с МСК.
+        stale_ids += list(
+            (
+                await session.execute(
+                    select(Order.id)
+                    .where(
+                        Order.status.in_(OPEN_STATUSES),
+                        Order.pickup_asap.is_(True),
+                        Order.pickup_at.is_(None),
+                        Order.created_at < asap_cutoff,
                         Order.taken_by_token.is_(None),
                     )
                     .order_by(Order.id.asc())
@@ -85,13 +110,96 @@ async def expire_stale_orders(
                     order_id=order_id,
                     actor=ActorType.SYSTEM,
                     action="expired_by_time",
-                    details=f"cutoff={cutoff.isoformat()}",
+                    details=f"cutoff={cutoff.isoformat()} asap_cutoff={asap_cutoff.isoformat()}",
                 )
             )
         await session.commit()
 
     log.info("Протухших заявок переведено в EXPIRED: %s", len(stale_ids))
     return len(stale_ids)
+
+
+async def advance_agreed_orders(
+    *,
+    now: Optional[object] = None,
+    work_start_hours: Optional[int] = None,
+    complete_hours: Optional[int] = None,
+) -> tuple[int, int]:
+    """Двигает заказы водителей по цепочке «Договорились» -> «В работе» ->
+    «Выполнен». Возвращает ``(стали «в работе», стали «выполнен»)``.
+
+    Дедлайн заказа — время подачи (``pickup_at``, МСК). У заявки без точного
+    времени дедлайна нет: считаем его через ``work_start_hours`` после «Договорился»
+    (``taken_at``, UTC). «Выполнен» ставится сам через ``complete_hours`` после
+    дедлайна, если водитель не нажал «Выполнил» и не отменил заказ.
+    """
+    start_hours = settings.asap_work_start_hours if work_start_hours is None else work_start_hours
+    finish_hours = settings.auto_complete_hours if complete_hours is None else complete_hours
+    now_msk = now if now is not None else now_msk_naive()
+    now_utc = now_utc_naive()
+
+    def _deadline_passed(extra_hours: int):
+        """Условие «дедлайн + extra_hours уже прошёл»."""
+        by_pickup = and_(
+            Order.pickup_at.is_not(None),
+            Order.pickup_at <= now_msk - timedelta(hours=extra_hours),
+        )
+        by_agreement = and_(
+            Order.pickup_at.is_(None),
+            Order.taken_at.is_not(None),
+            Order.taken_at <= now_utc - timedelta(hours=start_hours + extra_hours),
+        )
+        return or_(by_pickup, by_agreement)
+
+    async with SessionLocal() as session:
+        async def _move(statuses, condition, target, action: str) -> int:
+            ids = list(
+                (
+                    await session.execute(
+                        select(Order.id)
+                        .where(
+                            Order.status.in_(statuses),
+                            Order.taken_by_token.is_not(None),
+                            condition,
+                        )
+                        .order_by(Order.id.asc())
+                        .limit(_EXPIRE_BATCH)
+                    )
+                ).scalars().all()
+            )
+            if not ids:
+                return 0
+            await session.execute(
+                update(Order)
+                .where(Order.id.in_(ids))
+                .values(status=target)
+                .execution_options(synchronize_session=False)
+            )
+            for order_id in ids:
+                session.add(
+                    ActionLog(order_id=order_id, actor=ActorType.SYSTEM, action=action)
+                )
+            await session.commit()
+            return len(ids)
+
+        # Сначала «выполнен» (и из «договорились», и из «в работе»): заказ,
+        # у которого дедлайн давно позади, не должен задерживаться в «в работе».
+        completed = await _move(
+            (OrderStatus.AGREED, OrderStatus.IN_PROGRESS),
+            _deadline_passed(finish_hours),
+            OrderStatus.COMPLETED,
+            "auto_completed",
+        )
+        started = await _move(
+            (OrderStatus.AGREED,),
+            _deadline_passed(0),
+            OrderStatus.IN_PROGRESS,
+            "work_started",
+        )
+
+    if started or completed:
+        log.info("Заказы водителей: в работу %s, выполнено автоматически %s", started, completed)
+    return started, completed
 
 
 async def prune_old_stats(*, retention_days: Optional[int] = None) -> int:
@@ -114,8 +222,14 @@ async def prune_old_stats(*, retention_days: Optional[int] = None) -> int:
 async def cleanup_once() -> dict[str, int]:
     """Один проход обслуживания — его же вызывает scripts/cleanup_orders.py."""
     expired = await expire_stale_orders()
+    started, completed = await advance_agreed_orders()
     pruned = await prune_old_stats()
-    return {"expired": expired, "stats_pruned": pruned}
+    return {
+        "expired": expired,
+        "work_started": started,
+        "auto_completed": completed,
+        "stats_pruned": pruned,
+    }
 
 
 async def run_cleanup_loop(stop_event: asyncio.Event) -> None:

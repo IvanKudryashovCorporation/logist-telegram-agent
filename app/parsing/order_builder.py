@@ -79,9 +79,10 @@ def apply_parsed_fields(order: Order, parsed: ParsedOrder) -> None:
     """Переносит поля из ParsedOrder в Order и выставляет статус по полноте данных."""
     order.contact_username = extract_contact_username(order.raw_text) or order.contact_username
     order.pickup_at = resolve_pickup_at(parsed.pickup_date, parsed.pickup_time, order.pickup_at)
-    # Названное время всегда важнее «сейчас»: правка «в течение часа» -> «в 15:00»
-    # снимает метку.
-    order.pickup_asap = parsed.pickup_asap and order.pickup_at is None
+    # Нет времени подачи — заказ «в ближайшее время» (сейчас, «3ч», «в течение
+    # часа» или время просто не названо). Названное время снимает метку: правка
+    # «в течение часа» -> «в 15:00» делает заказ обычным.
+    order.pickup_asap = order.pickup_at is None
     # Раскрываем сокращение сразу при сохранении ("Симф" -> "Симферополь") —
     # иначе один и тот же город хранится по-разному в разных заявках и
     # выглядит как два разных города в автодополнении на сайте.
@@ -106,7 +107,7 @@ def apply_parsed_fields(order: Order, parsed: ParsedOrder) -> None:
 
     missing = parsed.missing_fields
     if order.pickup_asap:
-        # «Нет времени подачи» для срочной заявки — не недостающие данные.
+        # «Нет времени подачи» — не недостающие данные: такой заказ «в ближайшее время».
         missing = [field for field in missing if "врем" not in field.lower()]
     if order.status in (OrderStatus.NEW, OrderStatus.NEEDS_CLARIFICATION):
         order.status = OrderStatus.NEEDS_CLARIFICATION if missing else OrderStatus.NEW

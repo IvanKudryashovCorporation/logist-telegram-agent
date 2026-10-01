@@ -11,7 +11,12 @@ from sqlalchemy import func, select
 
 from app.db.base import SessionLocal
 from app.models import ActionLog, Order, OrderStatus, ParseOutcome, ParseStat
-from app.services.cleanup import cleanup_once, expire_stale_orders, prune_old_stats
+from app.services.cleanup import (
+    advance_agreed_orders,
+    cleanup_once,
+    expire_stale_orders,
+    prune_old_stats,
+)
 from app.timeutil import now_msk_naive, now_utc_naive
 
 
@@ -163,8 +168,155 @@ async def test_cleanup_once_reports_both_counters(session, make_order):
 
     result = await cleanup_once()
 
-    assert result == {"expired": 1, "stats_pruned": 1}
+    assert result == {"expired": 1, "work_started": 0, "auto_completed": 0, "stats_pruned": 1}
 
 
 async def test_cleanup_on_empty_database_is_quiet(session):
-    assert await cleanup_once() == {"expired": 0, "stats_pruned": 0}
+    assert await cleanup_once() == {
+        "expired": 0, "work_started": 0, "auto_completed": 0, "stats_pruned": 0,
+    }
+
+
+# --- Заявки «в ближайшее время»: закрываются через 48 часов -------------------
+
+
+async def _make_asap(session, make_order, *, age_hours: float, **kwargs):
+    """Срочная заявка без времени подачи, «опубликованная» age_hours назад."""
+    order = await make_order(pickup_at=None, **kwargs)
+    async with SessionLocal() as db:
+        row = await db.get(Order, order.id)
+        row.pickup_asap = True
+        row.created_at = now_utc_naive() - timedelta(hours=age_hours)
+        await db.commit()
+    return order
+
+
+async def test_asap_order_expires_after_48_hours(session, make_order):
+    old = await _make_asap(session, make_order, age_hours=49)
+    fresh = await _make_asap(session, make_order, age_hours=47)
+
+    affected = await expire_stale_orders(asap_hours=48)
+
+    assert affected == 1
+    assert (await _reload(session, old.id)).status == OrderStatus.EXPIRED
+    assert (await _reload(session, fresh.id)).status == OrderStatus.NEW
+
+
+async def test_asap_limit_comes_from_settings_by_default(session, make_order):
+    order = await _make_asap(session, make_order, age_hours=49)
+
+    assert await expire_stale_orders() == 1  # ASAP_EXPIRE_HOURS по умолчанию 48
+    assert (await _reload(session, order.id)).status == OrderStatus.EXPIRED
+
+
+async def test_asap_order_taken_by_driver_is_not_expired(session, make_order):
+    order = await _make_asap(session, make_order, age_hours=100, taken_by_token="driver-x")
+
+    assert await expire_stale_orders(asap_hours=48) == 0
+    assert (await _reload(session, order.id)).status == OrderStatus.NEW
+
+
+async def test_order_without_time_and_without_asap_is_untouched(session, make_order):
+    """Заявка, у которой время просто не разобрали, этим правилом не закрывается."""
+    order = await make_order(pickup_at=None)
+    async with SessionLocal() as db:
+        row = await db.get(Order, order.id)
+        row.created_at = now_utc_naive() - timedelta(hours=100)
+        await db.commit()
+
+    assert await expire_stale_orders(asap_hours=48) == 0
+    assert (await _reload(session, order.id)).status == OrderStatus.NEW
+
+
+async def test_expired_asap_order_leaves_the_feed(session, make_order):
+    from app.web import queries
+
+    old = await _make_asap(session, make_order, age_hours=60)
+    alive = await _make_asap(session, make_order, age_hours=1)
+
+    await expire_stale_orders(asap_hours=48)
+
+    page = await queries.fetch_feed(session, page_size=50)
+    assert [o.id for o in page.items] == [alive.id]
+    assert old.id not in [o.id for o in page.items]
+
+
+# --- «Договорились» -> «В работе» -> «Выполнен» -------------------------------
+
+
+async def _agreed(make_order, *, pickup_hours=None, agreed_hours_ago=0.0, **kwargs):
+    """Заказ «Договорились»: время подачи через pickup_hours (может быть
+    отрицательным) или без времени; договорились agreed_hours_ago часов назад."""
+    pickup = None if pickup_hours is None else now_msk_naive() + timedelta(hours=pickup_hours)
+    order = await make_order(pickup_at=pickup, status=OrderStatus.AGREED,
+                             taken_by_token="driver-x", **kwargs)
+    async with SessionLocal() as db:
+        row = await db.get(Order, order.id)
+        row.taken_at = now_utc_naive() - timedelta(hours=agreed_hours_ago)
+        await db.commit()
+    return order
+
+
+async def test_agreed_order_goes_in_progress_at_deadline(session, make_order):
+    later = await _agreed(make_order, pickup_hours=5)
+    passed = await _agreed(make_order, pickup_hours=-1)
+
+    started, completed = await advance_agreed_orders()
+
+    assert (started, completed) == (1, 0)
+    assert (await _reload(session, passed.id)).status == OrderStatus.IN_PROGRESS
+    assert (await _reload(session, later.id)).status == OrderStatus.AGREED
+
+
+async def test_in_progress_order_completes_72_hours_after_deadline(session, make_order):
+    fresh = await _agreed(make_order, pickup_hours=-71)
+    old = await _agreed(make_order, pickup_hours=-73)
+
+    started, completed = await advance_agreed_orders()
+
+    assert completed == 1
+    assert (await _reload(session, old.id)).status == OrderStatus.COMPLETED
+    assert (await _reload(session, fresh.id)).status == OrderStatus.IN_PROGRESS
+    assert started == 1  # fresh: «договорились» -> «в работе» в том же проходе
+
+
+async def test_asap_agreed_order_goes_in_progress_after_3_hours(session, make_order):
+    soon = await _agreed(make_order, pickup_hours=None, agreed_hours_ago=2)
+    due = await _agreed(make_order, pickup_hours=None, agreed_hours_ago=4)
+
+    await advance_agreed_orders()
+
+    assert (await _reload(session, soon.id)).status == OrderStatus.AGREED
+    assert (await _reload(session, due.id)).status == OrderStatus.IN_PROGRESS
+
+
+async def test_asap_agreed_order_completes_75_hours_after_agreement(session, make_order):
+    still = await _agreed(make_order, pickup_hours=None, agreed_hours_ago=74)
+    gone = await _agreed(make_order, pickup_hours=None, agreed_hours_ago=76)
+
+    await advance_agreed_orders()
+
+    assert (await _reload(session, still.id)).status == OrderStatus.IN_PROGRESS
+    assert (await _reload(session, gone.id)).status == OrderStatus.COMPLETED
+
+
+async def test_driver_confirmation_wins_over_automation(session, make_order):
+    """Выполненные и отменённые заказы фоновая задача не трогает."""
+    done = await _agreed(make_order, pickup_hours=-100)
+    async with SessionLocal() as db:
+        (await db.get(Order, done.id)).status = OrderStatus.CANCELLED
+        await db.commit()
+
+    assert await advance_agreed_orders() == (0, 0)
+    assert (await _reload(session, done.id)).status == OrderStatus.CANCELLED
+
+
+async def test_progression_writes_history(session, make_order):
+    order = await _agreed(make_order, pickup_hours=-1)
+
+    await advance_agreed_orders()
+
+    actions = (
+        await session.execute(select(ActionLog.action).where(ActionLog.order_id == order.id))
+    ).scalars().all()
+    assert "work_started" in actions

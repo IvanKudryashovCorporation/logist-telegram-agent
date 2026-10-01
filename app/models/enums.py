@@ -15,12 +15,20 @@ class OrderStatus(str, enum.Enum):
     NEEDS_CLARIFICATION = "needs_clarification"    # LLM не смог разобрать часть полей
     CANCELLED = "cancelled"                        # Скрыта вручную/удалена в TG (неактуальна)
     AGREED = "agreed"                              # Водитель договорился с диспетчером — заказ закрыт
+    IN_PROGRESS = "in_progress"                    # Дедлайн наступил — заказ «в работе»
+    COMPLETED = "completed"                        # Выполнен (водитель нажал сам или прошло 72 ч)
     EXPIRED = "expired"                            # Время подачи прошло — заявка протухла
 
 
 #: Статусы, которые НЕ показываются в общей ленте.
 HIDDEN_STATUSES = frozenset(
-    {OrderStatus.CANCELLED, OrderStatus.AGREED, OrderStatus.EXPIRED}
+    {
+        OrderStatus.CANCELLED,
+        OrderStatus.AGREED,
+        OrderStatus.EXPIRED,
+        OrderStatus.IN_PROGRESS,
+        OrderStatus.COMPLETED,
+    }
 )
 
 
@@ -34,6 +42,8 @@ ORDER_STATUS_LABELS = {
     OrderStatus.NEEDS_CLARIFICATION: "Нужно уточнить",
     OrderStatus.CANCELLED: "Скрыта",
     OrderStatus.AGREED: "Договорились",
+    OrderStatus.IN_PROGRESS: "В работе",
+    OrderStatus.COMPLETED: "Выполнен",
     OrderStatus.EXPIRED: "Просрочена",
 }
 

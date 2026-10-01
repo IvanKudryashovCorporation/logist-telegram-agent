@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import select
 
 from app.models import Order, OrderStatus
+from app.web import queries
 
 TEMPLATES = Path(__file__).resolve().parent.parent / "app" / "web" / "templates"
 
@@ -90,7 +91,7 @@ async def test_order_detail_back_link_preserves_feed_filters(client, make_order)
     assert "sort=price" in back_href
     assert "from_city=" in back_href
     # Кнопка действия тоже должна нести back — иначе после неё это потеряется.
-    assert f"/orders/{order.id}/take-and-contact?back={back_param}" in detail_response.text
+    assert f"/orders/{order.id}/contact?back={back_param}" in detail_response.text
 
 
 async def test_order_detail_back_link_is_plain_without_query(client, make_order):
@@ -276,11 +277,11 @@ async def test_agree_and_release_through_http(client, make_order, session):
     assert reloaded.status == OrderStatus.NEW
 
 
-async def test_take_and_contact_redirects_to_dispatcher(client, make_order):
+async def test_contact_redirects_to_dispatcher_without_taking_order(client, make_order, session):
     order = await make_order(dispatcher_username="super_dispatcher")
     _as_driver(client, TOKEN_A)
 
-    response = await client.post(f"/orders/{order.id}/take-and-contact")
+    response = await client.post(f"/orders/{order.id}/contact")
 
     assert response.status_code == 303
     location = response.headers["location"]
@@ -290,6 +291,60 @@ async def test_take_and_contact_redirects_to_dispatcher(client, make_order):
     assert message.endswith("— актуально?")
     # Контакты клиента в чат с диспетчером не утекают.
     assert "+79990000000" not in message
+
+    # Главное: переход в чат заказ не берёт — он остаётся в общей ленте.
+    reloaded = await _reload(session, order.id)
+    assert reloaded.taken_by_token is None
+    assert reloaded.status == OrderStatus.NEW
+    assert order.id in {o.id for o in (await queries.fetch_feed(session, page_size=50)).items}
+
+
+async def test_contact_is_refused_for_order_taken_by_other(client, make_order):
+    order = await make_order(taken_by_token=TOKEN_B)
+    _as_driver(client, TOKEN_A)
+
+    response = await client.post(f"/orders/{order.id}/contact")
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/orders/{order.id}"
+
+
+async def test_agree_takes_free_order_and_moves_it_to_my_orders(client, make_order, session):
+    order = await make_order()
+    _as_driver(client, TOKEN_A)
+
+    response = await client.post(f"/orders/{order.id}/agree")
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/my"
+    reloaded = await _reload(session, order.id)
+    assert reloaded.taken_by_token == TOKEN_A
+    assert reloaded.status == OrderStatus.AGREED
+    assert order.id not in {o.id for o in (await queries.fetch_feed(session, page_size=50)).items}
+    assert f"/orders/{order.id}" in (await client.get("/my")).text
+
+
+async def test_second_driver_cannot_agree_taken_order(client, make_order, session):
+    order = await make_order()
+    _as_driver(client, TOKEN_A)
+    await client.post(f"/orders/{order.id}/agree")
+
+    _as_driver(client, TOKEN_B)
+    response = await client.post(f"/orders/{order.id}/agree")
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/orders/{order.id}"
+    assert (await _reload(session, order.id)).taken_by_token == TOKEN_A
+
+
+async def test_detail_page_has_contact_and_agree_buttons(client, make_order):
+    order = await make_order()
+
+    page = (await client.get(f"/orders/{order.id}")).text
+
+    assert "Написать диспетчеру" in page
+    assert "Договорился с диспетчером" in page
+    assert f"/orders/{order.id}/contact" in page
 
 
 async def test_feedback_marks_problem_and_thanks(client, make_order, session):
@@ -335,7 +390,7 @@ async def test_feedback_from_stranger_is_rejected(client, make_order, session):
 
 
 async def test_actions_on_missing_order_do_not_crash(client):
-    for path in ("take", "release", "agree", "take-and-contact"):
+    for path in ("take", "release", "agree", "contact", "complete"):
         response = await client.post(f"/orders/999999/{path}")
         assert response.status_code in (303, 404), path
 
@@ -430,3 +485,42 @@ async def test_closed_order_stays_visible_in_owners_history(client, make_order):
     response = await client.get(f"/orders/{order.id}")
 
     assert response.status_code == 200
+
+
+async def test_complete_button_flow_over_http(client, make_order, session):
+    order = await make_order()
+    _as_driver(client, TOKEN_A)
+
+    before = (await client.get(f"/orders/{order.id}")).text
+    assert "Выполнил заказ" not in before  # пока не «Договорился» — кнопки нет
+
+    await client.post(f"/orders/{order.id}/agree")
+    agreed_page = (await client.get(f"/orders/{order.id}")).text
+    assert "Выполнил заказ" in agreed_page and "Отменить" in agreed_page
+
+    response = await client.post(f"/orders/{order.id}/complete")
+    assert response.status_code == 303 and response.headers["location"] == "/my"
+    assert (await _reload(session, order.id)).status == OrderStatus.COMPLETED
+
+    done_page = (await client.get(f"/orders/{order.id}")).text
+    assert "Выполнил заказ" not in done_page and "Отменить" not in done_page
+    assert "Выполнен" in done_page
+
+
+async def test_in_progress_order_still_has_complete_and_cancel(client, make_order):
+    order = await make_order(status=OrderStatus.IN_PROGRESS, taken_by_token=TOKEN_A)
+    _as_driver(client, TOKEN_A)
+
+    page = (await client.get(f"/orders/{order.id}")).text
+
+    assert "Выполнил заказ" in page and "Отменить" in page and "В работе" in page
+
+
+async def test_complete_for_stranger_is_refused(client, make_order, session):
+    order = await make_order(status=OrderStatus.AGREED, taken_by_token=TOKEN_A)
+    _as_driver(client, TOKEN_B)
+
+    response = await client.post(f"/orders/{order.id}/complete")
+
+    assert response.status_code == 303
+    assert (await _reload(session, order.id)).status == OrderStatus.AGREED

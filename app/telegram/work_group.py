@@ -483,9 +483,7 @@ async def _handle_deleted(chat_id: Optional[int], message_ids: list[int]) -> Non
                 select(Order).where(
                     Order.source_chat_id == chat_id,
                     Order.source_message_id.in_(message_ids),
-                    Order.status.notin_(
-                        {OrderStatus.CANCELLED, OrderStatus.AGREED, OrderStatus.EXPIRED}
-                    ),
+                    Order.status.notin_(HIDDEN_STATUSES),
                 )
             )
         ).scalars().all()

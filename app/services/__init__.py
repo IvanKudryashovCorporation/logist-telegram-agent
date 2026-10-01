@@ -1,6 +1,7 @@
 """Фоновые сервисы агента: уведомления владельца и обслуживание данных."""
 
 from app.services.cleanup import (
+    advance_agreed_orders,
     expire_stale_orders,
     prune_old_stats,
     run_cleanup_loop,
@@ -10,6 +11,7 @@ from app.services.notify import Notifier, notifier
 
 __all__ = [
     "Notifier",
+    "advance_agreed_orders",
     "expire_stale_orders",
     "geocode_pending",
     "notifier",

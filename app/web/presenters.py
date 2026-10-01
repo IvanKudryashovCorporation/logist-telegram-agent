@@ -57,7 +57,7 @@ def dispatcher_message(order: Order) -> str:
     details: list[str] = []
     if order.pickup_at is not None:
         details.append(order.pickup_at.strftime("%d.%m в %H:%M"))
-    elif order.pickup_asap:
+    else:
         details.append("в ближайшее время")
     if order.client_price is not None:
         details.append(f"{order.client_price:.0f} ₽")
@@ -111,9 +111,9 @@ def is_overdue(order: Order, *, now: Optional[datetime] = None) -> bool:
 
 def pickup_label(order: Order, *, now: Optional[datetime] = None) -> str:
     """Подача для карточки заказа: «сегодня в 15:40», «завтра в 00:30»,
-    «в ближайшее время» или «не указана»."""
+    «в ближайшее время» (когда время определить не удалось)."""
     if order.pickup_at is None:
-        return "в ближайшее время" if order.pickup_asap else "не указана"
+        return "в ближайшее время"
     today = (now or now_msk_naive()).date()
     pickup_date = order.pickup_at.date()
     clock = order.pickup_at.strftime("%H:%M")
@@ -127,8 +127,7 @@ def pickup_label(order: Order, *, now: Optional[datetime] = None) -> str:
 def pickup_subtext(order: Order, *, now: Optional[datetime] = None) -> str:
     """Короткая подпись под временем подачи — как давно/скоро подача."""
     if order.pickup_at is None:
-        # «Сейчас» — не отсутствие данных: главная надпись уже говорит всё.
-        return "" if order.pickup_asap else "время не указано"
+        return ""  # главная надпись уже говорит «в ближайшее время»
     now = now or now_msk_naive()
     bucket = order_bucket(order, now.date())
     if bucket == "tomorrow":

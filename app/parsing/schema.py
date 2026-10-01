@@ -44,14 +44,6 @@ _ORDER_ITEM_PROPERTIES = {
             "начало интервала. Пусто, если не указано."
         ),
     },
-    "pickup_asap": {
-        "type": "boolean",
-        "description": (
-            "Подача как можно скорее, конкретное время не названо: «сейчас», «в ближайшее "
-            "время», «в течение часа», «через 20 минут», «+30 минут», «ближайшее авто». "
-            "Если названо конкретное время — false."
-        ),
-    },
     "from_city": {"type": "string", "description": "Город/населённый пункт отправления."},
     "from_address": {
         "type": "string",
@@ -142,7 +134,6 @@ class ParsedOrder(BaseModel):
     client_phone: Optional[str] = None
     client_price: Optional[Decimal] = None
     is_urgent: bool = False
-    pickup_asap: bool = False
     missing_fields: list[str] = []
 
     @field_validator("client_price")

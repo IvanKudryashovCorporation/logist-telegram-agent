@@ -274,34 +274,32 @@ async def take_order(request: Request, order_id: int, back: str = ""):
     )
 
 
-@router.post("/orders/{order_id}/take-and-contact")
-async def take_and_contact(request: Request, order_id: int, back: str = ""):
-    """Единая кнопка «Написать диспетчеру»: берёт заказ себе (если ещё свободен)
-    и сразу открывает диалог с диспетчером в Telegram."""
+@router.post("/orders/{order_id}/contact")
+async def contact_dispatcher(request: Request, order_id: int, back: str = ""):
+    """«Написать диспетчеру»: открывает чат с готовым текстом. Заказ при этом НЕ
+    берётся — «моим» он становится только после «Договорился с диспетчером»."""
     token, new_token, login_required = resolve_driver(request)
     if login_required:
         return _login_redirect(request)
 
     async with SessionLocal() as session:
         order = await session.get(Order, order_id)
-        if order is None:
-            return HTMLResponse("Заказ не найден", status_code=404)
+    if order is None:
+        return HTMLResponse("Заказ не найден", status_code=404)
 
-        result = await queries.take_order(session, order_id, token)
-        if not result.ok and result.reason == "taken_by_other":
-            # Уже взят другим водителем — просто открываем карточку,
-            # без перехода к диспетчеру.
-            return _redirect(_order_url(order_id, back), new_token, result.message)
-        link = dispatcher_link(order, text=dispatcher_message(order))
+    is_mine = order.taken_by_token == token
+    if order.taken_by_token and not is_mine:
+        return _redirect(
+            _order_url(order_id, back), new_token,
+            queries.ActionResult(False, "taken_by_other").message,
+        )
+    if order.status in HIDDEN_STATUSES and not is_mine:
+        return _redirect(
+            _order_url(order_id, back), new_token,
+            queries.ActionResult(False, "closed").message,
+        )
 
-    if not result.ok and result.reason not in ("", "not_owner", "already_mine"):
-        # Заказ закрыт/просрочен: к диспетчеру не пускаем, показываем причину.
-        # "already_mine" сюда не относится: водитель просто нажал «Написать
-        # диспетчеру» второй раз, заказ уже его — открываем диалог как обычно.
-        return _redirect(_order_url(order_id, back), new_token, result.message)
-
-    # Переход в Telegram — "back" здесь ни при чём, он пригодится, когда
-    # водитель вернётся на карточку заказа (её ссылки уже несут back).
+    link = dispatcher_link(order, text=dispatcher_message(order))
     return _redirect(link or _order_url(order_id, back), new_token)
 
 
@@ -319,10 +317,8 @@ async def release_order(request: Request, order_id: int):
 
 @router.post("/orders/{order_id}/agree")
 async def agree_order(request: Request, order_id: int, back: str = ""):
-    """Водитель подтвердил, что договорился с диспетчером — заказ закрыт.
-
-    «Отменить взятие» по-прежнему откатывает это обратно, если передумали.
-    """
+    """«Договорился с диспетчером»: заказ уходит из ленты и появляется в «Моих
+    заказах». «Отменить» там откатывает это обратно, если передумали."""
     token, new_token, login_required = resolve_driver(request)
     if login_required:
         return _login_redirect(request)
@@ -330,9 +326,25 @@ async def agree_order(request: Request, order_id: int, back: str = ""):
     async with SessionLocal() as session:
         result = await queries.agree_order(session, order_id, token)
 
-    return _redirect(
-        _order_url(order_id, back), new_token, "" if result.ok else result.message
-    )
+    if result.ok or result.reason == "already_mine":
+        notice = "Заказ перенесён в «Мои заказы»." if result.ok else ""
+        return _redirect("/my", new_token, notice)
+    return _redirect(_order_url(order_id, back), new_token, result.message)
+
+
+@router.post("/orders/{order_id}/complete")
+async def complete_order(request: Request, order_id: int, back: str = ""):
+    """«Выполнил заказ»: заказ становится «Выполнен» и идёт в заработок профиля."""
+    token, new_token, login_required = resolve_driver(request)
+    if login_required:
+        return _login_redirect(request)
+
+    async with SessionLocal() as session:
+        result = await queries.complete_order(session, order_id, token)
+
+    if result.ok:
+        return _redirect("/my", new_token, "Заказ отмечен выполненным.")
+    return _redirect(_order_url(order_id, back), new_token, result.message)
 
 
 #: Готовые варианты обратной связи — кнопками, чтобы водитель не печатал.

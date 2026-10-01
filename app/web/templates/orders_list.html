@@ -15,7 +15,7 @@
       <a class="card {{ 'overdue' if is_overdue(order) else '' }}" href="/orders/{{ order.id }}{% if request.url.query %}?back={{ request.url.query | urlencode }}{% endif %}">
         <div class="card-top">
           <div>
-            <div class="card-time {{ 'asap' if not order.pickup_at and order.pickup_asap else '' }}">{{ order.pickup_at.strftime("%H:%M") if order.pickup_at else ("В ближайшее время" if order.pickup_asap else "—") }}</div>
+            <div class="card-time {{ '' if order.pickup_at else 'asap' }}">{{ order.pickup_at.strftime("%H:%M") if order.pickup_at else "В ближайшее время" }}</div>
             <div class="card-subtext">{{ pickup_subtext(order) }}</div>
           </div>
           {% if order.client_price %}<div class="card-price">{{ "%.0f"|format(order.client_price) }} ₽</div>{% endif %}
