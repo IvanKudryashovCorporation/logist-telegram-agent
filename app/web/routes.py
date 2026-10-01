@@ -13,9 +13,10 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import select
 
+from app import geo
 from app.config import settings
 from app.db.base import SessionLocal
-from app.models import Driver, Order
+from app.models import HIDDEN_STATUSES, Driver, Order
 from app.timeutil import now_msk_naive
 from app.web import queries
 from app.web.deps import (
@@ -33,6 +34,7 @@ from app.web.presenters import (
     client_name_for,
     client_phone_for,
     dispatcher_link,
+    dispatcher_message,
     order_bucket,
     redact_raw_text,
 )
@@ -71,6 +73,16 @@ def _login_redirect(request: Request) -> RedirectResponse:
     return RedirectResponse(f"/login?next={quote(target, safe='')}", status_code=303)
 
 
+async def _attach_radius_centers(session, filters: Filters) -> None:
+    """Находит центры кругов для радиуса «откуда/куда» (только кэш, без сети)."""
+    if filters.from_radius and filters.from_city:
+        filters.from_centers, missing = await geo.centers_for(session, filters.from_city)
+        filters.radius_missing += missing
+    if filters.to_radius and filters.to_city:
+        filters.to_centers, missing = await geo.centers_for(session, filters.to_city)
+        filters.radius_missing += missing
+
+
 def _base_context(request: Request, counts: dict, notice: Optional[str] = None) -> dict:
     """Общий контекст для всех страниц (шапка, счётчики, flash-сообщение)."""
     return {
@@ -96,6 +108,8 @@ async def feed(
     time_to: str = "",
     price_min: str = "",
     price_max: str = "",
+    from_radius: str = "",
+    to_radius: str = "",
     sort: str = queries.DEFAULT_SORT,
     lat: str = "",
     lon: str = "",
@@ -104,13 +118,14 @@ async def feed(
     token, new_token = driver_token(request)
     filters = Filters(
         from_city, to_city, passengers, date_from, date_to,
-        time_from, time_to, price_min, price_max,
+        time_from, time_to, price_min, price_max, from_radius, to_radius,
     )
     if sort not in queries.SORT_LABELS:
         sort = queries.DEFAULT_SORT
     coords = _parse_coords(lat, lon) if sort == "distance" else None
 
     async with SessionLocal() as session:
+        await _attach_radius_centers(session, filters)
         feed_page = await queries.fetch_feed(
             session,
             filters=filters,
@@ -194,6 +209,16 @@ async def order_detail(request: Request, order_id: int, back: str = ""):
             return HTMLResponse("Заказ не найден", status_code=404)
         counts = await queries.header_counts(session, token)
         is_mine = order.taken_by_token == token
+        if order.status in HIDDEN_STATUSES and not is_mine:
+            # Протухшая/снятая/закрытая заявка пропала из ленты — по прямой
+            # ссылке её тоже не показываем. Свою историю водитель видит.
+            gone = templates.TemplateResponse(
+                "order_gone.html",
+                _base_context(request, counts) | {"order_id": order_id, "back": back},
+                status_code=410,
+            )
+            attach_driver_cookie(gone, new_token)
+            return gone
         link = dispatcher_link(order)
         # Телефон/имя клиента готовим здесь, а не в шаблоне: шаблон не должен
         # знать, кому разрешено видеть персональные данные.
@@ -211,6 +236,7 @@ async def order_detail(request: Request, order_id: int, back: str = ""):
             "is_mine": is_mine,
             "is_taken_by_someone_else": bool(order.taken_by_token) and not is_mine,
             "dispatcher_url": link,
+            "dispatcher_text": dispatcher_message(order),
             "phone_display": phone,
             "client_name_display": client_name,
             "raw_text_display": raw_text,
@@ -266,7 +292,7 @@ async def take_and_contact(request: Request, order_id: int, back: str = ""):
             # Уже взят другим водителем — просто открываем карточку,
             # без перехода к диспетчеру.
             return _redirect(_order_url(order_id, back), new_token, result.message)
-        link = dispatcher_link(order)
+        link = dispatcher_link(order, text=dispatcher_message(order))
 
     if not result.ok and result.reason not in ("", "not_owner", "already_mine"):
         # Заказ закрыт/просрочен: к диспетчеру не пускаем, показываем причину.

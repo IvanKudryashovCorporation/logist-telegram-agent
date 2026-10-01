@@ -13,6 +13,7 @@
 import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import quote
 
 from app.config import settings
 from app.models import Order
@@ -41,7 +42,31 @@ def order_bucket(order: Order, today: Optional[date] = None) -> str:
     return "later"
 
 
-def dispatcher_link(order: Order) -> Optional[str]:
+def dispatcher_message(order: Order) -> str:
+    """Готовое первое сообщение диспетчеру: «Здравствуйте! Заказ A → B, 05.10 в
+    14:00, 3000 ₽ — актуально?». Отсутствующие части просто пропускаются.
+
+    Телефон и имя клиента сюда не попадают принципиально: текст уходит в чат
+    и подставляется в ссылку, а контакты клиента скрыты от не взявших заказ.
+    """
+    origin = order.from_city or order.from_address
+    destination = order.to_city or order.to_address
+    fallback = origin or destination or f"№{order.id}"
+    route = f"{origin} → {destination}" if origin and destination else fallback
+
+    details: list[str] = []
+    if order.pickup_at is not None:
+        details.append(order.pickup_at.strftime("%d.%m в %H:%M"))
+    elif order.pickup_asap:
+        details.append("в ближайшее время")
+    if order.client_price is not None:
+        details.append(f"{order.client_price:.0f} ₽")
+
+    summary = ", ".join([route, *details])
+    return f"Здравствуйте! Заказ {summary} — актуально?"
+
+
+def dispatcher_link(order: Order, text: Optional[str] = None) -> Optional[str]:
     """Ссылка на диалог с диспетчером в Telegram, если известен его аккаунт.
 
     ``contact_username`` — явное «писать @...» из текста заявки — приоритетнее
@@ -53,11 +78,14 @@ def dispatcher_link(order: Order) -> Optional[str]:
     оставлен запасным для диспетчеров без публичного username — многие
     мобильные браузеры блокируют этот «сырой» протокол при переходе с сайта,
     поэтому им пользуемся только когда другого варианта нет.
+
+    ``text`` подставляется в поле ввода чата (``?text=``). У ссылки по
+    числовому id такого параметра нет — для неё текст не добавляется.
     """
-    if order.contact_username:
-        return f"https://t.me/{order.contact_username}"
-    if order.dispatcher_username:
-        return f"https://t.me/{order.dispatcher_username}"
+    username = order.contact_username or order.dispatcher_username
+    if username:
+        url = f"https://t.me/{username}"
+        return f"{url}?text={quote(text, safe='')}" if text else url
     if order.dispatcher_tg_id:
         return f"tg://user?id={order.dispatcher_tg_id}"
     return None
@@ -81,10 +109,26 @@ def is_overdue(order: Order, *, now: Optional[datetime] = None) -> bool:
     return order.pickup_at < (now or now_msk_naive())
 
 
+def pickup_label(order: Order, *, now: Optional[datetime] = None) -> str:
+    """Подача для карточки заказа: «сегодня в 15:40», «завтра в 00:30»,
+    «в ближайшее время» или «не указана»."""
+    if order.pickup_at is None:
+        return "в ближайшее время" if order.pickup_asap else "не указана"
+    today = (now or now_msk_naive()).date()
+    pickup_date = order.pickup_at.date()
+    clock = order.pickup_at.strftime("%H:%M")
+    if pickup_date == today:
+        return f"сегодня в {clock}"
+    if pickup_date == today + timedelta(days=1):
+        return f"завтра в {clock}"
+    return f"{clock}, {order.pickup_at.strftime('%d.%m')}"
+
+
 def pickup_subtext(order: Order, *, now: Optional[datetime] = None) -> str:
     """Короткая подпись под временем подачи — как давно/скоро подача."""
     if order.pickup_at is None:
-        return "время не указано"
+        # «Сейчас» — не отсутствие данных: главная надпись уже говорит всё.
+        return "" if order.pickup_asap else "время не указано"
     now = now or now_msk_naive()
     bucket = order_bucket(order, now.date())
     if bucket == "tomorrow":

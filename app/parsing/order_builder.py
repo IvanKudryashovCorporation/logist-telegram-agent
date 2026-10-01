@@ -5,13 +5,14 @@
 """
 
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from app.city_aliases import expand_city_term
 from app.models import Order, OrderStatus
 from app.parsing.schema import ParsedOrder
 from app.search import refresh_derived
+from app.timeutil import now_msk_naive
 
 # "Писать @username" / "пишите t.me/username" / "писать: @username" — в
 # рабочих группах диспетчер часто указывает, кому именно писать по заявке,
@@ -38,10 +39,49 @@ def combine_pickup_at(pickup_date: Optional[str], pickup_time: Optional[str]) ->
         return None
 
 
+#: Время без даты («00:30-1:00 Москва-Демянск»): если оно ушло в прошлое больше
+#: чем на это, диспетчер имел в виду завтра — типичный случай заявка около полуночи.
+_PAST_TOLERANCE = timedelta(hours=2)
+_TIME_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})")
+
+
+def resolve_pickup_at(
+    pickup_date: Optional[str],
+    pickup_time: Optional[str],
+    existing: Optional[datetime] = None,
+    *,
+    now: Optional[datetime] = None,
+) -> Optional[datetime]:
+    """Время подачи заказа. Если названа дата — как есть. Если названо только
+    время: у уже сохранённого заказа дата остаётся прежней (правка не должна
+    сдвигать день), у нового — ближайшее такое время: сегодня или завтра."""
+    explicit = combine_pickup_at(pickup_date, pickup_time)
+    if explicit is not None:
+        return explicit
+
+    match = _TIME_RE.match(pickup_time or "")
+    if match is None:
+        return existing
+    hour, minute = int(match.group(1)), int(match.group(2))
+    if hour > 23 or minute > 59:
+        return existing
+
+    if existing is not None:
+        return existing.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    reference = now or now_msk_naive()
+    candidate = reference.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate < reference - _PAST_TOLERANCE:
+        candidate += timedelta(days=1)
+    return candidate
+
+
 def apply_parsed_fields(order: Order, parsed: ParsedOrder) -> None:
     """Переносит поля из ParsedOrder в Order и выставляет статус по полноте данных."""
     order.contact_username = extract_contact_username(order.raw_text) or order.contact_username
-    order.pickup_at = combine_pickup_at(parsed.pickup_date, parsed.pickup_time) or order.pickup_at
+    order.pickup_at = resolve_pickup_at(parsed.pickup_date, parsed.pickup_time, order.pickup_at)
+    # Названное время всегда важнее «сейчас»: правка «в течение часа» -> «в 15:00»
+    # снимает метку.
+    order.pickup_asap = parsed.pickup_asap and order.pickup_at is None
     # Раскрываем сокращение сразу при сохранении ("Симф" -> "Симферополь") —
     # иначе один и тот же город хранится по-разному в разных заявках и
     # выглядит как два разных города в автодополнении на сайте.
@@ -64,10 +104,12 @@ def apply_parsed_fields(order: Order, parsed: ParsedOrder) -> None:
         # водителей, а не посредник.
         order.client_price = parsed.client_price
 
+    missing = parsed.missing_fields
+    if order.pickup_asap:
+        # «Нет времени подачи» для срочной заявки — не недостающие данные.
+        missing = [field for field in missing if "врем" not in field.lower()]
     if order.status in (OrderStatus.NEW, OrderStatus.NEEDS_CLARIFICATION):
-        order.status = (
-            OrderStatus.NEEDS_CLARIFICATION if parsed.missing_fields else OrderStatus.NEW
-        )
+        order.status = OrderStatus.NEEDS_CLARIFICATION if missing else OrderStatus.NEW
 
     # search_text / from_city_key / to_city_key обязаны соответствовать
     # только что записанным полям, иначе поиск и фильтры на сайте «слепнут».

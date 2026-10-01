@@ -47,7 +47,7 @@ from httpx import ASGITransport, AsyncClient  # noqa: E402
 from app.db.base import Base, SessionLocal, engine  # noqa: E402
 from app.models import Order, OrderStatus  # noqa: E402
 from app.search import refresh_derived  # noqa: E402
-from app.timeutil import now_msk_naive  # noqa: E402
+from app.timeutil import now_msk_naive, now_utc_naive  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -124,6 +124,8 @@ async def create_order(
     status: OrderStatus = OrderStatus.NEW,
     taken_by_token: str | None = None,
     raw_text: str | None = None,
+    from_coords: tuple[float, float] | None = None,
+    to_coords: tuple[float, float] | None = None,
 ) -> Order:
     """Создаёт заказ так же, как это делает агент (с пересчётом search-полей).
 
@@ -160,6 +162,11 @@ async def create_order(
     # То же самое делает рантайм перед сохранением: без этого search_text пуст
     # и поиск в тестах проверял бы не то, что работает на проде.
     refresh_derived(order)
+    if from_coords or to_coords:
+        # Строго после refresh_derived: он сбрасывает координаты при смене города.
+        order.from_lat, order.from_lon = from_coords or (None, None)
+        order.to_lat, order.to_lon = to_coords or (None, None)
+        order.geo_checked_at = now_utc_naive()
     session.add(order)
     await session.commit()
     await session.refresh(order)

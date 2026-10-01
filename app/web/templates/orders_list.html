@@ -2,13 +2,20 @@
 {% block title %}Лента заказов — Подача{% endblock %}
 {% block content %}
 
+{% if filters.radius_missing %}
+  <div class="radius-hint">
+    Для «{{ filters.radius_missing | join('», «') }}» радиус не применён — не нашли координаты, ищем только по названию.
+  </div>
+{% endif %}
+
 {% if orders %}
   <div class="grid">
     {% for order in orders %}
+      {% set geo_notes = filters.radius_notes(order) %}
       <a class="card {{ 'overdue' if is_overdue(order) else '' }}" href="/orders/{{ order.id }}{% if request.url.query %}?back={{ request.url.query | urlencode }}{% endif %}">
         <div class="card-top">
           <div>
-            <div class="card-time">{{ order.pickup_at.strftime("%H:%M") if order.pickup_at else "—" }}</div>
+            <div class="card-time {{ 'asap' if not order.pickup_at and order.pickup_asap else '' }}">{{ order.pickup_at.strftime("%H:%M") if order.pickup_at else ("В ближайшее время" if order.pickup_asap else "—") }}</div>
             <div class="card-subtext">{{ pickup_subtext(order) }}</div>
           </div>
           {% if order.client_price %}<div class="card-price">{{ "%.0f"|format(order.client_price) }} ₽</div>{% endif %}
@@ -23,6 +30,7 @@
             <span class="route-marker from"></span>
             <div>
               <div class="route-point-city">{{ order.from_city or "?" }}</div>
+              {% if geo_notes.from %}<div class="route-point-geo">{{ geo_notes.from }}</div>{% endif %}
               {% if order.from_address %}<div class="route-point-address">{{ order.from_address }}</div>{% endif %}
             </div>
           </div>
@@ -30,6 +38,7 @@
             <span class="route-marker to"></span>
             <div>
               <div class="route-point-city">{{ order.to_city or "?" }}</div>
+              {% if geo_notes.to %}<div class="route-point-geo">{{ geo_notes.to }}</div>{% endif %}
               {% if order.to_address %}<div class="route-point-address">{{ order.to_address }}</div>{% endif %}
             </div>
           </div>

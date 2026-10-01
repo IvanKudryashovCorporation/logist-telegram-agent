@@ -24,7 +24,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.db.base import SessionLocal
 from app.models import WorkGroup
-from app.services import notifier, run_cleanup_loop
+from app.services import notifier, run_cleanup_loop, run_geocode_worker
 from app.telegram.client import build_client
 from app.telegram.queue_worker import run_queue_worker
 from app.telegram.work_group import register_work_group_handlers
@@ -78,6 +78,7 @@ def _start_background(client, stop_event: asyncio.Event) -> list[asyncio.Task]:
     """Запускает фоновые задачи. Каждая сама переживает свои ошибки."""
     tasks: list[asyncio.Task] = [
         asyncio.create_task(run_cleanup_loop(stop_event), name="cleanup"),
+        asyncio.create_task(run_geocode_worker(stop_event), name="geocode"),
     ]
     if settings.queue_enabled:
         tasks.append(

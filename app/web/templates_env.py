@@ -11,6 +11,7 @@ from pathlib import Path
 
 from fastapi.templating import Jinja2Templates
 
+from app.geo import RADIUS_CHOICES
 from app.models import ORDER_STATUS_LABELS
 from app.web import presenters
 from app.web.queries import DEFAULT_SORT, SORT_LABELS
@@ -21,9 +22,11 @@ TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 TEMPLATE_GLOBALS = {
     "status_labels": ORDER_STATUS_LABELS,
     "sort_labels": SORT_LABELS,
+    "radius_choices": RADIUS_CHOICES,
     "default_sort": DEFAULT_SORT,
     "bucket_titles": presenters.BUCKET_TITLES,
     "dispatcher_link": presenters.dispatcher_link,
+    "pickup_label": presenters.pickup_label,
     "pickup_subtext": presenters.pickup_subtext,
     "is_overdue": presenters.is_overdue,
     "relative_ago": presenters.relative_ago,

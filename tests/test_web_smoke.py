@@ -7,6 +7,7 @@
 
 import re
 from pathlib import Path
+from urllib.parse import unquote
 
 import pytest
 from sqlalchemy import select
@@ -282,7 +283,13 @@ async def test_take_and_contact_redirects_to_dispatcher(client, make_order):
     response = await client.post(f"/orders/{order.id}/take-and-contact")
 
     assert response.status_code == 303
-    assert response.headers["location"] == "https://t.me/super_dispatcher"
+    location = response.headers["location"]
+    assert location.startswith("https://t.me/super_dispatcher?text=")
+    message = unquote(location.split("?text=", 1)[1])
+    assert message.startswith("Здравствуйте! Заказ Симферополь → Сочи")
+    assert message.endswith("— актуально?")
+    # Контакты клиента в чат с диспетчером не утекают.
+    assert "+79990000000" not in message
 
 
 async def test_feedback_marks_problem_and_thanks(client, make_order, session):
@@ -400,3 +407,26 @@ async def test_interactive_docs_are_disabled(client):
     """Публичный /docs перечислил бы все эндпоинты, включая админку."""
     for path in ("/docs", "/redoc", "/openapi.json"):
         assert (await client.get(path)).status_code == 404, path
+
+
+@pytest.mark.parametrize(
+    "status", [OrderStatus.EXPIRED, OrderStatus.CANCELLED, OrderStatus.AGREED]
+)
+async def test_closed_order_page_is_gone_for_strangers(client, make_order, status):
+    order = await make_order(status=status)
+    _as_driver(client, TOKEN_B)
+
+    response = await client.get(f"/orders/{order.id}")
+
+    assert response.status_code == 410
+    assert "больше не доступен" in response.text
+    assert "Написать диспетчеру" not in response.text
+
+
+async def test_closed_order_stays_visible_in_owners_history(client, make_order):
+    order = await make_order(status=OrderStatus.EXPIRED, taken_by_token=TOKEN_A)
+    _as_driver(client, TOKEN_A)
+
+    response = await client.get(f"/orders/{order.id}")
+
+    assert response.status_code == 200

@@ -51,7 +51,7 @@
               {{ order.from_city or '?' }} → {{ order.to_city or '?' }}
               {% if order.passengers %}<span class="muted">· {{ order.passengers }} пасс.</span>{% endif %}
             </td>
-            <td class="nowrap">{{ order.pickup_at.strftime('%d.%m %H:%M') if order.pickup_at else '—' }}</td>
+            <td class="nowrap">{{ order.pickup_at.strftime('%d.%m %H:%M') if order.pickup_at else ('сейчас' if order.pickup_asap else '—') }}</td>
             <td class="num">{{ "%.0f"|format(order.client_price) ~ ' ₽' if order.client_price else '—' }}</td>
             <td class="nowrap">
               {{ order.client_name or '—' }}<br>

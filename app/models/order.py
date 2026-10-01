@@ -13,6 +13,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Enum,
+    Float,
     Index,
     Integer,
     Numeric,
@@ -64,6 +65,12 @@ class Order(Base, TimestampMixin):
 
     # --- Маршрут и время ---
     pickup_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=False))
+    # «Сейчас / в течение часа / в ближайшее время»: конкретного времени нет, но
+    # это не «время не указано». pickup_at остаётся NULL — поэтому такая заявка
+    # не протухает по времени и висит в ленте, пока её не возьмут.
+    pickup_asap: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
     from_address: Mapped[Optional[str]] = mapped_column(String(512))
     to_address: Mapped[Optional[str]] = mapped_column(String(512))
     from_city: Mapped[Optional[str]] = mapped_column(String(128))
@@ -102,6 +109,15 @@ class Order(Base, TimestampMixin):
     # CAST(x AS TIME) приводит к NUMERIC, в PostgreSQL — к TIME, а единого
     # выражения нет. Сравнение строк 'HH:MM' работает одинаково везде.
     pickup_time_key: Mapped[Optional[str]] = mapped_column(String(5), index=True)
+    # Координаты концов маршрута для фильтра радиуса. Заполняет фоновый
+    # геокодер (app/geo.py), а не парсер заявок: если геокодер недоступен,
+    # заказ всё равно создаётся — просто без координат и ищется по названию.
+    from_lat: Mapped[Optional[float]] = mapped_column(Float)
+    from_lon: Mapped[Optional[float]] = mapped_column(Float)
+    to_lat: Mapped[Optional[float]] = mapped_column(Float)
+    to_lon: Mapped[Optional[float]] = mapped_column(Float)
+    #: NULL — геокодер этим заказом ещё не занимался (или города поменялись).
+    geo_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=False))
 
     # --- Состояние ---
     status: Mapped[OrderStatus] = mapped_column(

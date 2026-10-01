@@ -68,8 +68,15 @@ def refresh_derived(order: Any) -> Any:
     from app.city_aliases import city_key
 
     refresh_search_text(order)
-    order.from_city_key = city_key(getattr(order, "from_city", None)) or None
-    order.to_city_key = city_key(getattr(order, "to_city", None)) or None
+    new_from_key = city_key(getattr(order, "from_city", None)) or None
+    new_to_key = city_key(getattr(order, "to_city", None)) or None
+    if new_from_key != order.from_city_key or new_to_key != order.to_city_key:
+        # Город поменялся (правка сообщения) — старые координаты ему уже не
+        # соответствуют, геокодер должен пересчитать оба конца.
+        order.from_lat = order.from_lon = order.to_lat = order.to_lon = None
+        order.geo_checked_at = None
+    order.from_city_key = new_from_key
+    order.to_city_key = new_to_key
     order.pickup_time_key = pickup_time_key(getattr(order, "pickup_at", None))
     return order
 

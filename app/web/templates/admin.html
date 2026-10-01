@@ -141,7 +141,7 @@
               <a href="/orders/{{ order.id }}" target="_blank" rel="noopener">#{{ order.id }}</a>
             </td>
             <td>{{ order.from_city or '?' }} → {{ order.to_city or '?' }}</td>
-            <td class="nowrap">{{ order.pickup_at.strftime('%d.%m %H:%M') if order.pickup_at else '—' }}</td>
+            <td class="nowrap">{{ order.pickup_at.strftime('%d.%m %H:%M') if order.pickup_at else ('сейчас' if order.pickup_asap else '—') }}</td>
             <td class="nowrap"><span class="tag {{ 'bad' if order.status.value == 'cancelled' else ('ok' if order.status.value == 'agreed' else '') }}">{{ order.status.value }}</span></td>
             <td class="error-text pre-wrap">{{ order.problem_note or '—' }}</td>
             <td class="nowrap muted">{{ order.updated_at.strftime('%d.%m %H:%M') if order.updated_at else '—' }}</td>

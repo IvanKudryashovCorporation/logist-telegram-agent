@@ -16,7 +16,6 @@ Python их фильтровал и сортировал — при росте �
 import logging
 import time
 from dataclasses import dataclass, field
-from math import asin, cos, radians, sin, sqrt
 from typing import Optional
 
 from sqlalchemy import func, or_, select, update
@@ -24,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.city_aliases import KNOWN_CITIES, city_coords, expand_city_term
 from app.config import settings
+from app.geo import haversine_km
 from app.models import HIDDEN_STATUSES, ActionLog, ActorType, Driver, Order, OrderStatus
 from app.timeutil import now_msk_naive, now_utc_naive
 from app.web.filters import Filters
@@ -74,15 +74,6 @@ class FeedPage:
         return list(range(start, end + 1))
 
 
-def haversine_km(a: tuple[float, float], b: tuple[float, float]) -> float:
-    """Расстояние между двумя точками (lat, lon) в километрах."""
-    lat1, lon1, lat2, lon2 = map(radians, (a[0], a[1], b[0], b[1]))
-    d_lat = lat2 - lat1
-    d_lon = lon2 - lon1
-    h = sin(d_lat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(d_lon / 2) ** 2
-    return 2 * 6371 * asin(sqrt(h))
-
-
 def feed_conditions(*, now=None) -> list:
     """Что попадает в общую ленту.
 
@@ -104,7 +95,8 @@ def sort_clause(sort: str):
         # Сначала «цена неизвестна», дальше по убыванию цены.
         return (Order.client_price.is_(None), Order.client_price.desc())
     if sort == "date":
-        return (Order.pickup_at.is_(None), Order.pickup_at.asc())
+        # Срочные («в ближайшее время») — первыми, заказы без времени — в конце.
+        return (Order.pickup_asap.desc(), Order.pickup_at.is_(None), Order.pickup_at.asc())
     # recent — самые свежие сверху.
     return (Order.created_at.desc(), Order.id.desc())
 
@@ -431,7 +423,7 @@ async def my_orders(session: AsyncSession, token: str) -> list:
     rows = await session.execute(
         select(Order)
         .where(Order.taken_by_token == token)
-        .order_by(Order.pickup_at.is_(None), Order.pickup_at.asc())
+        .order_by(Order.pickup_asap.desc(), Order.pickup_at.is_(None), Order.pickup_at.asc())
     )
     return list(rows.scalars().all())
 

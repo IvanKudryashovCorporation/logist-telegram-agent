@@ -123,6 +123,17 @@ class Settings(BaseSettings):
             and self.session_secret.strip()
         )
 
+    # --- Геокодирование (фильтр радиуса «откуда/куда») ---
+    #: Фоновый воркер агента проставляет заказам координаты через Nominatim
+    #: (OpenStreetMap). Выключено — радиус не работает, фильтр по названию как раньше.
+    geocoding_enabled: bool = True
+    #: Nominatim требует User-Agent с контактом — анонимные клиенты банят.
+    geocoder_user_agent: str = "podacha-geocoder/1.0 (skoottv9@gmail.com)"
+    #: Как часто воркер просматривает заказы без координат, секунд.
+    geocode_poll_seconds: int = 30
+    #: Сколько заказов обрабатывает за один проход.
+    geocode_batch: int = 20
+
     # --- Фоновая очистка протухших заявок ---
     #: Через сколько часов после времени подачи заявка становится EXPIRED.
     expire_grace_hours: int = 6

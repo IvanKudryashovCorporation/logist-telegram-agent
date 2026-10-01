@@ -13,6 +13,12 @@
   на одном наборе данных: если кто-то поправит одну реализацию и забудет
   другую, тест упадёт.
 
+Радиус «откуда/куда»: к совпадению по названию добавляется «ИЛИ координаты в
+круге вокруг города». Круг считается по заранее найденным центрам
+(``from_centers``/``to_centers`` — их кладёт роут из кэша геокодера), так что
+``sql()`` остаётся синхронным и сам в БД за центрами не ходит. Заказы без
+координат по-прежнему находятся по названию — радиус ничего не отнимает.
+
 Исправленный баг: фильтр «Пассажиров (мин.)» раньше отбрасывал заявки, где
 число пассажиров не указано (``None`` трактовался как 0). Диспетчер часто не
 пишет пассажиров — получалось, что фильтр «от 1» прятал большую часть ленты.
@@ -21,11 +27,13 @@
 
 from datetime import date, datetime, time
 from decimal import Decimal, InvalidOperation
+from math import cos, radians
 from typing import Optional
 
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 
-from app.city_aliases import canonical_city_variants, split_city_terms
+from app.city_aliases import canonical_city_variants, city_matches, split_city_terms
+from app.geo import KM_PER_DEGREE, Coords, flat_distance_km, parse_radius
 from app.models import Order
 
 
@@ -43,6 +51,8 @@ class Filters:
         time_to: str = "",
         price_min: str = "",
         price_max: str = "",
+        from_radius: str = "",
+        to_radius: str = "",
     ) -> None:
         self.from_city = (from_city or "").strip()
         self.to_city = (to_city or "").strip()
@@ -53,6 +63,13 @@ class Filters:
         self.time_to = self._parse_time(time_to)
         self.price_min = self._parse_decimal(price_min)
         self.price_max = self._parse_decimal(price_max)
+        self.from_radius = parse_radius(from_radius)
+        self.to_radius = parse_radius(to_radius)
+        # Центры кругов: {термин из фильтра: (lat, lon)}; заполняет роут.
+        self.from_centers: dict[str, Coords] = {}
+        self.to_centers: dict[str, Coords] = {}
+        #: Термины, для которых радиус запрошен, но координат нет.
+        self.radius_missing: list[str] = []
 
     # --- разбор сырых query-параметров --------------------------------------
 
@@ -95,6 +112,7 @@ class Filters:
 
     @property
     def active_count(self) -> int:
+        # Радиус сам по себе не фильтр — он лишь расширяет «откуда/куда».
         return sum(
             1
             for value in (
@@ -117,6 +135,26 @@ class Filters:
             "time_to": self.time_to.strftime("%H:%M") if self.time_to else "",
             "price_min": str(self.price_min) if self.price_min is not None else "",
             "price_max": str(self.price_max) if self.price_max is not None else "",
+            "from_radius": str(self.from_radius) if self.from_radius else "",
+            "to_radius": str(self.to_radius) if self.to_radius else "",
+        }
+
+    # --- подпись «~18 км от Краснодара» на карточке --------------------------
+
+    def radius_notes(self, order: Order) -> dict:
+        """Подписи для карточки: чем заказ попал в выборку, если не названием.
+
+        Без них водитель не понимает, почему в ленте посёлок вместо города.
+        """
+        return {
+            "from": _radius_note(
+                self.from_city, order.from_city, order.from_lat, order.from_lon,
+                self.from_radius, self.from_centers,
+            ),
+            "to": _radius_note(
+                self.to_city, order.to_city, order.to_lat, order.to_lon,
+                self.to_radius, self.to_centers,
+            ),
         }
 
     # --- SQL -----------------------------------------------------------------
@@ -125,10 +163,16 @@ class Filters:
         """Условия WHERE, эквивалентные :meth:`matches`."""
         clauses: list = []
 
-        from_clause = _city_clause(Order.from_city_key, self.from_city)
+        from_clause = _city_clause(
+            Order.from_city_key, self.from_city,
+            Order.from_lat, Order.from_lon, self.from_radius, self.from_centers,
+        )
         if from_clause is not None:
             clauses.append(from_clause)
-        to_clause = _city_clause(Order.to_city_key, self.to_city)
+        to_clause = _city_clause(
+            Order.to_city_key, self.to_city,
+            Order.to_lat, Order.to_lon, self.to_radius, self.to_centers,
+        )
         if to_clause is not None:
             clauses.append(to_clause)
 
@@ -165,9 +209,15 @@ class Filters:
     # --- эталонная проверка одной строки (для тестов) ------------------------
 
     def matches(self, order: Order) -> bool:
-        if self.from_city and not _city_matches(self.from_city, order.from_city):
+        if self.from_city and not _side_matches(
+            self.from_city, order.from_city, order.from_lat, order.from_lon,
+            self.from_radius, self.from_centers,
+        ):
             return False
-        if self.to_city and not _city_matches(self.to_city, order.to_city):
+        if self.to_city and not _side_matches(
+            self.to_city, order.to_city, order.to_lat, order.to_lon,
+            self.to_radius, self.to_centers,
+        ):
             return False
         # Неизвестное число пассажиров (None) намеренно НЕ отсеивается:
         # диспетчеры часто его не пишут, и фильтр «от 1» прятал бы пол-ленты.
@@ -204,13 +254,16 @@ class Filters:
         return True
 
 
-def _city_clause(column, raw: str):
+def _city_clause(column, raw: str, lat_column, lon_column, radius: int, centers: dict):
     """«Город из фильтра совпадает с городом заказа» — с учётом сокращений.
 
     Несколько городов через запятую = ИЛИ. Каждый термин раскрывается во все
     известные написания (``canonical_city_variants``), плюс подстрочное
     совпадение для достаточно длинных вариантов — LLM пишет и «Симферополь,
     аэропорт», что точным равенством не поймать.
+
+    При ``radius > 0`` и известном центре термина к этому добавляется «или
+    координаты заказа лежат в круге радиуса ``radius`` км вокруг центра».
     """
     terms = split_city_terms(raw)
     if not terms:
@@ -223,18 +276,82 @@ def _city_clause(column, raw: str):
             continue
         sub = [column.in_(variants)]
         sub += [column.contains(v, autoescape=True) for v in variants if len(v) >= 4]
-        term_clauses.append(or_(*sub))
+        clause = or_(*sub)
+
+        center = centers.get(term) if radius else None
+        if center is not None:
+            clause = or_(clause, _radius_clause(lat_column, lon_column, center, radius))
+        term_clauses.append(clause)
 
     if not term_clauses:
         return None
     return or_(*term_clauses)
 
 
-def _city_matches(raw_filter: str, order_city: Optional[str]) -> bool:
-    """Python-версия :func:`_city_clause` для эталонной проверки."""
-    from app.city_aliases import city_matches
+def _radius_clause(lat_column, lon_column, center: Coords, radius: int):
+    """Точка в круге радиуса ``radius`` км — арифметикой, без тригонометрии в SQL.
 
+    Та же формула, что в :func:`app.geo.flat_distance_km`. Прямоугольник по
+    широте/долготе отсекает основную массу строк до умножений; ``cos`` центра
+    считается здесь, в Python, и уходит в запрос константой.
+    """
+    lat0, lon0 = center
+    cos0 = max(cos(radians(lat0)), 0.01)
+    d_lat = radius / KM_PER_DEGREE
+    d_lon = radius / (KM_PER_DEGREE * cos0)
+    dy = (lat_column - lat0) * KM_PER_DEGREE
+    dx = (lon_column - lon0) * (KM_PER_DEGREE * cos0)
+    return and_(
+        lat_column.between(lat0 - d_lat, lat0 + d_lat),
+        lon_column.between(lon0 - d_lon, lon0 + d_lon),
+        dy * dy + dx * dx <= radius * radius,
+    )
+
+
+def _side_matches(
+    raw_filter: str,
+    order_city: Optional[str],
+    lat: Optional[float],
+    lon: Optional[float],
+    radius: int,
+    centers: dict,
+) -> bool:
+    """Python-версия :func:`_city_clause` для эталонной проверки."""
     terms = split_city_terms(raw_filter)
     if not terms:
         return True
-    return any(city_matches(term, order_city) for term in terms)
+    for term in terms:
+        if city_matches(term, order_city):
+            return True
+        center = centers.get(term) if radius else None
+        if (
+            center is not None
+            and lat is not None
+            and lon is not None
+            and flat_distance_km(center, (lat, lon)) <= radius
+        ):
+            return True
+    return False
+
+
+def _radius_note(
+    raw_filter: str,
+    order_city: Optional[str],
+    lat: Optional[float],
+    lon: Optional[float],
+    radius: int,
+    centers: dict,
+) -> Optional[str]:
+    if not radius or not centers or lat is None or lon is None:
+        return None
+    terms = split_city_terms(raw_filter)
+    if any(city_matches(term, order_city) for term in terms):
+        return None  # совпало по названию — пояснять нечего
+    nearest = min(
+        ((flat_distance_km(center, (lat, lon)), term) for term, center in centers.items()),
+        default=None,
+    )
+    if nearest is None or nearest[0] > radius:
+        return None
+    # Название в кавычках: склонять произвольные названия («от Краснодара») нельзя.
+    return f"~{max(1, round(nearest[0]))} км от «{nearest[1]}»"

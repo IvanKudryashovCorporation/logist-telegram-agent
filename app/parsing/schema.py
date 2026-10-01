@@ -9,7 +9,11 @@
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+#: Цена меньше этого — это тысячи: «25» = 25 000 ₽. Междугородний трансфер
+#: дешевле 100 ₽ не бывает, а цен 100–999 ₽ на проде не встречалось вовсе.
+_THOUSANDS_BELOW = Decimal(100)
 
 _RECORD_ORDERS_NAME = "record_orders"
 _RECORD_ORDERS_DESCRIPTION = (
@@ -35,7 +39,18 @@ _ORDER_ITEM_PROPERTIES = {
     },
     "pickup_time": {
         "type": "string",
-        "description": "Время подачи HH:MM (24ч). Пусто, если не указано.",
+        "description": (
+            "Время подачи HH:MM (24ч). Если указан интервал («22-23:00», «с 10 до 11») — "
+            "начало интервала. Пусто, если не указано."
+        ),
+    },
+    "pickup_asap": {
+        "type": "boolean",
+        "description": (
+            "Подача как можно скорее, конкретное время не названо: «сейчас», «в ближайшее "
+            "время», «в течение часа», «через 20 минут», «+30 минут», «ближайшее авто». "
+            "Если названо конкретное время — false."
+        ),
     },
     "from_city": {"type": "string", "description": "Город/населённый пункт отправления."},
     "from_address": {
@@ -66,7 +81,12 @@ _ORDER_ITEM_PROPERTIES = {
     "client_phone": {"type": "string", "description": "Телефон клиента, если указан."},
     "client_price": {
         "type": ["number", "null"],
-        "description": "Стоимость для клиента, руб., если указана. Иначе null (не оставлять поле пустым).",
+        "description": (
+            "Полная стоимость для клиента в рублях, если указана. Иначе null (не оставлять "
+            "поле пустым). Диспетчеры часто пишут в тысячах: «25», «14т», «7.5к», «25+платка» "
+            "означают 25000, 14000, 7500 и 25000 ₽ («+платка» — платная дорога сверху, в "
+            "цену не входит)."
+        ),
     },
     "is_urgent": {"type": "boolean", "description": "Заявка помечена как срочная."},
     "missing_fields": {
@@ -122,7 +142,16 @@ class ParsedOrder(BaseModel):
     client_phone: Optional[str] = None
     client_price: Optional[Decimal] = None
     is_urgent: bool = False
+    pickup_asap: bool = False
     missing_fields: list[str] = []
+
+    @field_validator("client_price")
+    @classmethod
+    def _price_in_thousands(cls, value: Optional[Decimal]) -> Optional[Decimal]:
+        """Страховка поверх промпта: LLM иногда переносит «25+платка» как 25."""
+        if value is not None and 0 < value < _THOUSANDS_BELOW:
+            return value * 1000
+        return value
 
     @property
     def is_complete(self) -> bool:

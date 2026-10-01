@@ -22,7 +22,7 @@
   <div class="kv-grid">
     <div>
       <div class="kv-label">Подача</div>
-      <div class="kv-value">{{ order.pickup_at.strftime("%H:%M, %d.%m") if order.pickup_at else "не указана" }}</div>
+      <div class="kv-value">{{ pickup_label(order) }}</div>
     </div>
     <div>
       <div class="kv-label">Цена</div>
@@ -98,7 +98,7 @@
     {% if is_taken_by_someone_else %}
       <span class="badge" style="background:#fee2e2;color:#dc2626;">Уже взят другим водителем</span>
     {% else %}
-      <form method="post" action="/orders/{{ order.id }}/take-and-contact{% if back %}?back={{ back | urlencode }}{% endif %}">
+      <form id="contactForm" data-message="{{ dispatcher_text }}" method="post" action="/orders/{{ order.id }}/take-and-contact{% if back %}?back={{ back | urlencode }}{% endif %}">
         <button type="submit" class="btn-ok">{{ "Написать диспетчеру" if link else "Взять заказ" }}</button>
       </form>
       {% if is_mine %}
@@ -142,9 +142,10 @@
     <div class="hint" style="margin-top: 12px;">Не удалось определить аккаунт диспетчера — заявка от {{ order.dispatcher_username or order.dispatcher_tg_id or "неизвестного отправителя" }}. Кнопка выше просто возьмёт заказ.</div>
   {% elif not order.contact_username and not order.dispatcher_username %}
     <div class="hint" style="margin-top: 12px;">
-      У диспетчера нет публичного @username — ссылка может не открыться сама в мобильном браузере.
-      Если не сработало, откройте страницу в приложении Telegram (через "поделиться" → "открыть в
-      приложении") или ответьте прямо на объявление в группе, откуда пришла заявка.
+      У диспетчера нет публичного @username — готовый текст в чат подставить нельзя, но при нажатии
+      кнопки он копируется в буфер: просто вставьте его в чат. Ссылка может не открыться сама в
+      мобильном браузере — тогда откройте страницу в приложении Telegram (через "поделиться" →
+      "открыть в приложении") или ответьте прямо на объявление в группе, откуда пришла заявка.
     </div>
   {% endif %}
 </div>

@@ -301,3 +301,21 @@
         );
       });
     })();
+
+    (function () {
+      var form = document.getElementById('contactForm');
+      if (!form) return;
+      var text = form.getAttribute('data-message') || '';
+
+      function copy() {
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).catch(function () {});
+          }
+        } catch (e) { /* буфер недоступен — ссылка с ?text= всё равно сработает */ }
+      }
+
+      // Копируем при отправке формы: если у диспетчера нет @username (или
+      // клиент Telegram не подхватит ?text=), текст останется в буфере.
+      form.addEventListener('submit', copy);
+    })();

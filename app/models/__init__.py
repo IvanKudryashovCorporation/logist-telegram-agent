@@ -10,6 +10,7 @@ from app.models.enums import (
     ParseOutcome,
     PendingStatus,
 )
+from app.models.geo_place import GeoPlace
 from app.models.log import ActionLog
 from app.models.order import Order
 from app.models.parse_stat import ParseStat
@@ -23,6 +24,7 @@ __all__ = [
     "ActionLog",
     "ActorType",
     "Driver",
+    "GeoPlace",
     "Order",
     "OrderStatus",
     "ParseOutcome",
