@@ -17,9 +17,25 @@ from app.web import presenters
 from app.web.queries import DEFAULT_SORT, SORT_LABELS
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+def static_url(name: str) -> str:
+    """Адрес файла из /static с версией по времени изменения.
+
+    Без версии браузер продолжает брать закэшированные style.css/app.js после
+    выкладки: новая разметка с прежними стилями ломает страницу (раздутые
+    иконки, неработающие кнопки).
+    """
+    try:
+        version = int((STATIC_DIR / name).stat().st_mtime)
+    except OSError:
+        version = 0
+    return f"/static/{name}?v={version}"
 
 #: Функции, доступные во всех шаблонах без передачи через контекст.
 TEMPLATE_GLOBALS = {
+    "static_url": static_url,
     "status_labels": ORDER_STATUS_LABELS,
     "sort_labels": SORT_LABELS,
     "radius_choices": RADIUS_CHOICES,

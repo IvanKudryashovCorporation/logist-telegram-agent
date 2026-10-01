@@ -49,8 +49,8 @@
           </div>
 
           {% if order.status.value in ("agreed", "in_progress", "completed") %}
-            {% set badge_colors = {"agreed": "background:#f0fdf4;color:#16a34a;", "in_progress": "background:#eff6ff;color:#1d4ed8;", "completed": "background:#f1f5f9;color:#475569;"} %}
-            <div style="margin-top: 8px;"><span class="badge" style="{{ badge_colors[order.status.value] }}">{{ status_labels[order.status] }}</span></div>
+            {% set badge_classes = {"agreed": "badge-ok", "in_progress": "badge-info", "completed": "badge-muted"} %}
+            <div style="margin-top: 8px;"><span class="badge {{ badge_classes[order.status.value] }}">{{ status_labels[order.status] }}</span></div>
           {% endif %}
 
           <div class="route-block">

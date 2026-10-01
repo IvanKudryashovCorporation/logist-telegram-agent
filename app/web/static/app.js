@@ -319,3 +319,14 @@
       // клиент Telegram не подхватит ?text=), текст останется в буфере.
       form.addEventListener('submit', copy);
     })();
+
+
+    (function () {
+      var toggle = document.getElementById('themeToggle');
+      if (!toggle) return;
+      toggle.addEventListener('click', function () {
+        var next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+        document.documentElement.dataset.theme = next;
+        try { localStorage.setItem('theme', next); } catch (e) { /* без хранилища тема живёт до перезагрузки */ }
+      });
+    })();

@@ -11,17 +11,17 @@
       <div class="detail-subtitle">{{ relative_ago(order.created_at) }}</div>
     </div>
     {% if order.status.value == "needs_clarification" %}
-      <span class="badge" style="background:#fff7ed;color:#d97706;">Часть данных не разобралась</span>
+      <span class="badge badge-warn">Часть данных не разобралась</span>
     {% elif order.status.value == "expired" %}
-      <span class="badge" style="background:#f1f5f9;color:#475569;">Время подачи прошло</span>
+      <span class="badge badge-muted">Время подачи прошло</span>
     {% elif order.status.value == "cancelled" %}
-      <span class="badge" style="background:#f1f5f9;color:#475569;">Снята с ленты</span>
+      <span class="badge badge-muted">Снята с ленты</span>
     {% elif order.status.value == "agreed" %}
-      <span class="badge" style="background:#f0fdf4;color:#16a34a;">Договорились</span>
+      <span class="badge badge-ok">Договорились</span>
     {% elif order.status.value == "in_progress" %}
-      <span class="badge" style="background:#eff6ff;color:#1d4ed8;">В работе</span>
+      <span class="badge badge-info">В работе</span>
     {% elif order.status.value == "completed" %}
-      <span class="badge" style="background:#f1f5f9;color:#475569;">Выполнен</span>
+      <span class="badge badge-muted">Выполнен</span>
     {% endif %}
   </div>
 
@@ -102,7 +102,7 @@
   <div class="actions-row">
     {% set link = dispatcher_link(order) %}
     {% if is_taken_by_someone_else %}
-      <span class="badge" style="background:#fee2e2;color:#dc2626;">Уже взят другим водителем</span>
+      <span class="badge badge-bad">Уже взят другим водителем</span>
     {% else %}
       {% if link %}
         <form id="contactForm" data-message="{{ dispatcher_text }}" method="post" action="/orders/{{ order.id }}/contact{% if back %}?back={{ back | urlencode }}{% endif %}">

@@ -435,8 +435,8 @@ async def test_templates_have_no_large_inline_assets(client):
     """CSS/JS вынесены в /static: иначе их нельзя кэшировать, а HTML раздут."""
     base = (TEMPLATES / "base.html").read_text(encoding="utf-8")
 
-    assert "/static/style.css" in base
-    assert "/static/app.js" in base
+    assert "static_url('style.css')" in base
+    assert "static_url('app.js')" in base
     assert "<style>" not in base, "инлайн-стили должны жить в static/style.css"
     assert "<script>" not in base.replace("<script src=", ""), (
         "инлайн-скрипты должны жить в static/app.js"
@@ -524,3 +524,23 @@ async def test_complete_for_stranger_is_refused(client, make_order, session):
 
     assert response.status_code == 303
     assert (await _reload(session, order.id)).status == OrderStatus.AGREED
+
+
+async def test_feed_has_theme_toggle_and_no_refresh_button(client, make_order):
+    await make_order()
+
+    page = (await client.get("/")).text
+
+    assert 'id="themeToggle"' in page
+    assert 'id="refreshBtn"' not in page
+    # Тема выбирается до отрисовки, иначе при тёмной теме мигает белый экран.
+    assert page.index("/static/theme.js") < page.index("/static/style.css")
+    assert "defer" not in page.split("/static/theme.js")[1].split(">")[0]
+    assert (await client.get("/static/theme.js")).status_code == 200
+
+
+async def test_static_urls_carry_a_version_so_browsers_drop_stale_files(client):
+    page = (await client.get("/")).text
+
+    for name in ("style.css", "app.js", "theme.js"):
+        assert re.search(rf"/static/{re.escape(name)}\?v=\d+", page), name
