@@ -10,7 +10,7 @@ from typing import Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from sqlalchemy import select
 
 from app import geo
@@ -38,7 +38,7 @@ from app.web.presenters import (
     order_bucket,
     redact_raw_text,
 )
-from app.web.templates_env import templates
+from app.web.templates_env import STATIC_DIR, templates
 
 log = logging.getLogger("web.routes")
 
@@ -64,12 +64,18 @@ def _order_url(order_id: int, back: str = "") -> str:
     return f"{url}?back={quote(back, safe='')}" if back else url
 
 
-def _login_redirect(request: Request) -> RedirectResponse:
-    """Карточка заказа/«Мои заказы» требуют входа — уводим на /login с
-    возвратом на ту же страницу после успешной авторизации."""
-    target = request.url.path
-    if request.url.query:
-        target = f"{target}?{request.url.query}"
+def _login_redirect(request: Request, next_url: Optional[str] = None) -> RedirectResponse:
+    """Действие или «Мои заказы» требуют входа — уводим на /login с возвратом
+    после успешной авторизации.
+
+    ``next_url`` обязателен для POST-действий: адрес самого запроса после входа
+    открывается как GET и даёт 405, вернуть нужно на карточку заказа.
+    """
+    target = next_url
+    if target is None:
+        target = request.url.path
+        if request.url.query:
+            target = f"{target}?{request.url.query}"
     return RedirectResponse(f"/login?next={quote(target, safe='')}", status_code=303)
 
 
@@ -93,6 +99,11 @@ def _base_context(request: Request, counts: dict, notice: Optional[str] = None) 
         "is_admin": is_admin(request),
         **counts,
     }
+
+
+@router.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> FileResponse:
+    return FileResponse(STATIC_DIR / "favicon.ico", media_type="image/x-icon")
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -167,20 +178,9 @@ async def my_orders_page(request: Request):
     if login_required:
         return _login_redirect(request)
 
-    driver = None
-    stats = None
     async with SessionLocal() as session:
         orders = await queries.my_orders(session, token)
         counts = await queries.header_counts(session, token)
-        if settings.telegram_login_enabled:
-            telegram_id = logged_in_telegram_id(request)
-            driver = (
-                await session.execute(
-                    select(Driver).where(Driver.telegram_id == telegram_id)
-                )
-            ).scalar_one_or_none()
-            if driver is not None:
-                stats = await queries.driver_stats(session, token, driver.created_at)
 
     today = now_msk_naive().date()
     buckets: dict[str, list] = {"today": [], "tomorrow": [], "later": [], "no_date": []}
@@ -189,8 +189,39 @@ async def my_orders_page(request: Request):
 
     html = templates.TemplateResponse(
         "my_orders.html",
+        _base_context(request, counts, pop_flash(request)) | {"buckets": buckets},
+    )
+    attach_driver_cookie(html, new_token)
+    clear_flash(html)
+    return html
+
+
+@router.get("/profile", response_class=HTMLResponse)
+async def profile_page(request: Request):
+    """Профиль вошедшего водителя: кто он, статистика, последние заказы, выход."""
+    if not settings.telegram_login_enabled:
+        return HTMLResponse("Страница не найдена", status_code=404)
+    token, new_token, login_required = resolve_driver(request)
+    if login_required:
+        return _login_redirect(request)
+
+    async with SessionLocal() as session:
+        driver = (
+            await session.execute(
+                select(Driver).where(Driver.telegram_id == logged_in_telegram_id(request))
+            )
+        ).scalar_one_or_none()
+        if driver is None:
+            # Сессия подписана, а записи водителя нет (удалили вручную) — войти заново.
+            return _login_redirect(request)
+        stats = await queries.driver_stats(session, token, driver.created_at)
+        recent = await queries.recent_driver_orders(session, token)
+        counts = await queries.header_counts(session, token)
+
+    html = templates.TemplateResponse(
+        "profile.html",
         _base_context(request, counts, pop_flash(request))
-        | {"buckets": buckets, "driver": driver, "stats": stats},
+        | {"driver": driver, "stats": stats, "recent": recent},
     )
     attach_driver_cookie(html, new_token)
     clear_flash(html)
@@ -201,14 +232,19 @@ async def my_orders_page(request: Request):
 async def order_detail(request: Request, order_id: int, back: str = ""):
     token, new_token, login_required = resolve_driver(request)
     if login_required:
-        return _login_redirect(request)
+        # Гость: карточку смотреть можно, но ничего не «его». Вход нужен только
+        # для действий (написать диспетчеру, договориться) — см. POST-маршруты.
+        token, new_token = "", None
 
     async with SessionLocal() as session:
         order = await session.get(Order, order_id)
         if order is None:
             return HTMLResponse("Заказ не найден", status_code=404)
         counts = await queries.header_counts(session, token)
-        is_mine = order.taken_by_token == token
+        # bool(token): у гостя токена нет, а у свободного заказа taken_by_token
+        # тоже пуст — без этой проверки гость считался бы «хозяином» любого
+        # свободного заказа и видел бы телефон клиента.
+        is_mine = bool(token) and order.taken_by_token == token
         if order.status in HIDDEN_STATUSES and not is_mine:
             # Протухшая/снятая/закрытая заявка пропала из ленты — по прямой
             # ссылке её тоже не показываем. Свою историю водитель видит.
@@ -263,7 +299,7 @@ async def take_order(request: Request, order_id: int, back: str = ""):
     """«Взять заказ» без перехода в Telegram (оставлено для прямых ссылок)."""
     token, new_token, login_required = resolve_driver(request)
     if login_required:
-        return _login_redirect(request)
+        return _login_redirect(request, _order_url(order_id, back))
 
     async with SessionLocal() as session:
         result = await queries.take_order(session, order_id, token)
@@ -280,7 +316,7 @@ async def contact_dispatcher(request: Request, order_id: int, back: str = ""):
     берётся — «моим» он становится только после «Договорился с диспетчером»."""
     token, new_token, login_required = resolve_driver(request)
     if login_required:
-        return _login_redirect(request)
+        return _login_redirect(request, _order_url(order_id, back))
 
     async with SessionLocal() as session:
         order = await session.get(Order, order_id)
@@ -307,7 +343,7 @@ async def contact_dispatcher(request: Request, order_id: int, back: str = ""):
 async def release_order(request: Request, order_id: int):
     token, new_token, login_required = resolve_driver(request)
     if login_required:
-        return _login_redirect(request)
+        return _login_redirect(request, _order_url(order_id))
 
     async with SessionLocal() as session:
         result = await queries.release_order(session, order_id, token)
@@ -321,7 +357,7 @@ async def agree_order(request: Request, order_id: int, back: str = ""):
     заказах». «Отменить» там откатывает это обратно, если передумали."""
     token, new_token, login_required = resolve_driver(request)
     if login_required:
-        return _login_redirect(request)
+        return _login_redirect(request, _order_url(order_id, back))
 
     async with SessionLocal() as session:
         result = await queries.agree_order(session, order_id, token)
@@ -337,7 +373,7 @@ async def complete_order(request: Request, order_id: int, back: str = ""):
     """«Выполнил заказ»: заказ становится «Выполнен» и идёт в заработок профиля."""
     token, new_token, login_required = resolve_driver(request)
     if login_required:
-        return _login_redirect(request)
+        return _login_redirect(request, _order_url(order_id, back))
 
     async with SessionLocal() as session:
         result = await queries.complete_order(session, order_id, token)
@@ -366,7 +402,7 @@ async def order_feedback(request: Request, order_id: int, back: str = ""):
     """
     token, new_token, login_required = resolve_driver(request)
     if login_required:
-        return _login_redirect(request)
+        return _login_redirect(request, _order_url(order_id, back))
     form = await request.form()
     reason_key = str(form.get("reason") or "").strip()
     reason = FEEDBACK_REASONS.get(reason_key, reason_key)

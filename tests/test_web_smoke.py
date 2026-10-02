@@ -544,3 +544,25 @@ async def test_static_urls_carry_a_version_so_browsers_drop_stale_files(client):
 
     for name in ("style.css", "app.js", "theme.js"):
         assert re.search(rf"/static/{re.escape(name)}\?v=\d+", page), name
+
+
+async def test_brand_icons_are_linked_and_served(client):
+    page = (await client.get("/")).text
+
+    assert 'rel="icon"' in page and "favicon.png" in page
+    assert 'rel="apple-touch-icon"' in page
+    assert 'class="logo"' in page and "logo.png" in page
+
+    for path in ("/static/logo.png", "/static/favicon.png", "/static/apple-touch-icon.png", "/favicon.ico"):
+        response = await client.get(path)
+        assert response.status_code == 200, path
+        assert len(response.content) > 500, path
+
+
+async def test_header_brand_links_to_the_feed_from_any_page(client, make_order):
+    order = await make_order()
+
+    for path in ("/", f"/orders/{order.id}"):
+        page = (await client.get(path)).text
+        assert re.search(r'<a href="/" class="brand"[^>]*>\s*<img class="logo"', page), path
+        assert "Лента заказов</span>" in page, path

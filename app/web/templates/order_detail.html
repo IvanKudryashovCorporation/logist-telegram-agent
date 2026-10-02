@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Заказ #{{ order.id }} — Подача{% endblock %}
+{% block title %}Заказ #{{ order.id }} — Лента заказов{% endblock %}
 {% block content %}
 
 <a href="/{% if back %}?{{ back }}{% endif %}" class="back-link">&larr; ко всем заказам</a>
@@ -128,6 +128,12 @@
       {% endif %}
     {% endif %}
   </div>
+
+  {% if telegram_login_enabled and not is_logged_in and not is_taken_by_someone_else %}
+    <div class="hint" style="margin-top: 12px;">
+      Чтобы написать диспетчеру или договориться о заказе, войдите через Telegram — это займёт несколько секунд.
+    </div>
+  {% endif %}
 
   {% if is_mine %}
     <details class="feedback-block" {{ 'open' if order.has_problem else '' }}>

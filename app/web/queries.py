@@ -491,6 +491,17 @@ async def my_orders(session: AsyncSession, token: str) -> list:
     return list(rows.scalars().all())
 
 
+async def recent_driver_orders(session: AsyncSession, token: str, limit: int = 5) -> list:
+    """Последние заказы водителя для профиля — самые недавно взятые сверху."""
+    rows = await session.execute(
+        select(Order)
+        .where(Order.taken_by_token == token)
+        .order_by(Order.taken_at.is_(None), Order.taken_at.desc(), Order.id.desc())
+        .limit(limit)
+    )
+    return list(rows.scalars().all())
+
+
 async def upsert_driver(session: AsyncSession, payload: dict) -> Driver:
     """Создаёт или обновляет водителя по данным Telegram Login Widget.
 
@@ -522,6 +533,7 @@ async def upsert_driver(session: AsyncSession, payload: dict) -> Driver:
 @dataclass
 class DriverStats:
     taken_total: int
+    active_total: int
     completed_total: int
     earned_total: float
     member_since: object  # datetime — object, чтобы не тащить сюда лишний импорт типов
@@ -542,6 +554,17 @@ async def driver_stats(session: AsyncSession, token: str, member_since) -> Drive
         )
     ).scalar_one()
 
+    active_total = (
+        await session.execute(
+            select(func.count())
+            .select_from(Order)
+            .where(
+                Order.taken_by_token == token,
+                Order.status.in_((OrderStatus.AGREED, OrderStatus.IN_PROGRESS)),
+            )
+        )
+    ).scalar_one()
+
     completed_total, earned_total = (
         await session.execute(
             select(func.count(), func.coalesce(func.sum(Order.client_price), 0))
@@ -555,6 +578,7 @@ async def driver_stats(session: AsyncSession, token: str, member_since) -> Drive
 
     return DriverStats(
         taken_total=taken_total,
+        active_total=active_total,
         completed_total=completed_total,
         earned_total=float(earned_total or 0),
         member_since=member_since,

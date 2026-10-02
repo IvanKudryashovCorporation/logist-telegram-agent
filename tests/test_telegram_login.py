@@ -113,13 +113,44 @@ def telegram_login_on(monkeypatch):
     yield
 
 
-async def test_anonymous_redirected_to_login_for_order_detail(client, make_order, telegram_login_on):
-    order = await make_order()
+async def test_guest_can_open_order_card_without_login(client, make_order, telegram_login_on):
+    order = await make_order(client_phone="+79991234567", dispatcher_username="secret_disp")
 
     response = await client.get(f"/orders/{order.id}")
 
+    assert response.status_code == 200
+    # Гость не «хозяин» свободного заказа: телефон клиента скрыт, а ссылка на
+    # диспетчера в разметку не попадает (её выдаёт только POST после входа).
+    assert "+79991234567" not in response.text
+    assert "t.me/secret_disp" not in response.text
+    assert "войдите через Telegram" in response.text
+    assert ">0<" in response.text.split("Мои заказы", 1)[1][:80]  # у гостя нет «своих»
+
+
+@pytest.mark.parametrize("action", ["contact", "agree", "complete", "take"])
+async def test_guest_action_sends_to_login_and_back_to_the_card(
+    client, make_order, telegram_login_on, action
+):
+    order = await make_order()
+
+    response = await client.post(f"/orders/{order.id}/{action}?back=sort%3Dprice")
+
     assert response.status_code == 303
-    assert response.headers["location"].startswith(f"/login?next=%2Forders%2F{order.id}")
+    # После входа водитель вернётся на карточку (с параметрами ленты), а не на
+    # адрес POST-запроса, который как GET дал бы 405.
+    assert response.headers["location"] == (
+        f"/login?next=%2Forders%2F{order.id}%3Fback%3Dsort%253Dprice"
+    )
+
+
+async def test_after_login_contact_opens_dispatcher_chat(client, make_order, telegram_login_on):
+    order = await make_order(dispatcher_username="real_disp")
+    await client.get("/auth/telegram", params=_signed_params())
+
+    response = await client.post(f"/orders/{order.id}/contact")
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("https://t.me/real_disp?text=")
 
 
 async def test_anonymous_redirected_to_login_for_my_orders(client, telegram_login_on):
@@ -229,9 +260,14 @@ async def test_logout_revokes_access(client, make_order, telegram_login_on):
 
     await client.post("/auth/logout")
 
-    response = await client.get(f"/orders/{order.id}")
-    assert response.status_code == 303
-    assert response.headers["location"].startswith("/login")
+    # Карточка открыта и гостю, а вот действия и «Мои заказы» — снова через вход.
+    assert (await client.get(f"/orders/{order.id}")).status_code == 200
+    action = await client.post(f"/orders/{order.id}/contact")
+    assert action.status_code == 303
+    assert action.headers["location"].startswith("/login")
+    my_page = await client.get("/my")
+    assert my_page.status_code == 303
+    assert my_page.headers["location"].startswith("/login")
 
 
 async def test_driver_stats_count_only_completed_orders_as_earned(
@@ -244,12 +280,62 @@ async def test_driver_stats_count_only_completed_orders_as_earned(
     await client.post(f"/orders/{order_a.id}/agree")
     await client.post(f"/orders/{order_b.id}/agree")
 
-    before = (await client.get("/my")).text
-    assert ">2<" in before  # заказов взял всего
-    assert "2500" not in before.split("заработано")[0].split("profile-stats")[-1]
+    before = (await client.get("/profile")).text
+    assert ">2<" in before  # заказов взял всего (и два в работе)
+    assert "0 ₽" in before  # пока ничего не выполнено — заработка нет
 
     await client.post(f"/orders/{order_b.id}/complete")
 
-    after = (await client.get("/my")).text
+    after = (await client.get("/profile")).text
     assert "2500 ₽" in after  # заработано — только по «Выполнен»
     assert "4000" not in after
+
+
+async def test_guest_profile_redirects_to_login(client, telegram_login_on):
+    response = await client.get("/profile")
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login?next=%2Fprofile"
+
+
+async def test_profile_is_hidden_when_login_is_not_configured(client):
+    assert (await client.get("/profile")).status_code == 404
+
+
+async def test_profile_shows_driver_stats_recent_orders_and_logout(
+    client, make_order, telegram_login_on
+):
+    done = await make_order(from_city="Ялта", to_city="Керчь", price="9000")
+    await client.get(
+        "/auth/telegram", params=_signed_params(first_name="Иван", last_name="Петров")
+    )
+    await client.post(f"/orders/{done.id}/agree")
+    await client.post(f"/orders/{done.id}/complete")
+
+    page = (await client.get("/profile")).text
+
+    assert "Иван Петров" in page and "@ivan_driver" in page
+    assert "На сайте с" in page
+    assert "Ялта → Керчь" in page and f"/orders/{done.id}" in page
+    assert "Выполнен" in page and "9000 ₽" in page
+    assert 'action="/auth/logout"' in page
+
+
+async def test_header_shows_profile_instead_of_logout_after_login(
+    client, make_order, telegram_login_on
+):
+    await make_order()
+    await client.get("/auth/telegram", params=_signed_params())
+
+    feed = (await client.get("/")).text
+
+    assert 'href="/profile"' in feed
+    assert 'class="btn btn-secondary header-logout"' not in feed
+    assert 'action="/auth/logout"' not in feed  # выход теперь внутри профиля
+
+
+async def test_guest_header_has_no_profile_link(client, telegram_login_on):
+    feed = (await client.get("/")).text
+
+    assert 'href="/profile"' not in feed
+    assert "Войти" in feed

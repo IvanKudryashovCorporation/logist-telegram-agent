@@ -29,6 +29,9 @@
       --bad-text: #dc2626;
       --muted-bg: #f1f5f9;
       --muted-text: #475569;
+      --btn-bg: #16181d;
+      --btn-border: #16181d;
+      --btn-text: #ffffff;
       --shadow: rgba(0,0,0,0.1);
       --radius: 14px;
     }
@@ -63,6 +66,9 @@
       --bad-text: #fca5a5;
       --muted-bg: #232a38;
       --muted-text: #cbd5e1;
+      --btn-bg: #3b74e8;
+      --btn-border: #3b74e8;
+      --btn-text: #ffffff;
       --shadow: rgba(0,0,0,0.5);
     }
     * { box-sizing: border-box; }
@@ -93,16 +99,19 @@
       width: 34px;
       height: 34px;
       border-radius: 9px;
-      background: var(--accent);
-      color: #fff;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-weight: 700;
-      font-size: 16px;
+      display: block;
       flex-shrink: 0;
     }
     .app-name { font-weight: 700; font-size: 18px; }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: inherit;
+      text-decoration: none;
+      border-radius: 10px;
+    }
+    .brand:hover .app-name { color: var(--accent); }
     .live-badge {
       margin-left: auto;
       display: flex;
@@ -118,7 +127,14 @@
       box-shadow: 0 0 0 3px rgba(22,163,74,0.15);
     }
     .auth-buttons { display: flex; gap: 8px; }
-    .header-logout { padding: 7px 14px; font-size: 13px; }
+    .header-profile {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 7px 14px;
+      font-size: 13px;
+    }
+    .header-profile svg { width: 15px; height: 15px; }
     .header-controls {
       position: relative;
       display: flex;
@@ -288,12 +304,38 @@
     .empty { color: var(--muted); padding: 40px 0; text-align: center; }
 
     /* ── Профиль водителя ── */
-    .profile-card { padding-bottom: 20px; margin-bottom: 20px; }
+    .detail-card.profile-card { padding-bottom: 20px; margin-bottom: 20px; }
     .profile-header { display: flex; align-items: center; gap: 12px; }
-    .profile-avatar { width: 48px; height: 48px; border-radius: 50%; object-fit: cover; }
+    .profile-avatar { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+    .profile-avatar-fallback {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--accent);
+      color: #fff;
+      font-size: 22px;
+      font-weight: 700;
+    }
+    .profile-orders { display: flex; flex-direction: column; gap: 8px; }
+    .profile-order {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      text-decoration: none;
+    }
+    .profile-order-route { font-weight: 600; font-size: 14.5px; }
+    .profile-order-side { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+    .profile-order-price { font-weight: 700; }
+    .profile-all { display: inline-block; margin-top: 12px; color: var(--accent); text-decoration: none; font-size: 14px; }
+    .profile-logout { display: block; margin-top: 28px; }
     .profile-stats {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(4, 1fr);
       gap: 12px;
       margin-top: 18px;
       padding-top: 18px;
@@ -303,7 +345,7 @@
     .profile-stat-value { font-size: 22px; font-weight: 700; }
     .profile-stat-label { font-size: 12px; color: var(--muted); margin-top: 2px; }
     @media (max-width: 640px) {
-      .profile-stats { grid-template-columns: 1fr; gap: 14px; }
+      .profile-stats { grid-template-columns: repeat(2, 1fr); gap: 14px; }
     }
 
     /* ── Вход через Telegram ── */
@@ -400,9 +442,9 @@
     }
     button, .btn {
       padding: 10px 18px;
-      border: 1px solid var(--text);
-      background: var(--text);
-      color: #fff;
+      border: 1px solid var(--btn-border);
+      background: var(--btn-bg);
+      color: var(--btn-text);
       border-radius: 10px;
       cursor: pointer;
       font-size: 14.5px;

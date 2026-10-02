@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Профиль — Лента заказов{% endblock %}
+{% block content %}
+
+{% set full_name = ((driver.first_name or "") ~ " " ~ (driver.last_name or "")) | trim %}
+{% set badge_classes = {"agreed": "badge-ok", "in_progress": "badge-info", "completed": "badge-muted"} %}
+
+<div class="detail-card profile-card">
+  <div class="profile-header">
+    {% if driver.photo_url %}
+      <img src="{{ driver.photo_url }}" alt="" class="profile-avatar">
+    {% else %}
+      <div class="profile-avatar profile-avatar-fallback">{{ (full_name or driver.display_name)[:1] | upper }}</div>
+    {% endif %}
+    <div>
+      <div class="detail-title">{{ full_name or driver.display_name }}</div>
+      <div class="hint">
+        {% if driver.username and full_name %}@{{ driver.username }} · {% endif %}На сайте с {{ driver.created_at.strftime("%d.%m.%Y") }}
+      </div>
+    </div>
+  </div>
+
+  <div class="profile-stats">
+    <div class="profile-stat">
+      <div class="profile-stat-value">{{ stats.taken_total }}</div>
+      <div class="profile-stat-label">заказов взял всего</div>
+    </div>
+    <div class="profile-stat">
+      <div class="profile-stat-value">{{ stats.active_total }}</div>
+      <div class="profile-stat-label">сейчас в работе</div>
+    </div>
+    <div class="profile-stat">
+      <div class="profile-stat-value">{{ stats.completed_total }}</div>
+      <div class="profile-stat-label">выполнено</div>
+    </div>
+    <div class="profile-stat">
+      <div class="profile-stat-value">{{ "%.0f"|format(stats.earned_total) }} ₽</div>
+      <div class="profile-stat-label">заработано (по выполненным)</div>
+    </div>
+  </div>
+</div>
+
+<div class="section-title today"><span class="section-dot"></span>Последние заказы</div>
+{% if recent %}
+  <div class="profile-orders">
+    {% for order in recent %}
+      <a class="profile-order" href="/orders/{{ order.id }}">
+        <div>
+          <div class="profile-order-route">{{ order.from_city or "?" }} → {{ order.to_city or "?" }}</div>
+          <div class="hint">{{ pickup_label(order) }}</div>
+        </div>
+        <div class="profile-order-side">
+          {% if order.client_price %}<div class="profile-order-price">{{ "%.0f"|format(order.client_price) }} ₽</div>{% endif %}
+          {% if order.status.value in badge_classes %}
+            <span class="badge {{ badge_classes[order.status.value] }}">{{ status_labels[order.status] }}</span>
+          {% endif %}
+        </div>
+      </a>
+    {% endfor %}
+  </div>
+  <a href="/my" class="profile-all">Все мои заказы &rarr;</a>
+{% else %}
+  <div class="hint">Пока нет заказов. Когда вы договоритесь с диспетчером, заказ появится здесь.</div>
+{% endif %}
+
+<form method="post" action="/auth/logout" class="profile-logout">
+  <button type="submit" class="btn btn-secondary">Выйти</button>
+</form>
+
+{% endblock %}

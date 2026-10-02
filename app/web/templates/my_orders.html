@@ -1,31 +1,9 @@
 {% extends "base.html" %}
-{% block title %}Мои заказы — Подача{% endblock %}
+{% block title %}Мои заказы — Лента заказов{% endblock %}
 {% block content %}
 
-{% if driver and stats %}
-  <div class="detail-card profile-card">
-    <div class="profile-header">
-      {% if driver.photo_url %}<img src="{{ driver.photo_url }}" alt="" class="profile-avatar">{% endif %}
-      <div>
-        <div class="detail-title">{{ driver.display_name }}</div>
-        <div class="hint">На сайте с {{ driver.created_at.strftime("%d.%m.%Y") }}</div>
-      </div>
-    </div>
-    <div class="profile-stats">
-      <div class="profile-stat">
-        <div class="profile-stat-value">{{ stats.taken_total }}</div>
-        <div class="profile-stat-label">заказов взял всего</div>
-      </div>
-      <div class="profile-stat">
-        <div class="profile-stat-value">{{ stats.completed_total }}</div>
-        <div class="profile-stat-label">выполнено</div>
-      </div>
-      <div class="profile-stat">
-        <div class="profile-stat-value">{{ "%.0f"|format(stats.earned_total) }} ₽</div>
-        <div class="profile-stat-label">заработано (по выполненным)</div>
-      </div>
-    </div>
-  </div>
+{% if is_logged_in %}
+  <div class="hint">Заказы, по которым вы договорились. Статистика и выход — в <a href="/profile">профиле</a>.</div>
 {% else %}
   <div class="hint">Заказы, которые вы взяли. Хранятся на этом устройстве, без регистрации. Другим водителям они больше не видны.</div>
 {% endif %}

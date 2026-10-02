@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   {# Админка не должна попадать в индекс и не должна наследовать кэш ленты. #}
   <meta name="robots" content="noindex, nofollow">
-  <title>{% block title %}Админка — Подача{% endblock %}</title>
+  <title>{% block title %}Админка — Лента заказов{% endblock %}</title>
   <link rel="stylesheet" href="/static/admin.css">
 </head>
 <body>
   <div class="admin-shell">
     <div class="admin-top">
-      <div class="admin-title">Подача · админка</div>
+      <div class="admin-title">Лента заказов · админка</div>
       <a class="btn" href="/" target="_blank" rel="noopener">Открыть сайт</a>
       <form method="post" action="/admin/logout">
         <button type="submit" class="btn">Выйти</button>

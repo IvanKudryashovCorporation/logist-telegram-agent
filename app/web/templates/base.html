@@ -3,16 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Подача — заказы для водителей{% endblock %}</title>
+  <title>{% block title %}Лента заказов — заказы для водителей{% endblock %}</title>
   {% block head_extra %}{% endblock %}
+  <link rel="icon" type="image/png" sizes="64x64" href="{{ static_url('favicon.png') }}">
+  <link rel="apple-touch-icon" href="{{ static_url('apple-touch-icon.png') }}">
   <script src="{{ static_url('theme.js') }}"></script>
   <link rel="stylesheet" href="{{ static_url('style.css') }}">
 </head>
 <body>
   <header>
     <div class="header-top">
-      <div class="logo">П</div>
-      <div class="app-name">Подача</div>
+      <a href="/" class="brand" aria-label="Лента заказов — на главную">
+        <img class="logo" src="{{ static_url('logo.png') }}" alt="" width="34" height="34">
+        <span class="app-name">Лента заказов</span>
+      </a>
       <div class="live-badge"><span class="live-dot"></span>Live · {{ groups_count or 0 }} групп</div>
       <button type="button" id="themeToggle" class="icon-btn" aria-label="Тёмная тема" title="Тёмная / светлая тема">
         <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
@@ -20,9 +24,10 @@
       </button>
       {% if telegram_login_enabled %}
         {% if is_logged_in %}
-          <form method="post" action="/auth/logout">
-            <button type="submit" class="btn btn-secondary header-logout">Выйти</button>
-          </form>
+          <a href="/profile" class="btn btn-secondary header-profile {{ 'active' if request.url.path == '/profile' else '' }}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/></svg>
+            Профиль
+          </a>
         {% else %}
           <div class="auth-buttons">
             <a href="/login?next={{ request.url.path | urlencode }}" class="btn btn-secondary">Войти</a>

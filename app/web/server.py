@@ -78,7 +78,7 @@ class SecurityHeadersMiddleware:
 
 
 def create_app() -> FastAPI:
-    application = FastAPI(title="Подача — заказы для водителей", **_DOCS_DISABLED)
+    application = FastAPI(title="Лента заказов — заказы для водителей", **_DOCS_DISABLED)
 
     # Порядок важен: middleware, добавленные позже, выполняются раньше.
     application.add_middleware(RateLimitMiddleware)
