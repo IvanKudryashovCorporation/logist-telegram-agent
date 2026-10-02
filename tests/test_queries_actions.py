@@ -384,7 +384,24 @@ async def test_header_counts(session, make_order):
     # Две свободные заявки: третья взята мной, четвёртая скрыта.
     assert counts["lenta_count"] == 2
     assert counts["my_count"] == 1
-    assert counts["groups_count"] == 1
+
+
+async def test_header_groups_count_is_active_work_groups_not_groups_with_orders(session, make_order):
+    from app.models import WorkGroup
+
+    await make_order()  # заказ есть только в одном чате
+    session.add_all(
+        [
+            WorkGroup(tg_chat_id=-1, title="a"),
+            WorkGroup(tg_chat_id=-2, title="b", session_name="acc_crimea"),
+            WorkGroup(tg_chat_id=-3, title="c", is_active=False),
+        ]
+    )
+    await session.commit()
+
+    counts = await queries.header_counts(session, TOKEN_A)
+
+    assert counts["groups_count"] == 2  # неактивная не в счёт, заказы тут ни при чём
 
 
 async def test_my_orders_includes_closed_history(session, make_order):

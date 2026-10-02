@@ -24,7 +24,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.city_aliases import KNOWN_CITIES, city_coords, expand_city_term
 from app.config import settings
 from app.geo import haversine_km
-from app.models import HIDDEN_STATUSES, ActionLog, ActorType, Driver, Order, OrderStatus
+from app.models import (
+    HIDDEN_STATUSES,
+    ActionLog,
+    ActorType,
+    Driver,
+    Order,
+    OrderStatus,
+    WorkGroup,
+)
 from app.timeutil import now_msk_naive, now_utc_naive
 from app.web.filters import Filters
 
@@ -239,8 +247,12 @@ async def header_counts(session: AsyncSession, token: str) -> dict:
             select(func.count()).select_from(Order).where(Order.taken_by_token == token)
         )
     ).scalar_one()
+    # Сколько групп сейчас читает агент — а не из скольких уже пришли заказы:
+    # новые группы молчат, пока в них не появится заявка, и счётчик «застревал».
     groups_count = (
-        await session.execute(select(func.count(func.distinct(Order.source_chat_id))))
+        await session.execute(
+            select(func.count()).select_from(WorkGroup).where(WorkGroup.is_active.is_(True))
+        )
     ).scalar_one()
     return {"lenta_count": lenta_count, "my_count": my_count, "groups_count": groups_count}
 
