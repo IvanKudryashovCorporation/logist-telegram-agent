@@ -4,6 +4,7 @@ from app.services.cleanup import (
     advance_agreed_orders,
     expire_stale_orders,
     prune_old_stats,
+    purge_old_orders,
     run_cleanup_loop,
 )
 from app.services.geocode import geocode_pending, run_geocode_worker
@@ -16,6 +17,7 @@ __all__ = [
     "geocode_pending",
     "notifier",
     "prune_old_stats",
+    "purge_old_orders",
     "run_cleanup_loop",
     "run_geocode_worker",
 ]

@@ -9,6 +9,7 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine, select, text
 
 from app.config import settings
@@ -19,6 +20,13 @@ from app.search import (
     order_search_text,
     pickup_time_key,
     refresh_derived,
+)
+
+# Миграция f3c1a9d47b02 — часть SQLite-истории: на PostgreSQL схема строится из
+# моделей (scripts/init_postgres), и проверять тут нечего.
+pytestmark = pytest.mark.skipif(
+    not settings.database_url.startswith("sqlite"),
+    reason="историческая SQLite-миграция, на PostgreSQL не применяется",
 )
 
 MIGRATION_PATH = (

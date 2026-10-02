@@ -18,7 +18,11 @@ TEST_DB_PATH = Path(__file__).resolve().parent / "_test_logist.db"
 
 os.environ.update(
     {
-        "DATABASE_URL": f"sqlite+aiosqlite:///{TEST_DB_PATH.as_posix()}",
+        # По умолчанию SQLite-файл; чтобы прогнать тесты на PostgreSQL:
+        # TEST_DATABASE_URL=postgresql+asyncpg://user:pass@localhost/logist_test
+        "DB_NULL_POOL": "true",
+        "DATABASE_URL": os.environ.get("TEST_DATABASE_URL")
+        or f"sqlite+aiosqlite:///{TEST_DB_PATH.as_posix()}",
         # Маленький размер страницы — тесты пагинации не должны создавать сотни строк.
         "WEB_PAGE_SIZE": "5",
         "ADMIN_PASSWORD": "test-admin-password",

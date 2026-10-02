@@ -5,8 +5,8 @@ telethon==1.36.0
 SQLAlchemy[asyncio]==2.0.36
 aiosqlite==0.20.0
 alembic==1.14.0
-# для переезда на PostgreSQL — раскомментировать
-# asyncpg==0.30.0
+# драйвер PostgreSQL (прод)
+asyncpg==0.30.0
 
 # Конфигурация
 pydantic==2.10.3

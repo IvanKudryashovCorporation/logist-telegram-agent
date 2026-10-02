@@ -16,6 +16,7 @@ from app.services.cleanup import (
     cleanup_once,
     expire_stale_orders,
     prune_old_stats,
+    purge_old_orders,
 )
 from app.timeutil import now_msk_naive, now_utc_naive
 
@@ -168,12 +169,14 @@ async def test_cleanup_once_reports_both_counters(session, make_order):
 
     result = await cleanup_once()
 
-    assert result == {"expired": 1, "work_started": 0, "auto_completed": 0, "stats_pruned": 1}
+    assert result == {
+        "expired": 1, "work_started": 0, "auto_completed": 0, "orders_purged": 0, "stats_pruned": 1,
+    }
 
 
 async def test_cleanup_on_empty_database_is_quiet(session):
     assert await cleanup_once() == {
-        "expired": 0, "work_started": 0, "auto_completed": 0, "stats_pruned": 0,
+        "expired": 0, "work_started": 0, "auto_completed": 0, "orders_purged": 0, "stats_pruned": 0,
     }
 
 
@@ -320,3 +323,94 @@ async def test_progression_writes_history(session, make_order):
         await session.execute(select(ActionLog.action).where(ActionLog.order_id == order.id))
     ).scalars().all()
     assert "work_started" in actions
+
+
+# --- Удаление давно закрытых заказов, которые никто не брал ------------------
+
+
+async def _closed(make_order, *, status, age_days, taken_by=None):
+    """Заказ в нужном статусе, последнее изменение которого было age_days назад."""
+    order = await make_order(status=status, taken_by_token=taken_by)
+    async with SessionLocal() as db:
+        row = await db.get(Order, order.id)
+        row.updated_at = now_utc_naive() - timedelta(days=age_days)
+        await db.commit()
+    return order
+
+
+async def _exists(order_id: int) -> bool:
+    async with SessionLocal() as db:
+        return (await db.get(Order, order_id)) is not None
+
+
+async def test_old_untaken_closed_orders_are_deleted_with_their_history(session, make_order):
+    expired = await _closed(make_order, status=OrderStatus.EXPIRED, age_days=31)
+    cancelled = await _closed(make_order, status=OrderStatus.CANCELLED, age_days=45)
+    session.add(ActionLog(order_id=expired.id, actor="system", action="expired_by_time"))
+    await session.commit()
+
+    assert await purge_old_orders(retention_days=30) == 2
+
+    assert not await _exists(expired.id) and not await _exists(cancelled.id)
+    async with SessionLocal() as db:
+        left = (
+            await db.execute(select(func.count(ActionLog.id)).where(ActionLog.order_id == expired.id))
+        ).scalar_one()
+    assert left == 0
+
+
+async def test_recent_closed_orders_are_kept(session, make_order):
+    fresh = await _closed(make_order, status=OrderStatus.EXPIRED, age_days=29)
+
+    assert await purge_old_orders(retention_days=30) == 0
+    assert await _exists(fresh.id)
+
+
+async def test_driver_orders_are_never_purged(session, make_order):
+    """На заказах водителей держится статистика профиля — их возраст не важен."""
+    kept = [
+        await _closed(make_order, status=status, age_days=400, taken_by="tg:1")
+        for status in (OrderStatus.AGREED, OrderStatus.IN_PROGRESS, OrderStatus.COMPLETED)
+    ]
+    # Даже отменённый/просроченный, но с владельцем — это чужая история.
+    kept.append(await _closed(make_order, status=OrderStatus.CANCELLED, age_days=400, taken_by="tg:1"))
+
+    assert await purge_old_orders(retention_days=30) == 0
+    for order in kept:
+        assert await _exists(order.id)
+
+
+async def test_open_orders_are_never_purged(session, make_order):
+    open_order = await _closed(make_order, status=OrderStatus.NEW, age_days=400)
+
+    assert await purge_old_orders(retention_days=30) == 0
+    assert await _exists(open_order.id)
+
+
+async def test_purge_can_be_disabled(session, make_order):
+    old = await _closed(make_order, status=OrderStatus.EXPIRED, age_days=400)
+
+    assert await purge_old_orders(retention_days=0) == 0
+    assert await _exists(old.id)
+
+
+async def test_purge_uses_the_configured_retention_by_default(session, make_order):
+    old = await _closed(make_order, status=OrderStatus.CANCELLED, age_days=31)
+
+    assert await purge_old_orders() == 1  # CLOSED_ORDERS_RETENTION_DAYS=30 по умолчанию
+    assert not await _exists(old.id)
+
+
+async def test_stats_do_not_change_after_purge(session, make_order):
+    from app.web import queries
+
+    await _closed(make_order, status=OrderStatus.COMPLETED, age_days=100, taken_by="tg:7")
+    await _closed(make_order, status=OrderStatus.EXPIRED, age_days=100)
+    before = await queries.driver_stats(session, "tg:7", None)
+
+    await purge_old_orders(retention_days=30)
+
+    after = await queries.driver_stats(session, "tg:7", None)
+    assert (after.taken_total, after.completed_total, after.earned_total) == (
+        before.taken_total, before.completed_total, before.earned_total,
+    )

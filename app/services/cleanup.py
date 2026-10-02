@@ -39,6 +39,8 @@ log = logging.getLogger("app.cleanup")
 
 #: Сколько заказов переводим в EXPIRED за один проход (защита от длинной транзакции).
 _EXPIRE_BATCH = 500
+#: Сколько закрытых заказов удаляем за один проход (хвост добирается следующими).
+_PURGE_BATCH = 500
 
 
 async def expire_stale_orders(
@@ -202,6 +204,45 @@ async def advance_agreed_orders(
     return started, completed
 
 
+async def purge_old_orders(*, retention_days: Optional[int] = None) -> int:
+    """Удаляет насовсем давно закрытые заказы, которые никто не брал.
+
+    Под удаление попадают только ``EXPIRED`` и ``CANCELLED`` без владельца
+    (``taken_by_token IS NULL``), у которых последнее изменение старше
+    ``retention_days``. Всё, что взял водитель (договорился / в работе /
+    выполнен), остаётся навсегда: на этом держится статистика профиля.
+    Вместе с заказом удаляется его история действий. Возвращает число удалённых.
+    """
+    days = settings.closed_orders_retention_days if retention_days is None else retention_days
+    if not days or days <= 0:
+        return 0
+    cutoff = now_utc_naive() - timedelta(days=days)
+
+    async with SessionLocal() as session:
+        ids = list(
+            (
+                await session.execute(
+                    select(Order.id)
+                    .where(
+                        Order.status.in_((OrderStatus.EXPIRED, OrderStatus.CANCELLED)),
+                        Order.taken_by_token.is_(None),
+                        Order.updated_at < cutoff,
+                    )
+                    .order_by(Order.id.asc())
+                    .limit(_PURGE_BATCH)
+                )
+            ).scalars().all()
+        )
+        if not ids:
+            return 0
+        await session.execute(delete(ActionLog).where(ActionLog.order_id.in_(ids)))
+        await session.execute(delete(Order).where(Order.id.in_(ids)))
+        await session.commit()
+
+    log.info("Удалено давно закрытых заказов: %s (старше %s дн.)", len(ids), days)
+    return len(ids)
+
+
 async def prune_old_stats(*, retention_days: Optional[int] = None) -> int:
     """Удаляет старые строки ``parse_stats``, чтобы таблица не росла вечно."""
     days = settings.stats_retention_days if retention_days is None else retention_days
@@ -223,11 +264,13 @@ async def cleanup_once() -> dict[str, int]:
     """Один проход обслуживания — его же вызывает scripts/cleanup_orders.py."""
     expired = await expire_stale_orders()
     started, completed = await advance_agreed_orders()
+    purged = await purge_old_orders()
     pruned = await prune_old_stats()
     return {
         "expired": expired,
         "work_started": started,
         "auto_completed": completed,
+        "orders_purged": purged,
         "stats_pruned": pruned,
     }
 

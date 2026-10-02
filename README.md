@@ -9,7 +9,7 @@
 ## Стек
 
 Python 3.10+ · Telethon (юзербот-сессия, только чтение групп) · SQLAlchemy 2
-(async) + Alembic · SQLite локально (PostgreSQL в проде — меняется одной
+(async) + Alembic · PostgreSQL в проде, SQLite локально и в тестах (переключается
 строкой `DATABASE_URL`) · Claude API для разбора текста заявки · FastAPI —
 публичный сайт со списком заказов.
 
@@ -80,6 +80,28 @@ copy .env.example .env
 .venv\Scripts\python.exe -m alembic upgrade head
 ```
 
+### PostgreSQL (прод)
+
+С 2026-10-02 прод работает на PostgreSQL 16 на том же VPS (слушает только
+`127.0.0.1`, база `logist`, `DATABASE_URL=postgresql+asyncpg://logist:...@127.0.0.1/logist`).
+SQLite остаётся для разработки и тестов — код один и тот же.
+
+* **Новая база с нуля:** `python -m scripts.init_postgres` строит схему из моделей и
+  делает `alembic stamp head`. Цепочка старых миграций писалась под SQLite
+  (batch-режим, `= 1` для булевых) и на PostgreSQL не воспроизводится.
+* **Новые миграции** пишите переносимо (`sa.true()/sa.false()`, без SQLite-специфики) и
+  проверяйте на обоих движках.
+* **Перенос данных из SQLite** (агента и сайт остановить):
+  `python -m scripts.sqlite_to_postgres --sqlite ./logist.db [--truncate]` — копирует
+  все таблицы с теми же id, выставляет счётчики и сверяет количества строк.
+* **Бэкап:** `deploy/backup-db.sh` делает `pg_dump | gzip` в `/root/backups` и хранит
+  14 дней; cron `15 3 * * *`. Восстановление: `gunzip -c файл.sql.gz | psql -d база`.
+* **Время** в БД везде наивное UTC: колонки `timestamp without time zone`, сессия
+  с `timezone=UTC` (см. `app/db/base.py`).
+* **Тесты на PostgreSQL:** `TEST_DATABASE_URL=postgresql+asyncpg://user:pass@host/logist_test`
+  `python -m pytest` (пул отключается автоматически; 11 тестов исторической
+  SQLite-миграции пропускаются).
+
 ## Запуск агента
 
 ```bash
@@ -139,6 +161,25 @@ python -m scripts.geo_places set "с. Титовка" 44.5 34.1   # задать
 | Обслуживание данных | Переводит заявки с прошедшим временем подачи в `EXPIRED` (иначе счётчики расходятся с лентой) и чистит старые `parse_stats`. Взятые водителем заказы не трогает. | `EXPIRE_GRACE_HOURS`, `EXPIRE_POLL_MINUTES`, `STATS_RETENTION_DAYS` |
 | Геокодер | Проставляет заказам координаты для радиуса в фильтрах и догоняет старые заказы. Недоступность Nominatim заказ не ломает — он остаётся без координат. | `GEOCODING_ENABLED`, `GEOCODER_USER_AGENT`, `GEOCODE_POLL_SECONDS`, `GEOCODE_BATCH` |
 | Уведомления владельцу | Алерт в Telegram после `NOTIFY_ERROR_THRESHOLD` ошибок разбора подряд и сообщение о старте агента. | `NOTIFY_CHAT_ID`, `NOTIFY_ON_START`, `NOTIFY_ERROR_THRESHOLD` |
+
+## Сторож и алерты
+
+`scripts/watchdog.py` запускается cron'ом раз в 5 минут **отдельно от агента** (иначе
+при падении агента предупреждать было бы некому) и пишет вам в Telegram от имени бота.
+Проверяет: службы (агент, сайт, Caddy, PostgreSQL), ответ сайта, что агент читает группы
+(за 3 часа есть хотя бы одно сообщение), число ошибок LLM за час, «застрявшие» сообщения
+очереди, свежесть бэкапа (младше 26 ч) и место на диске.
+
+О проблеме сообщает после двух проверок подряд (деплой с перезапуском тревогу не
+поднимает), напоминает раз в 6 часов и пишет «восстановлено», когда всё починилось.
+
+```bash
+python -m scripts.watchdog --check   # показать результаты проверок, ничего не отправляя
+python -m scripts.watchdog --test    # отправить тестовое сообщение
+# cron: */5 * * * * cd /root/logist-agent && .venv/bin/python -m scripts.watchdog >> /root/backups/watchdog.log 2>&1
+```
+
+Настройки — `ALERT_CHAT_ID` и `WATCHDOG_*` в `.env` (см. `.env.example`).
 
 ## Админка владельца — /admin
 
@@ -219,7 +260,7 @@ python -m scripts.join_work_groups <файл> --limit 15   # вступить в
 ## Тесты и линтер
 
 ```bash
-python -m pytest          # 232 теста, отдельная БД tests/_test_logist.db
+python -m pytest          # отдельная БД tests/_test_logist.db (SQLite)
 python -m ruff check .    # правила — в ruff.toml
 ```
 

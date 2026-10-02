@@ -24,8 +24,8 @@ from sqlalchemy import func, select
 
 from app.config import settings
 from app.db.base import SessionLocal
-from app.models import OPEN_STATUSES, Order, ParseStat
-from app.services.cleanup import expire_stale_orders, prune_old_stats
+from app.models import OPEN_STATUSES, Order, OrderStatus, ParseStat
+from app.services.cleanup import expire_stale_orders, prune_old_stats, purge_old_orders
 from app.timeutil import now_msk_naive, now_utc_naive
 
 
@@ -48,6 +48,18 @@ async def _preview(grace_hours: int, retention_days: int) -> None:
                 select(func.count(Order.id)).where(Order.status.in_(OPEN_STATUSES))
             )
         ).scalar_one()
+        orders_cutoff = now_utc_naive() - timedelta(days=settings.closed_orders_retention_days)
+        to_purge = 0
+        if settings.closed_orders_retention_days > 0:
+            to_purge = (
+                await session.execute(
+                    select(func.count(Order.id)).where(
+                        Order.status.in_((OrderStatus.EXPIRED, OrderStatus.CANCELLED)),
+                        Order.taken_by_token.is_(None),
+                        Order.updated_at < orders_cutoff,
+                    )
+                )
+            ).scalar_one()
         old_stats = 0
         if retention_days > 0:
             stats_cutoff = now_utc_naive() - timedelta(days=retention_days)
@@ -59,6 +71,10 @@ async def _preview(grace_hours: int, retention_days: int) -> None:
 
     print(f"Открытых заказов сейчас:      {total_open}")
     print(f"Станут EXPIRED:               {stale}  (подача раньше {cutoff:%d.%m.%Y %H:%M} МСК)")
+    print(
+        f"Удалится закрытых заказов:    {to_purge}  "
+        f"(без владельца, старше {settings.closed_orders_retention_days} дн.)"
+    )
     print(f"Удалится строк parse_stats:   {old_stats}  (старше {retention_days} дн.)")
     print("\nСухой режим — база не изменена. Для выполнения уберите --dry-run.")
 
@@ -71,8 +87,10 @@ async def main(grace_hours: int, retention_days: int, dry_run: bool) -> None:
     # Не cleanup_once(): он берёт пороги из settings, а здесь их мог переопределить
     # вызывающий через CLI — иначе флаг --grace-hours работал бы только в dry-run.
     expired = await expire_stale_orders(grace_hours=grace_hours)
+    purged = await purge_old_orders()
     pruned = await prune_old_stats(retention_days=retention_days)
     print(f"Переведено в EXPIRED:      {expired}")
+    print(f"Удалено закрытых заказов:  {purged}")
     print(f"Удалено строк parse_stats: {pruned}")
 
 
