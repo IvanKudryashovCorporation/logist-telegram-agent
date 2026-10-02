@@ -5,8 +5,9 @@
     python -m scripts.backfill_orders --limit 20
     python -m scripts.backfill_orders --group <id_из_manage_work_groups>
 
-Не запускать одновременно с работающим main.py — конфликт за файл сессии,
-сначала остановите агента (systemctl stop logist-agent).
+Не запускать одновременно с работающим main.py — конфликт за файл сессии
+(и основной, и дополнительных аккаунтов), сначала остановите агента
+(systemctl stop logist-agent).
 """
 
 import argparse
@@ -23,8 +24,14 @@ from app.telegram.work_group import upsert_order_text
 
 
 async def backfill(limit: int, only_group_id: int | None) -> None:
-    client = build_client()
-    await client.start()
+    clients: dict = {}
+
+    async def client_for(session_name):
+        """Клиент аккаунта, которым читается группа (основной или дополнительный)."""
+        if session_name not in clients:
+            clients[session_name] = build_client(session_name)
+            await clients[session_name].start()
+        return clients[session_name]
 
     async with SessionLocal() as session:
         stmt = select(WorkGroup).where(WorkGroup.is_active.is_(True))
@@ -34,11 +41,11 @@ async def backfill(limit: int, only_group_id: int | None) -> None:
 
     if not groups:
         print("Нет активных рабочих групп.")
-        await client.disconnect()
         return
 
     for group in groups:
         print(f"\n--- {group.title} ---")
+        client = await client_for(group.session_name)
         messages = await client.get_messages(group.tg_chat_id, limit=limit)
         for message in reversed(messages):  # от старых к новым, как приходили бы в реале
             text = (message.raw_text or "").strip()
@@ -77,7 +84,8 @@ async def backfill(limit: int, only_group_id: int | None) -> None:
             else:
                 print(f"  [{message.id}] заказы #{', #'.join(map(str, order_ids))} (несколько в одном сообщении)")
 
-    await client.disconnect()
+    for opened in clients.values():
+        await opened.disconnect()
 
 
 if __name__ == "__main__":

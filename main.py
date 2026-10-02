@@ -25,6 +25,7 @@ from app.config import settings
 from app.db.base import SessionLocal
 from app.models import WorkGroup
 from app.services import notifier, run_cleanup_loop, run_geocode_worker
+from app.telegram.accounts import active_groups_by_session
 from app.telegram.client import build_client
 from app.telegram.queue_worker import run_queue_worker
 from app.telegram.work_group import register_work_group_handlers
@@ -63,18 +64,23 @@ async def _bootstrap_work_group(client) -> None:
     log.info("Перенёс WORK_GROUP_CHAT_ID из .env в список рабочих групп.")
 
 
-async def _active_work_group_ids() -> list[int]:
-    async with SessionLocal() as session:
-        return list(
-            (
-                await session.execute(
-                    select(WorkGroup.tg_chat_id).where(WorkGroup.is_active.is_(True))
-                )
-            ).scalars().all()
+async def _start_extra_client(session_name: str):
+    """Поднимает клиент дополнительного аккаунта. Без интерактивной авторизации:
+    если сессия не авторизована, службе нечего спрашивать — пропускаем её группы."""
+    extra = build_client(session_name)
+    await extra.connect()
+    if not await extra.is_user_authorized():
+        log.error(
+            "Сессия %s не авторизована (scripts.auth_account) — её группы пропущены.", session_name
         )
+        await extra.disconnect()
+        return None
+    me = await extra.get_me()
+    log.info("Дополнительный аккаунт %s: %s (id=%s)", session_name, me.first_name, me.id)
+    return extra
 
 
-def _start_background(client, stop_event: asyncio.Event) -> list[asyncio.Task]:
+def _start_background(client, stop_event: asyncio.Event, client_for=None) -> list[asyncio.Task]:
     """Запускает фоновые задачи. Каждая сама переживает свои ошибки."""
     tasks: list[asyncio.Task] = [
         asyncio.create_task(run_cleanup_loop(stop_event), name="cleanup"),
@@ -82,7 +88,9 @@ def _start_background(client, stop_event: asyncio.Event) -> list[asyncio.Task]:
     ]
     if settings.queue_enabled:
         tasks.append(
-            asyncio.create_task(run_queue_worker(client, stop_event), name="queue_worker")
+            asyncio.create_task(
+                run_queue_worker(client, stop_event, client_for=client_for), name="queue_worker"
+            )
         )
     else:
         log.warning(
@@ -100,16 +108,30 @@ async def main() -> None:
     log.info("Агент запущен от лица %s (id=%s)", me.first_name, me.id)
 
     await _bootstrap_work_group(client)
-    work_group_ids = await _active_work_group_ids()
+    groups = await active_groups_by_session()
 
-    if not work_group_ids:
+    clients = {None: client}
+    chat_clients: dict[int, object] = {}
+    for session_name, chat_ids in groups.items():
+        owner = clients.get(session_name)
+        if owner is None:
+            owner = await _start_extra_client(session_name)
+            if owner is None:
+                continue
+            clients[session_name] = owner
+        register_work_group_handlers(owner, list(chat_ids))
+        chat_clients.update({chat_id: owner for chat_id in chat_ids})
+
+    if not chat_clients:
         log.warning(
             "Нет ни одной активной рабочей группы — заявки читать неоткуда. "
             "Добавьте: python -m scripts.manage_work_groups add <chat_id_или_@username>"
         )
     else:
-        register_work_group_handlers(client, list(work_group_ids))
-        log.info("Слушаю заявки в %s рабочих группах.", len(work_group_ids))
+        log.info(
+            "Слушаю заявки в %s рабочих группах (аккаунтов: %s).", len(chat_clients), len(clients)
+        )
+    work_group_ids = list(chat_clients)
 
     # Уведомления владельца ходят через тот же Telethon-клиент, поэтому
     # подключаются только после client.start().
@@ -122,11 +144,13 @@ async def main() -> None:
         )
 
     stop_event = asyncio.Event()
-    background = _start_background(client, stop_event)
+    background = _start_background(
+        client, stop_event, client_for=lambda chat_id: chat_clients.get(chat_id, client)
+    )
 
     log.info("Ожидание событий. Ctrl+C для остановки.")
     try:
-        await client.run_until_disconnected()
+        await asyncio.gather(*(c.run_until_disconnected() for c in clients.values()))
     finally:
         stop_event.set()
         for task in background:
@@ -135,6 +159,9 @@ async def main() -> None:
         # и незакрытого соединения. Исключения глотим — мы уже выходим.
         await asyncio.gather(*background, return_exceptions=True)
         notifier.detach()
+        for extra_name, extra_client in clients.items():
+            if extra_name is not None:
+                await extra_client.disconnect()
         log.info("Фоновые задачи остановлены.")
 
 

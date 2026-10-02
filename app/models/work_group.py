@@ -5,6 +5,8 @@
 сколько угодно без перезапуска с новым .env, только через scripts.manage_work_groups.
 """
 
+from typing import Optional
+
 from sqlalchemy import BigInteger, Boolean, String
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,6 +22,10 @@ class WorkGroup(Base, TimestampMixin):
     title: Mapped[str] = mapped_column(String(256), nullable=False)
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    #: Каким Telegram-аккаунтом читается группа: имя файла сессии рядом с
+    #: проектом (``acc_crimea`` -> ``acc_crimea.session``). NULL — основная
+    #: сессия агента (TG_SESSION_NAME).
+    session_name: Mapped[Optional[str]] = mapped_column(String(64))
 
     def __repr__(self) -> str:
         return f"<WorkGroup {self.title}>"

@@ -1,10 +1,13 @@
 """Управление списком рабочих групп диспетчеров, откуда агент парсит заявки (Этап 1).
 
     python -m scripts.manage_work_groups list
-    python -m scripts.manage_work_groups add <chat_id_или_@username_или_ссылка> ["<title>"]
+    python -m scripts.manage_work_groups add <chat_id_или_@username_или_ссылка> ["<title>"] [--session NAME]
     python -m scripts.manage_work_groups remove <id>
     python -m scripts.manage_work_groups deactivate <id>
     python -m scripts.manage_work_groups activate <id>
+
+--session NAME — читать группу дополнительным аккаунтом (файл NAME.session,
+создаётся scripts.auth_account); без него группа читается основной сессией.
 
 Если title не указан при add — возьмём название чата из Telegram (нужна
 рабочая сессия, см. scripts.auth_telegram). Для чата по числовому id без
@@ -28,10 +31,11 @@ async def list_groups() -> None:
             return
         for g in groups:
             status = "активна" if g.is_active else "выключена"
-            print(f"#{g.id:<3} {g.tg_chat_id:<16} {g.title:<40} {status}")
+            account = g.session_name or "основной"
+            print(f"#{g.id:<3} {g.tg_chat_id:<16} {g.title:<40} {status:<10} {account}")
 
 
-async def add_group(chat_ref: str, title: str | None) -> None:
+async def add_group(chat_ref: str, title: str | None, session_name: str | None = None) -> None:
     tg_chat_id: int
     resolved_title = title
 
@@ -44,7 +48,7 @@ async def add_group(chat_ref: str, title: str | None) -> None:
         # @username или ссылка на чат — резолвим через живую Telethon-сессию.
         from app.telegram.client import build_client
 
-        client = build_client()
+        client = build_client(session_name)
         await client.start()
         entity = await client.get_entity(chat_ref)
         from telethon.utils import get_peer_id
@@ -60,7 +64,11 @@ async def add_group(chat_ref: str, title: str | None) -> None:
         if existing is not None:
             print(f"Уже добавлена как #{existing.id}: {existing.title}")
             return
-        group = WorkGroup(tg_chat_id=tg_chat_id, title=resolved_title or str(tg_chat_id))
+        group = WorkGroup(
+            tg_chat_id=tg_chat_id,
+            title=resolved_title or str(tg_chat_id),
+            session_name=session_name,
+        )
         session.add(group)
         await session.commit()
         print(f"Добавлена группа #{group.id}: {group.title} (tg_chat_id={tg_chat_id})")
@@ -97,6 +105,7 @@ def main() -> None:
     add_parser = sub.add_parser("add")
     add_parser.add_argument("chat_ref", help="tg_chat_id (число) или @username / ссылка на чат")
     add_parser.add_argument("title", nargs="?", default=None)
+    add_parser.add_argument("--session", default=None, help="имя сессии дополнительного аккаунта")
 
     remove_parser = sub.add_parser("remove")
     remove_parser.add_argument("group_id", type=int)
@@ -112,7 +121,7 @@ def main() -> None:
     if args.command == "list":
         asyncio.run(list_groups())
     elif args.command == "add":
-        asyncio.run(add_group(args.chat_ref, args.title))
+        asyncio.run(add_group(args.chat_ref, args.title, args.session))
     elif args.command == "remove":
         asyncio.run(remove_group(args.group_id))
     elif args.command == "deactivate":

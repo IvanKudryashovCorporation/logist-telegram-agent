@@ -12,7 +12,7 @@
 
 import asyncio
 import logging
-from typing import Optional
+from typing import Callable, Optional
 
 from telethon import TelegramClient
 
@@ -111,17 +111,32 @@ async def _finish(pending_id: int, *, ok: bool, error: Optional[str] = None,
             )
 
 
-async def process_due_once(client: TelegramClient, *, limit: int = 10) -> int:
-    """Один проход по сообщениям с наступившим сроком. Возвращает число обработанных."""
+#: Выбирает клиента, под чьим аккаунтом читается чат (см. app.telegram.accounts).
+ClientPicker = Callable[[int], TelegramClient]
+
+
+async def process_due_once(
+    client: TelegramClient, *, limit: int = 10, client_for: Optional[ClientPicker] = None
+) -> int:
+    """Один проход по сообщениям с наступившим сроком. Возвращает число обработанных.
+
+    ``client_for`` — если группы читаются разными аккаунтами, сообщение надо
+    перечитывать тем клиентом, у которого есть доступ к чату.
+    """
     async with SessionLocal() as session:
         due = await pending_queue.fetch_due(session, limit=limit)
-        due_ids = [item.id for item in due]
-    for pending_id in due_ids:
-        await process_one(client, pending_id)
-    return len(due_ids)
+        due_items = [(item.id, item.chat_id) for item in due]
+    for pending_id, chat_id in due_items:
+        await process_one(client_for(chat_id) if client_for else client, pending_id)
+    return len(due_items)
 
 
-async def run_queue_worker(client: TelegramClient, stop_event: asyncio.Event) -> None:
+async def run_queue_worker(
+    client: TelegramClient,
+    stop_event: asyncio.Event,
+    *,
+    client_for: Optional[ClientPicker] = None,
+) -> None:
     """Фоновый цикл воркера."""
     if not settings.queue_enabled:
         log.info("Очередь повторного разбора отключена (QUEUE_ENABLED=false)")
@@ -131,7 +146,7 @@ async def run_queue_worker(client: TelegramClient, stop_event: asyncio.Event) ->
     log.info("Воркер очереди разбора запущен: опрос раз в %s с", interval)
     while not stop_event.is_set():
         try:
-            processed = await process_due_once(client)
+            processed = await process_due_once(client, client_for=client_for)
             if processed:
                 depth = await pending_queue.queue_depth()
                 log.info("Очередь разбора: обработано %s, состояние %s", processed, depth)
