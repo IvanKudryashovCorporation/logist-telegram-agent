@@ -14,6 +14,7 @@ import asyncio
 from sqlalchemy import func, or_, select, update
 
 from app import geo
+from app.city_aliases import city_key
 from app.db.base import SessionLocal
 from app.models import GeoPlace, Order
 from app.models.geo_place import SOURCE_MANUAL, STATUS_MANUAL, STATUS_NOT_FOUND
@@ -68,7 +69,14 @@ async def set_place(name: str, lat: float, lon: float) -> None:
             update(Order)
             .where(
                 Order.geo_checked_at.is_not(None),
-                or_(Order.from_lat.is_(None), Order.to_lat.is_(None)),
+                or_(
+                    Order.from_lat.is_(None),
+                    Order.to_lat.is_(None),
+                    # Заказы с этим названием пересчитываем и тогда, когда им раньше
+                    # поставили неверные координаты (как «Мрии» под Киевом).
+                    Order.from_city_key == city_key(clean),
+                    Order.to_city_key == city_key(clean),
+                ),
             )
             .values(geo_checked_at=None, updated_at=Order.updated_at)
             .execution_options(synchronize_session=False)

@@ -15,6 +15,7 @@ from app.services.cleanup import (
     advance_agreed_orders,
     cleanup_once,
     expire_stale_orders,
+    prune_old_notifications,
     prune_old_stats,
     purge_old_orders,
 )
@@ -170,13 +171,15 @@ async def test_cleanup_once_reports_both_counters(session, make_order):
     result = await cleanup_once()
 
     assert result == {
-        "expired": 1, "work_started": 0, "auto_completed": 0, "orders_purged": 0, "stats_pruned": 1,
+        "expired": 1, "work_started": 0, "auto_completed": 0, "orders_purged": 0,
+        "notifications_pruned": 0, "stats_pruned": 1,
     }
 
 
 async def test_cleanup_on_empty_database_is_quiet(session):
     assert await cleanup_once() == {
-        "expired": 0, "work_started": 0, "auto_completed": 0, "orders_purged": 0, "stats_pruned": 0,
+        "expired": 0, "work_started": 0, "auto_completed": 0, "orders_purged": 0,
+        "notifications_pruned": 0, "stats_pruned": 0,
     }
 
 
@@ -414,3 +417,24 @@ async def test_stats_do_not_change_after_purge(session, make_order):
     assert (after.taken_total, after.completed_total, after.earned_total) == (
         before.taken_total, before.completed_total, before.earned_total,
     )
+
+
+async def test_old_notification_log_rows_are_pruned(session, make_order):
+    from app.models import OrderSubscription, SubscriptionNotification
+
+    sub = OrderSubscription(telegram_id=1, params={}, since=now_utc_naive())
+    session.add(sub)
+    await session.commit()
+    session.add_all(
+        [
+            SubscriptionNotification(subscription_id=sub.id, order_id=1, sent_at=now_utc_naive() - timedelta(days=10)),
+            SubscriptionNotification(subscription_id=sub.id, order_id=2, sent_at=now_utc_naive() - timedelta(days=1)),
+        ]
+    )
+    await session.commit()
+
+    assert await prune_old_notifications(keep_days=7) == 1
+
+    async with SessionLocal() as db:
+        left = (await db.execute(select(func.count(SubscriptionNotification.id)))).scalar_one()
+    assert left == 1

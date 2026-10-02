@@ -111,7 +111,6 @@ def create_app() -> FastAPI:
         payload = {
             "status": "ok" if database_ok else "degraded",
             "database": database_ok,
-            "admin_enabled": settings.admin_enabled,
             "rate_limit": settings.rate_limit_enabled,
         }
         if error:

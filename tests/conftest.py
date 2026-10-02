@@ -25,7 +25,8 @@ os.environ.update(
         or f"sqlite+aiosqlite:///{TEST_DB_PATH.as_posix()}",
         # Маленький размер страницы — тесты пагинации не должны создавать сотни строк.
         "WEB_PAGE_SIZE": "5",
-        "ADMIN_PASSWORD": "test-admin-password",
+        # id, под которым тесты входят через Telegram (см. tests/test_telegram_login.py)
+        "ADMIN_TELEGRAM_IDS": "555000111",
         "SESSION_SECRET": "test-session-secret",
         "RATE_LIMIT_ENABLED": "false",
         "MASK_CLIENT_CONTACTS": "true",

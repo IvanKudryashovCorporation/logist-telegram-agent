@@ -24,7 +24,13 @@ from sqlalchemy import select
 from app.config import settings
 from app.db.base import SessionLocal
 from app.models import WorkGroup
-from app.services import notifier, run_cleanup_loop, run_geocode_worker
+from app.services import (
+    notifier,
+    run_cleanup_loop,
+    run_geocode_worker,
+    run_routing_worker,
+    run_subscription_worker,
+)
 from app.telegram.accounts import active_groups_by_session
 from app.telegram.client import build_client
 from app.telegram.queue_worker import run_queue_worker
@@ -85,6 +91,8 @@ def _start_background(client, stop_event: asyncio.Event, client_for=None) -> lis
     tasks: list[asyncio.Task] = [
         asyncio.create_task(run_cleanup_loop(stop_event), name="cleanup"),
         asyncio.create_task(run_geocode_worker(stop_event), name="geocode"),
+        asyncio.create_task(run_routing_worker(stop_event), name="routing"),
+        asyncio.create_task(run_subscription_worker(stop_event), name="subscriptions"),
     ]
     if settings.queue_enabled:
         tasks.append(

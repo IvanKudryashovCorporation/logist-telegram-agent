@@ -214,6 +214,69 @@ def pick(candidates: list[Candidate], near: Optional[Coords] = None) -> Optional
     return min(candidates, key=lambda c: haversine_km(c.coords, near))
 
 
+#: Если адрес — сам населённый пункт и он дальше этого от найденной деревни,
+#: верим адресу, а не названию (см. :func:`refine_by_address`).
+ADDRESS_OVERRIDE_KM = 100
+
+#: Типы «мелких» мест: только им адрес может возразить. Город из справочника
+#: или областной центр («Краснодар», адрес «Центральный») не трогаем.
+_SMALL_PLACE_KINDS = frozenset({"village", "hamlet", "locality", "isolated_dwelling", "suburb"})
+
+#: Адрес, который заведомо не название населённого пункта.
+_NOT_A_PLACE_ADDRESS_RE = re.compile(
+    r"\d|ул\.|улица|пр-т|пр\.|проспект|пер\.|переулок|шоссе|наб\.|набережная|бул\.|бульвар|"
+    r"площадь|пл\.|аэропорт|вокзал|кпп|порт|центр|отель|гостиниц|санатор|пансионат|"
+    r"тц|трц|трк|рынок|больниц|школ|гер\.|героев|дом|д\.",
+    re.IGNORECASE,
+)
+
+
+def _same_name(candidate: "Candidate", name: str) -> bool:
+    """Первый компонент названия кандидата («Оползневое, Симеизский…») == имя."""
+    head = candidate.name.split(",")[0]
+    return city_key(head) == city_key(name)
+
+
+async def refine_by_address(
+    session: AsyncSession,
+    chosen: Optional["Candidate"],
+    address: Optional[str],
+    near: Optional[Coords] = None,
+) -> Optional["Candidate"]:
+    """Исправляет заведомо неверно найденную деревню по адресу из заявки.
+
+    Случай с прода: «Мрия», адрес «Оползневое» — Nominatim знает только село
+    Мрия под Киевом, и заказ из Крыма получил 1100 км до Севастополя. Если адрес
+    — это название населённого пункта, которое геокодер нашёл ровно в одном
+    месте, а выбранная деревня находится от него дальше
+    :data:`ADDRESS_OVERRIDE_KM`, берём координаты адреса.
+
+    Осторожно, чтобы не ломать правильное: улицы, дома, аэропорты и т.п. сюда
+    не попадают, крупные города и места из справочника не переопределяются.
+    Бросает :class:`GeocoderUnavailable`, как и :func:`resolve`.
+    """
+    if chosen is None or chosen.kind not in _SMALL_PLACE_KINDS:
+        return chosen
+    raw = (address or "").strip()
+    if not raw or len(raw) > 60 or _NOT_A_PLACE_ADDRESS_RE.search(raw):
+        return chosen
+    name, _ = normalize_place(raw)
+    if not name or city_key(name) == city_key(normalize_place(chosen.name.split(",")[0])[0]):
+        return chosen
+
+    matches = [c for c in await resolve(session, raw) if _same_name(c, name)]
+    if len(matches) != 1:
+        return chosen
+    by_address = matches[0]
+    if haversine_km(chosen.coords, by_address.coords) <= ADDRESS_OVERRIDE_KM:
+        return chosen
+    log.info(
+        "Адрес «%s» противоречит найденному месту «%s» — беру координаты адреса",
+        raw, chosen.name[:60],
+    )
+    return by_address
+
+
 def _seed_candidates(name: str) -> Optional[list[Candidate]]:
     coords = CITY_COORDS.get(name)
     if coords is None:

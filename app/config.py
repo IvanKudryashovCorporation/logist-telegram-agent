@@ -99,10 +99,11 @@ class Settings(BaseSettings):
     trust_proxy_headers: bool = True
 
     # --- Админка (/admin) ---
-    #: Пустая строка — админка полностью отключена (404 на всех её маршрутах).
-    admin_password: str = ""
-    #: Секрет подписи cookie админки. Если не задан, выводится из пароля,
-    #: поэтому смена пароля автоматически «разлогинивает» все сессии.
+    #: Telegram id владельцев через запятую. Админка открывается ТОЛЬКО вошедшему
+    #: через Telegram с одним из этих id; всем остальным (и гостям) её нет — 404.
+    #: Пусто — админки нет ни у кого. Пароля у неё больше нет.
+    admin_telegram_ids: str = ""
+    #: Секрет подписи сессий (cookie входа через Telegram).
     session_secret: str = ""
 
     # --- Вход через Telegram (Login Widget) ---
@@ -116,10 +117,8 @@ class Settings(BaseSettings):
 
     @property
     def telegram_login_enabled(self) -> bool:
-        # SESSION_SECRET обязателен явно: без него подпись сессии водителя
-        # уходила бы в f"admin::{admin_password}" — при выключенной админке
-        # (admin_password пуст) это предсказуемый секрет "admin::", и сессию
-        # правда важно, а не только админ-cookie на 12 часов.
+        # SESSION_SECRET обязателен явно: подпись сессии водителя (и доступ в
+        # админку) не должна держаться на пустом или предсказуемом ключе.
         return bool(
             self.telegram_login_bot_token.strip()
             and self.telegram_login_bot_username.strip()
@@ -136,6 +135,26 @@ class Settings(BaseSettings):
     geocode_poll_seconds: int = 30
     #: Сколько заказов обрабатывает за один проход.
     geocode_batch: int = 20
+
+    # --- Расстояние по дорогам ---
+    #: Фоновый воркер считает длину маршрута A→B по дорогам через OSRM.
+    #: Выключено — километры на сайте просто не показываются.
+    routing_enabled: bool = True
+    #: Публичный демо-сервер OSRM: бесплатный, без ключа и без гарантий,
+    #: поэтому запросы редкие (≤1/с), а результат хранится в заказе.
+    routing_url: str = "https://router.project-osrm.org"
+    #: Как часто воркер просматривает заказы без расстояния, секунд.
+    routing_poll_seconds: int = 30
+    #: Сколько заказов обрабатывает за один проход.
+    routing_batch: int = 20
+
+    # --- Уведомления водителям о новых заказах по фильтру ---
+    #: Публичный адрес сайта — для ссылок на заказы в сообщениях бота.
+    public_base_url: str = "https://lentazakazov.ru"
+    #: Как часто воркер сверяет свежие заказы с подписками, секунд.
+    subscription_poll_seconds: int = 30
+    #: Сколько заказов перечислять в одном сообщении (остальные — «и ещё N»).
+    subscription_max_lines: int = 8
 
     # --- Сторож (app/services/watchdog.py, scripts/watchdog.py) ---
     #: Куда писать алерты: id вашего чата с ботом (бот может писать только тому,
@@ -189,13 +208,23 @@ class Settings(BaseSettings):
         return PROJECT_ROOT / f"{self.tg_session_name}.session"
 
     @property
+    def admin_ids(self) -> set[int]:
+        ids: set[int] = set()
+        for part in self.admin_telegram_ids.replace(";", ",").split(","):
+            part = part.strip()
+            if part.lstrip("-").isdigit():
+                ids.add(int(part))
+        return ids
+
+    @property
     def admin_enabled(self) -> bool:
-        return bool(self.admin_password.strip())
+        # Без входа через Telegram админку открывать нечем — значит, её нет.
+        return bool(self.admin_ids) and self.telegram_login_enabled
 
     @property
     def signing_secret(self) -> str:
-        """Ключ для подписи cookie админки."""
-        return self.session_secret.strip() or f"admin::{self.admin_password}"
+        """Ключ для подписи сессий входа через Telegram."""
+        return self.session_secret.strip()
 
 
 settings = Settings()

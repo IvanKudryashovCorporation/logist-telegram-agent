@@ -370,3 +370,80 @@ async def test_feed_route_applies_radius_and_keeps_it_in_form(client, make_order
     assert f'href="/orders/{far.id}' not in response.text
     assert "~14 км от «Краснодар»" in response.text
     assert 'name="from_radius" value="25"' in response.text
+
+
+# --- Адрес поправляет неверно найденную деревню -----------------------------------
+
+KIEV_MRIYA = Candidate(50.437, 30.128, "Мрия, Бучанский район, Киевская область, Украина", "village")
+CRIMEA_OPOLZNEVOE = Candidate(
+    44.410, 33.940, "Оползневое, Симеизский поселковый совет, Ялтинский городской совет", "village"
+)
+
+
+async def _geocode_one(session, make_order, monkeypatch, answers, *, address, city="Мрия"):
+    calls = _fake_nominatim(monkeypatch, answers)
+    order = await make_order(from_city=city, to_city="Севастополь")
+    order.from_address = address
+    await session.commit()
+    await geocode_pending()
+    await session.refresh(order)
+    return order, calls
+
+
+async def test_address_that_is_a_place_overrides_a_far_wrong_village(session, make_order, monkeypatch):
+    """«Мрия» нашлась только под Киевом, а адрес «Оползневое» — в Крыму."""
+    order, _ = await _geocode_one(
+        session, make_order, monkeypatch,
+        {"Мрия": [KIEV_MRIYA], "Оползневое": [CRIMEA_OPOLZNEVOE]},
+        address="Оползневое",
+    )
+
+    assert (order.from_lat, order.from_lon) == CRIMEA_OPOLZNEVOE.coords
+
+
+async def test_address_close_to_the_found_village_changes_nothing(session, make_order, monkeypatch):
+    near = Candidate(50.50, 30.20, "Оползневое, Киевская область", "village")  # ~10 км от Мрии
+
+    order, _ = await _geocode_one(
+        session, make_order, monkeypatch, {"Мрия": [KIEV_MRIYA], "Оползневое": [near]},
+        address="Оползневое",
+    )
+
+    assert (order.from_lat, order.from_lon) == KIEV_MRIYA.coords
+
+
+async def test_street_addresses_are_never_looked_up(session, make_order, monkeypatch):
+    order, calls = await _geocode_one(
+        session, make_order, monkeypatch, {"Мрия": [KIEV_MRIYA]}, address="ул. Ленина 5",
+    )
+
+    assert calls == ["Мрия"]
+    assert (order.from_lat, order.from_lon) == KIEV_MRIYA.coords
+
+
+async def test_ambiguous_address_is_not_trusted(session, make_order, monkeypatch):
+    """Два «Оползневых» в разных местах — какому верить, неизвестно."""
+    other = Candidate(55.0, 60.0, "Оползневое, Челябинская область", "village")
+
+    order, _ = await _geocode_one(
+        session, make_order, monkeypatch,
+        {"Мрия": [KIEV_MRIYA], "Оползневое": [CRIMEA_OPOLZNEVOE, other]},
+        address="Оползневое",
+    )
+
+    assert (order.from_lat, order.from_lon) == KIEV_MRIYA.coords
+
+
+async def test_big_cities_are_not_overridden_by_address(session, make_order, monkeypatch):
+    """Краснодар из справочника — адрес «Центральный» его не двигает."""
+    district = Candidate(55.0, 60.0, "Центральный, Челябинская область", "village")
+    calls = _fake_nominatim(monkeypatch, {"Центральный": [district]})
+    order = await make_order(from_city="Краснодар", to_city="Сочи")
+    order.from_address = "Центральный"
+    await session.commit()
+
+    await geocode_pending()
+    await session.refresh(order)
+
+    assert (order.from_lat, order.from_lon) == KRASNODAR
+    assert calls == []

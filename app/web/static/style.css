@@ -273,6 +273,7 @@
     .route-marker.to { background: var(--text); border-radius: 2px; }
     .route-point-city { font-weight: 600; font-size: 14.5px; }
     .route-point-address { font-size: 12.5px; color: var(--muted); margin-top: 1px; }
+    .route-distance { font-size: 12.5px; color: var(--muted); padding-left: 16px; }
 
     .tags-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
     .pill {
@@ -823,3 +824,12 @@ input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), select, t
 .badge-warn { background: var(--warn-bg); color: var(--warn-text); }
 .badge-bad { background: var(--bad-bg); color: var(--bad-text); }
 .badge-muted { background: var(--muted-bg); color: var(--muted-text); }
+
+/* --- Подписка на заказы по фильтру --- */
+.notify-toggle { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; font-size: 13.5px; margin-top: 2px; }
+.notify-toggle input { width: 16px; height: 16px; flex-shrink: 0; }
+.notify-error { grid-column: 1 / -1; color: var(--warn-text); }
+.subscription-card { margin-bottom: 22px; }
+.subscription-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.subscription-filter { margin: 12px 0 14px; padding-left: 18px; font-size: 14px; line-height: 1.6; }
+.subscription-filter li::marker { color: var(--accent); }

@@ -40,6 +40,29 @@
   </div>
 </div>
 
+<div class="section-title today"><span class="section-dot"></span>Уведомления о заказах</div>
+{% if subscription %}
+  <div class="detail-card profile-card subscription-card">
+    <div class="subscription-head">
+      <span class="badge {{ 'badge-ok' if subscription.is_active else 'badge-muted' }}">
+        {{ "Включены" if subscription.is_active else "Выключены" }}
+      </span>
+      <a href="{{ subscription_link }}" class="profile-all">Открыть ленту с этим фильтром &rarr;</a>
+    </div>
+    <ul class="subscription-filter">
+      {% for line in subscription_lines %}<li>{{ line }}</li>{% endfor %}
+    </ul>
+    {% if subscription.error %}<div class="hint notify-error">{{ subscription.error }}</div>{% endif %}
+    <form method="post" action="/subscription/{{ 'off' if subscription.is_active else 'on' }}">
+      <button type="submit" class="btn btn-secondary">{{ "Выключить уведомления" if subscription.is_active else "Включить уведомления" }}</button>
+    </form>
+  </div>
+{% else %}
+  <div class="hint" style="margin-bottom: 18px;">
+    Хотите получать новые заказы в Telegram? Задайте фильтр в ленте (например, «Откуда: Краснодар») и нажмите «Применить» с включённой галочкой.
+  </div>
+{% endif %}
+
 <div class="section-title today"><span class="section-dot"></span>Последние заказы</div>
 {% if recent %}
   <div class="profile-orders">

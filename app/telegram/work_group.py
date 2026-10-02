@@ -43,6 +43,7 @@ from app.parsing.prefilter import PrefilterDecision, prefilter
 from app.parsing.schema import ParsedOrder
 from app.telegram import pending as pending_queue
 from app.telegram.dedup import mark_processed, unmark_processed
+from app.timeutil import now_utc_naive
 
 log = logging.getLogger("agent.work_group")
 
@@ -52,6 +53,11 @@ log = logging.getLogger("agent.work_group")
 # диапазон то как начало, то как конец, так что ТОЧНОЕ совпадение datetime
 # пропускает реальные дубли. Сутки туда-сюда — тот же рейс.
 _DUPLICATE_DATE_TOLERANCE = timedelta(days=1)
+
+# У срочной заявки («сейчас», «в течение часа») времени подачи нет, сравнивать
+# нечего — один и тот же рейс, разосланный диспетчером по нескольким группам,
+# узнаём по маршруту, цене и тому, что обе заявки свежие.
+_DUPLICATE_ASAP_WINDOW = timedelta(hours=6)
 
 # Telethon раздаёт события НЕЗАВИСИМЫМИ задачами — сообщения из разных групп,
 # пришедшие почти одновременно, разбираются конкурентно, каждое в своей сессии
@@ -103,7 +109,9 @@ async def _find_duplicate(session, parsed: ParsedOrder) -> Optional[Order]:
     уже отработана, свежая публикация того же рейса — новая возможность.
     """
     pickup_at = combine_pickup_at(parsed.pickup_date, parsed.pickup_time)
-    if not parsed.from_city or not parsed.to_city or pickup_at is None or parsed.client_price is None:
+    # Без времени подачи заказ считается срочным (Order.pickup_asap).
+    asap = pickup_at is None
+    if not parsed.from_city or not parsed.to_city or parsed.client_price is None:
         return None
 
     from_clause = _city_match_clauses(Order.from_city_key, parsed.from_city)
@@ -111,13 +119,24 @@ async def _find_duplicate(session, parsed: ParsedOrder) -> Optional[Order]:
     if from_clause is None or to_clause is None:
         return None
 
+    if asap:
+        when_clauses = (
+            Order.pickup_asap.is_(True),
+            Order.pickup_at.is_(None),
+            Order.created_at >= now_utc_naive() - _DUPLICATE_ASAP_WINDOW,
+        )
+    else:
+        when_clauses = (
+            Order.pickup_at >= pickup_at - _DUPLICATE_DATE_TOLERANCE,
+            Order.pickup_at <= pickup_at + _DUPLICATE_DATE_TOLERANCE,
+        )
+
     candidates = (
         await session.execute(
             select(Order)
             .where(
                 Order.status.notin_(HIDDEN_STATUSES),
-                Order.pickup_at >= pickup_at - _DUPLICATE_DATE_TOLERANCE,
-                Order.pickup_at <= pickup_at + _DUPLICATE_DATE_TOLERANCE,
+                *when_clauses,
                 Order.client_price == parsed.client_price,
                 from_clause,
                 to_clause,
@@ -220,6 +239,21 @@ async def upsert_order_text(
             await db.commit()
             return []
 
+        if not existing_by_index and not any(p.from_city or p.to_city for p in parsed_list):
+            # «Отвезти вещи по адресу 8000р», «нужен исполнитель на 4 часа»: это не
+            # перевозка пассажиров, маршрута нет — в ленте такси такому не место
+            # (раньше они висели карточками «? → ?», да ещё дублями из разных групп).
+            await parse_stats.record(
+                db,
+                ParseOutcome.NOT_ORDER,
+                chat_id=chat_id,
+                message_id=message_id,
+                result=parse_result,
+                error="no_route",
+            )
+            await db.commit()
+            return []
+
         missing_total = sum(len(p.missing_fields) for p in parsed_list)
         # Держим лок до commit включительно — иначе SELECT дубля в соседней
         # задаче видит "чисто" ещё не закоммиченную вставку этой (см. комментарий
@@ -282,6 +316,12 @@ async def _save_orders(
     for index, parsed in enumerate(parsed_list):
         existing = existing_by_index.get(index)
         is_new_order = existing is None
+
+        if is_new_order and not (parsed.from_city or parsed.to_city):
+            log.info(
+                "Пропущено объявление без маршрута (chat=%s msg=%s sub=%s)", chat_id, message_id, index
+            )
+            continue
 
         if is_new_order:
             duplicate = await _find_duplicate(db, parsed)

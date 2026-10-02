@@ -259,6 +259,55 @@ async def test_duplicate_detection_sees_normalized_price(session, make_order, mo
     assert count == 1
 
 
+async def _asap_parse(monkeypatch, price=3000):
+    async def fake_parse_orders(text: str) -> ParseResult:
+        return ParseResult(
+            orders=[
+                ParsedOrder(
+                    from_city="посёлок Ленинский", to_city="Ревда", client_price=price,
+                    is_urgent=True,
+                )
+            ]
+        )
+
+    monkeypatch.setattr(work_group, "parse_orders", fake_parse_orders)
+    monkeypatch.setattr(work_group.settings, "prefilter_enabled", False)
+
+
+async def test_asap_order_posted_in_two_groups_is_one_order(session, monkeypatch):
+    """Диспетчер разослал «НА СЕЙЧАС» в две группы: времени подачи нет,
+    но маршрут и цена те же — второй заказ не создаётся."""
+    await _asap_parse(monkeypatch)
+
+    first = await work_group.upsert_order_text(chat_id=-100001, message_id=1, text="НА СЕЙЧАС Ленинский-Ревда 3000")
+    second = await work_group.upsert_order_text(chat_id=-100002, message_id=9, text="НА СЕЙЧАС Ленинский-Ревда 3000")
+
+    assert second == first
+    assert len((await session.execute(select(Order))).scalars().all()) == 1
+
+
+async def test_asap_orders_with_different_price_are_not_duplicates(session, monkeypatch):
+    await _asap_parse(monkeypatch, price=3000)
+    await work_group.upsert_order_text(chat_id=-100001, message_id=1, text="НА СЕЙЧАС Ленинский-Ревда 3000")
+    await _asap_parse(monkeypatch, price=3500)
+    await work_group.upsert_order_text(chat_id=-100002, message_id=9, text="НА СЕЙЧАС Ленинский-Ревда 3500")
+
+    assert len((await session.execute(select(Order))).scalars().all()) == 2
+
+
+async def test_old_asap_order_is_not_a_duplicate_of_a_new_one(session, monkeypatch):
+    """Вчерашний висящий «сейчас» не должен поглощать сегодняшнюю заявку."""
+    await _asap_parse(monkeypatch)
+    ids = await work_group.upsert_order_text(chat_id=-100001, message_id=1, text="НА СЕЙЧАС Ленинский-Ревда 3000")
+    old = (await session.execute(select(Order).where(Order.id == ids[0]))).scalar_one()
+    old.created_at = old.created_at - timedelta(hours=7)
+    await session.commit()
+
+    await work_group.upsert_order_text(chat_id=-100002, message_id=9, text="НА СЕЙЧАС Ленинский-Ревда 3000")
+
+    assert len((await session.execute(select(Order))).scalars().all()) == 2
+
+
 # --- Время без даты: «сегодня» или «завтра» ----------------------------------
 
 NOW = datetime(2026, 10, 1, 12, 0)
@@ -316,3 +365,56 @@ def test_pickup_label():
     assert label(datetime(2026, 10, 7, 9, 5)) == "09:05, 07.10"
     assert label(None, asap=True) == "в ближайшее время"
     assert label(None) == "в ближайшее время"  # время определить не удалось
+
+
+# --- Объявления без маршрута (не перевозка пассажиров) -------------------------
+
+
+def _patch_parser(monkeypatch, orders):
+    async def fake_parse_orders(text: str) -> ParseResult:
+        return ParseResult(orders=orders)
+
+    monkeypatch.setattr(work_group, "parse_orders", fake_parse_orders)
+    monkeypatch.setattr(work_group.settings, "prefilter_enabled", False)
+
+
+async def test_announcement_without_route_never_becomes_an_order(session, monkeypatch):
+    """«Нужен исполнитель на 4 часа 12000р» — не заказ такси, в ленту не попадает."""
+    _patch_parser(monkeypatch, [ParsedOrder(client_price=12000)])
+
+    ids = await work_group.upsert_order_text(
+        chat_id=-100901, message_id=1, text="Нужен исполнитель на 4 часа 12000р"
+    )
+
+    assert ids == []
+    assert (await session.execute(select(Order))).scalars().all() == []
+
+
+async def test_same_routeless_message_from_three_groups_creates_nothing(session, monkeypatch):
+    _patch_parser(monkeypatch, [ParsedOrder(client_price=12000)])
+
+    for chat in (-100911, -100912, -100913):
+        await work_group.upsert_order_text(chat_id=chat, message_id=5, text="Нужен исполнитель на 4 часа 12000р")
+
+    assert (await session.execute(select(Order))).scalars().all() == []
+
+
+async def test_order_with_only_one_city_is_still_kept(session, monkeypatch):
+    _patch_parser(monkeypatch, [ParsedOrder(from_city="Краснодар", client_price=5000)])
+
+    ids = await work_group.upsert_order_text(chat_id=-100921, message_id=1, text="Краснодар -> ? 5000")
+
+    assert len(ids) == 1
+
+
+async def test_message_with_a_route_and_a_routeless_part_keeps_only_the_route(session, monkeypatch):
+    _patch_parser(
+        monkeypatch,
+        [ParsedOrder(client_price=3000), ParsedOrder(from_city="Ялта", to_city="Керчь", client_price=7000)],
+    )
+
+    ids = await work_group.upsert_order_text(chat_id=-100931, message_id=1, text="две заявки")
+
+    orders = (await session.execute(select(Order))).scalars().all()
+    assert len(ids) == 1 and [(o.from_city, o.to_city) for o in orders] == [("Ялта", "Керчь")]
+    assert orders[0].source_sub_index == 1  # индекс сохранён: правка сообщения найдёт свой заказ

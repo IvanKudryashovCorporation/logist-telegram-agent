@@ -124,6 +124,14 @@ def pickup_label(order: Order, *, now: Optional[datetime] = None) -> str:
     return f"{clock}, {order.pickup_at.strftime('%d.%m')}"
 
 
+def distance_label(order: Order) -> str:
+    """«243 км» — или пустая строка, если расстояния нет."""
+    km = order.distance_km
+    if not km or km < 1:
+        return ""
+    return f"{round(km)} км"
+
+
 def pickup_subtext(order: Order, *, now: Optional[datetime] = None) -> str:
     """Короткая подпись под временем подачи — как давно/скоро подача."""
     if order.pickup_at is None:

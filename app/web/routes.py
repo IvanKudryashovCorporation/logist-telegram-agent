@@ -7,7 +7,7 @@
 
 import logging
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
@@ -17,6 +17,14 @@ from app import geo
 from app.config import settings
 from app.db.base import SessionLocal
 from app.models import HIDDEN_STATUSES, Driver, Order
+from app.services.subscriptions import (
+    describe_filters,
+    feed_path,
+    get_subscription,
+    has_route,
+    save_subscription,
+    set_subscription_active,
+)
 from app.timeutil import now_msk_naive
 from app.web import queries
 from app.web.deps import (
@@ -137,6 +145,8 @@ async def feed(
 
     async with SessionLocal() as session:
         await _attach_radius_centers(session, filters)
+        telegram_id = logged_in_telegram_id(request) if settings.telegram_login_enabled else None
+        subscription = await get_subscription(session, telegram_id) if telegram_id else None
         feed_page = await queries.fetch_feed(
             session,
             filters=filters,
@@ -162,6 +172,10 @@ async def feed(
             "q": q.strip(),
             "filters": filters,
             "known_cities": cities,
+            # Галочка «присылать в Telegram»: по умолчанию включена, пока водитель
+            # сам её не выключил (или бот не смог ему написать).
+            "notify_checked": subscription is None or subscription.is_active,
+            "subscription_error": subscription.error if subscription else None,
             "sort": sort,
             "lat": lat,
             "lon": lon,
@@ -196,6 +210,69 @@ async def my_orders_page(request: Request):
     return html
 
 
+_FILTER_FIELDS = (
+    "from_city", "to_city", "passengers", "date_from", "date_to",
+    "time_from", "time_to", "price_min", "price_max", "from_radius", "to_radius",
+)
+
+
+@router.post("/filter")
+async def apply_filter(request: Request):
+    """«Применить» у вошедшего водителя: показывает ленту по фильтру и, если стоит
+    галочка, подписывает его на новые подходящие заказы в Telegram.
+
+    Адрес ленты собирается из НОРМАЛИЗОВАННЫХ параметров (``Filters``), поэтому
+    мусор из формы в ссылку не попадает.
+    """
+    form = await request.form()
+    filters = Filters(**{name: str(form.get(name) or "") for name in _FILTER_FIELDS})
+    params = filters.as_dict()
+
+    view = {key: value for key, value in params.items() if value}
+    for extra in ("q", "lat", "lon"):
+        if form.get(extra):
+            view[extra] = str(form[extra])[:200]
+    if str(form.get("sort") or "") in queries.SORT_LABELS:
+        view["sort"] = str(form["sort"])
+    target = f"/?{urlencode(view)}" if view else "/"
+
+    _token, new_token, login_required = resolve_driver(request)
+    if login_required:
+        return _login_redirect(request, target)
+
+    notice = ""
+    telegram_id = logged_in_telegram_id(request)
+    async with SessionLocal() as session:
+        existing = await get_subscription(session, telegram_id)
+        if form.get("notify"):
+            if has_route(params):
+                await save_subscription(session, telegram_id, params)
+                notice = "Фильтр применён. Новые подходящие заказы пришлём вам в Telegram."
+            else:
+                notice = "Для уведомлений укажите город «Откуда» или «Куда» — фильтр применён без них."
+        elif existing is not None and existing.is_active:
+            await set_subscription_active(session, telegram_id, False)
+            notice = "Уведомления о новых заказах выключены."
+    return _redirect(target, new_token, notice)
+
+
+@router.post("/subscription/{action}")
+async def subscription_toggle(request: Request, action: str):
+    """Кнопки в профиле: выключить / включить уведомления по сохранённому фильтру."""
+    _token, new_token, login_required = resolve_driver(request)
+    if login_required:
+        return _login_redirect(request, "/profile")
+    if action not in ("on", "off"):
+        return HTMLResponse("Страница не найдена", status_code=404)
+
+    async with SessionLocal() as session:
+        sub = await set_subscription_active(session, logged_in_telegram_id(request), action == "on")
+    notice = ""
+    if sub is not None:
+        notice = "Уведомления включены." if action == "on" else "Уведомления выключены."
+    return _redirect("/profile", new_token, notice)
+
+
 @router.get("/profile", response_class=HTMLResponse)
 async def profile_page(request: Request):
     """Профиль вошедшего водителя: кто он, статистика, последние заказы, выход."""
@@ -217,11 +294,19 @@ async def profile_page(request: Request):
         stats = await queries.driver_stats(session, token, driver.created_at)
         recent = await queries.recent_driver_orders(session, token)
         counts = await queries.header_counts(session, token)
+        subscription = await get_subscription(session, driver.telegram_id)
 
     html = templates.TemplateResponse(
         "profile.html",
         _base_context(request, counts, pop_flash(request))
-        | {"driver": driver, "stats": stats, "recent": recent},
+        | {
+            "driver": driver,
+            "stats": stats,
+            "recent": recent,
+            "subscription": subscription,
+            "subscription_lines": describe_filters(subscription.params) if subscription else [],
+            "subscription_link": feed_path(subscription.params) if subscription else "/",
+        },
     )
     attach_driver_cookie(html, new_token)
     clear_flash(html)

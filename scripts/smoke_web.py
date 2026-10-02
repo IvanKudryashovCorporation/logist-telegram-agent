@@ -13,8 +13,9 @@ HTTP-заголовков. Именно на живом сервере видн�
 * middleware безопасности дописывает заголовки в настоящем ASGI-конвейере.
 
 В режиме ``--url`` данные не создаются и не изменяются — только чтение, поэтому
-скрипт безопасен для работающего прода (кроме одного POST-входа в админку,
-который выполняется лишь при переданном ``--admin-password``).
+скрипт безопасен для работающего прода (действия водителя меняют заявку и
+выполняются лишь при ``--allow-changes`` и ``--order-id``). Админка проверяется
+только с одной стороны: гостю она отвечает 404.
 """
 
 import argparse
@@ -43,7 +44,6 @@ def _prepare_env(port: int) -> dict[str, str]:
     os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TEST_DB.as_posix()}"
     os.environ["WEB_HOST"] = "127.0.0.1"
     os.environ["WEB_PORT"] = str(port)
-    os.environ["ADMIN_PASSWORD"] = "smoke-admin-password"
     os.environ["RATE_LIMIT_ENABLED"] = "false"
     os.environ["MASK_CLIENT_CONTACTS"] = "true"
     os.environ["NOTIFY_CHAT_ID"] = ""
@@ -220,46 +220,16 @@ def check_driver_actions(base_url: str, report: Report, order_id: int) -> None:
     driver_b.close()
 
 
-def check_admin(base_url: str, report: Report, admin_password: str, order_id: int | None) -> None:
-    """Вход в админку, сводка, список заказов, очередь, выход."""
+def check_admin(base_url: str, report: Report) -> None:
+    """Для гостя админки нет: всё отвечает 404, и страницы входа тоже нет."""
     import httpx
 
-    print("\n=== Админка ===")
-    admin = httpx.Client(base_url=base_url, timeout=10.0)
-    guarded = admin.get("/admin")
-    report.check(guarded.status_code == 303, "GET /admin без входа -> 303", str(guarded.status_code))
-    location = guarded.headers.get("location", "<нет>")
-    report.check(location == "/admin/login", "редирект на /admin/login", location)
-
-    login_page = admin.get("/admin/login")
-    report.check(login_page.status_code == 200, "GET /admin/login -> 200")
-    report.check('type="password"' in login_page.text, "форма входа с полем пароля")
-
-    bad = admin.post("/admin/login", data={"password": "неверный-пароль"})
-    report.check(bad.status_code == 200, "неверный пароль -> страница входа (200)")
-    report.check("Неверный пароль" in bad.text, "сообщение об ошибке входа")
-    report.check(not admin.cookies.get("admin_session"), "cookie админки не выдана")
-
-    good = admin.post("/admin/login", data={"password": admin_password})
-    report.check(good.status_code == 303, "верный пароль -> 303", str(good.status_code))
-    report.check(bool(admin.cookies.get("admin_session")), "выдана подписанная cookie")
-
-    dashboard = admin.get("/admin")
-    report.check(dashboard.status_code == 200, "GET /admin -> 200", str(dashboard.status_code))
-    for marker in ("всего заказов", "Качество разбора", "Очередь повторного разбора", "Жалобы"):
-        report.check(marker in dashboard.text, f"сводка содержит «{marker}»")
-
-    orders_page = admin.get("/admin/orders")
-    report.check(orders_page.status_code == 200, "GET /admin/orders -> 200")
-    if order_id is not None:
-        report.check(f"/orders/{order_id}" in orders_page.text, "в админке видна заявка")
-    report.check(
-        admin.get("/admin/queue?status=failed").status_code == 200, "GET /admin/queue -> 200"
-    )
-
-    report.check(admin.post("/admin/logout").status_code == 303, "POST /admin/logout -> 303")
-    report.check(admin.get("/admin").status_code == 303, "после выхода админка снова закрыта")
-    admin.close()
+    print("\n=== Админка (для гостя её нет) ===")
+    guest = httpx.Client(base_url=base_url, timeout=10.0)
+    for path in ("/admin", "/admin/login", "/admin/orders", "/admin/queue"):
+        status = guest.get(path).status_code
+        report.check(status == 404, f"GET {path} без входа -> 404", str(status))
+    guest.close()
 
 
 def _finish(report: Report) -> int:
@@ -302,7 +272,7 @@ async def _run_hosted(port: int) -> int:
         print("uvicorn поднялся, /healthz отвечает.")
         check_read_only(base_url, report, order_id)
         check_driver_actions(base_url, report, order_id)
-        check_admin(base_url, report, env["ADMIN_PASSWORD"], order_id)
+        check_admin(base_url, report)
     finally:
         process.terminate()
         try:
@@ -314,7 +284,7 @@ async def _run_hosted(port: int) -> int:
     return _finish(report)
 
 
-def _run_external(base_url: str, admin_password: str | None, order_id: int | None) -> int:
+def _run_external(base_url: str, allow_changes: bool, order_id: int | None) -> int:
     """Проверяет уже запущенный сайт. По умолчанию — только чтение."""
     report = Report()
     if not _wait_ready(base_url, timeout=5.0):
@@ -322,14 +292,13 @@ def _run_external(base_url: str, admin_password: str | None, order_id: int | Non
         return 1
 
     check_read_only(base_url, report, order_id)
-    if admin_password:
-        # Вход в админку и действия водителя меняют состояние, поэтому без
-        # явного пароля (и id заявки) они не выполняются.
-        if order_id is not None:
-            check_driver_actions(base_url, report, order_id)
-        check_admin(base_url, report, admin_password, order_id)
+    check_admin(base_url, report)
+    if allow_changes and order_id is not None:
+        # Действия водителя меняют состояние, поэтому без явного разрешения
+        # (и id заявки) они не выполняются.
+        check_driver_actions(base_url, report, order_id)
     else:
-        print("\n(админка не проверялась: не передан --admin-password)")
+        print("\n(действия водителя не проверялись: нужны --allow-changes и --order-id)")
     return _finish(report)
 
 
@@ -346,13 +315,13 @@ def main() -> int:
         help="id существующей заявки — для проверок карточки при --url",
     )
     parser.add_argument(
-        "--admin-password", default=None,
-        help="пароль админки при --url (без него проверяется только чтение)",
+        "--allow-changes", action="store_true",
+        help="при --url ещё и проверить действия водителя (меняют данные заявки)",
     )
     args = parser.parse_args()
 
     if args.url:
-        return _run_external(args.url.rstrip("/"), args.admin_password, args.order_id)
+        return _run_external(args.url.rstrip("/"), args.allow_changes, args.order_id)
     return asyncio.run(_run_hosted(_free_port()))
 
 

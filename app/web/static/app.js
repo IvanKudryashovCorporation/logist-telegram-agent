@@ -330,3 +330,40 @@
         try { localStorage.setItem('theme', next); } catch (e) { /* без хранилища тема живёт до перезагрузки */ }
       });
     })();
+
+    // Возврат из карточки заказа в ленту на то же место прокрутки. Позицию
+    // запоминаем при клике по карточке, а восстанавливаем, только если на ленту
+    // пришли с карточки заказа или кнопкой «назад» (обычный заход — с начала).
+    (function () {
+      var KEY = 'scrollBeforeCard';
+
+      function page() {
+        var params = new URLSearchParams(location.search);
+        params.delete('_cb');
+        params.sort();
+        return location.pathname + '?' + params.toString();
+      }
+
+      document.addEventListener('click', function (event) {
+        var card = event.target.closest ? event.target.closest('a.card') : null;
+        if (!card) return;
+        try {
+          sessionStorage.setItem(KEY, JSON.stringify({ page: page(), y: Math.round(window.scrollY) }));
+        } catch (e) { /* хранилище недоступно — вернёмся в начало, как раньше */ }
+      });
+
+      var saved = null;
+      try { saved = JSON.parse(sessionStorage.getItem(KEY) || 'null'); } catch (e) { saved = null; }
+      if (!saved || saved.page !== page() || !saved.y) return;
+
+      var entries = performance.getEntriesByType ? performance.getEntriesByType('navigation') : [];
+      var cameBack = entries.length > 0 && entries[0].type === 'back_forward';
+      var fromOrder = /\/orders\//.test(document.referrer || '');
+      if (!cameBack && !fromOrder) return;
+
+      function restore() { window.scrollTo(0, saved.y); }
+      restore();
+      // Страница могла дорисоваться после первой прокрутки — повторяем, но только
+      // если пользователь сам ещё никуда не прокрутил.
+      window.addEventListener('load', function () { if (window.scrollY < 10) restore(); });
+    })();

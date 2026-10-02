@@ -42,6 +42,8 @@
               {% if order.to_address %}<div class="route-point-address">{{ order.to_address }}</div>{% endif %}
             </div>
           </div>
+          {% set distance = distance_label(order) %}
+          {% if distance %}<div class="route-distance">Расстояние: {{ distance }}</div>{% endif %}
         </div>
 
         {% set tags = order_tags(order) %}

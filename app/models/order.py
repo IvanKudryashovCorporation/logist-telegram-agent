@@ -118,6 +118,12 @@ class Order(Base, TimestampMixin):
     to_lon: Mapped[Optional[float]] = mapped_column(Float)
     #: NULL — геокодер этим заказом ещё не занимался (или города поменялись).
     geo_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=False))
+    #: Расстояние по дорогам между концами маршрута, км (маршрутизатор OSRM,
+    #: app/routing.py). Считает фоновый воркер после геокодера; NULL — ещё не
+    #: посчитано или посчитать не вышло (тогда сайт просто не показывает цифру).
+    distance_km: Mapped[Optional[float]] = mapped_column(Float)
+    #: NULL — воркер маршрутов этим заказом ещё не занимался (или города поменялись).
+    route_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=False))
 
     # --- Состояние ---
     status: Mapped[OrderStatus] = mapped_column(

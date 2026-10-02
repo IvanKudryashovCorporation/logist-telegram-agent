@@ -3,8 +3,13 @@
 Админка — единственное место, где видно качество разбора и застрявшие
 сообщения, поэтому доступ к ней проверяется особенно придирчиво: сайт
 публичный, а здесь и телефоны клиентов, и статистика расходов на LLM.
+Открывается она только владельцу, вошедшему через Telegram; для всех
+остальных её нет вовсе (404, без страницы входа).
 """
 
+import hashlib
+import hmac
+import time
 from datetime import timedelta
 
 import pytest
@@ -15,13 +20,32 @@ from app.db.base import SessionLocal
 from app.models import Order, OrderStatus, PendingMessage, PendingStatus
 from app.telegram import pending
 from app.timeutil import now_utc_naive
-from app.web import deps
 
-PASSWORD = "test-admin-password"
+BOT_TOKEN = "123456:test-bot-token"
+OWNER_ID = 555000111  # он же в ADMIN_TELEGRAM_IDS тестового окружения (conftest.py)
+STRANGER_ID = 777000222
 
 
-async def _login(client, password: str = PASSWORD):
-    return await client.post("/admin/login", data={"password": password})
+@pytest.fixture(autouse=True)
+def telegram_login_on(monkeypatch):
+    monkeypatch.setattr(settings, "telegram_login_bot_token", BOT_TOKEN)
+    monkeypatch.setattr(settings, "telegram_login_bot_username", "podacha_bot")
+    assert settings.admin_enabled is True
+
+
+async def _login(client, telegram_id: int = OWNER_ID):
+    """Входит через Telegram Login Widget с настоящей подписью."""
+    fields = {
+        "id": str(telegram_id),
+        "first_name": "Тест",
+        "auth_date": str(int(time.time())),
+    }
+    check = chr(10).join(f"{k}={v}" for k, v in sorted(fields.items()))
+    secret = hashlib.sha256(BOT_TOKEN.encode("utf-8")).digest()
+    fields["hash"] = hmac.new(secret, check.encode("utf-8"), hashlib.sha256).hexdigest()
+    response = await client.get("/auth/telegram", params=fields)
+    assert response.status_code == 303
+    return response
 
 
 async def _reload_order(session, order_id: int) -> Order:
@@ -31,88 +55,81 @@ async def _reload_order(session, order_id: int) -> Order:
 
 # --- Доступ ------------------------------------------------------------------
 
-
-async def test_login_page_is_available(client):
-    response = await client.get("/admin/login")
-
-    assert response.status_code == 200
-    assert 'type="password"' in response.text
+ADMIN_PATHS = ("/admin", "/admin/", "/admin/orders", "/admin/queue", "/admin/login")
 
 
-async def test_dashboard_requires_login(client):
-    response = await client.get("/admin")
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "/admin/login"
-
-
-@pytest.mark.parametrize("path", ["/admin", "/admin/orders", "/admin/queue"])
-async def test_all_sections_are_guarded(client, path):
-    assert (await client.get(path)).headers["location"] == "/admin/login"
+async def test_guest_gets_404_everywhere(client):
+    """Гость не должен даже узнать, что админка существует: ни формы входа, ни редиректа."""
+    for path in ADMIN_PATHS:
+        response = await client.get(path)
+        assert response.status_code == 404, path
+        assert "location" not in response.headers, path
 
 
-async def test_wrong_password_is_rejected(client):
-    response = await _login(client, "совершенно-не-тот-пароль")
+async def test_logged_in_stranger_gets_404(client):
+    """Вошёл через Telegram, но его id нет в ADMIN_TELEGRAM_IDS — админки для него нет."""
+    await _login(client, STRANGER_ID)
 
-    assert response.status_code == 200
-    assert "Неверный пароль" in response.text
-    assert "admin_session" not in response.cookies
-
-
-async def test_correct_password_issues_cookie_and_redirects(client):
-    response = await _login(client)
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "/admin"
-    assert response.cookies.get("admin_session")
-
-
-async def test_login_page_redirects_authenticated_admin(client):
-    await _login(client)
-
-    response = await client.get("/admin/login")
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "/admin"
-
-
-async def test_forged_cookie_is_rejected(client):
-    """Подделка сводится к подстановке своей метки времени — подпись не сойдётся."""
-    valid = deps.admin_cookie_value()
-    expires, _, _ = valid.partition(".")
-    forged = f"{int(expires) + 100000}.{valid.partition('.')[2]}"
-
-    client.cookies.set("admin_session", forged)
-    response = await client.get("/admin")
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "/admin/login"
-
-
-async def test_expired_cookie_is_rejected(client):
-    client.cookies.set("admin_session", deps.admin_cookie_value(ttl=-60))
-
-    assert (await client.get("/admin")).headers["location"] == "/admin/login"
-
-
-async def test_logout_clears_session(client):
-    await _login(client)
-    assert (await client.get("/admin")).status_code == 200
-
-    response = await client.post("/admin/logout")
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "/"
-    assert (await client.get("/admin")).headers["location"] == "/admin/login"
-
-
-async def test_admin_is_absent_without_password(client, monkeypatch):
-    """ADMIN_PASSWORD пуст — админки нет вовсе: 404, а не форма входа."""
-    monkeypatch.setattr(settings, "admin_password", "")
-
-    for path in ("/admin", "/admin/login", "/admin/orders", "/admin/queue"):
+    for path in ADMIN_PATHS:
         assert (await client.get(path)).status_code == 404, path
-    assert (await client.post("/admin/login", data={"password": ""})).status_code == 404
+
+
+async def test_owner_gets_dashboard(client):
+    await _login(client)
+
+    for path in ("/admin", "/admin/orders", "/admin/queue"):
+        assert (await client.get(path)).status_code == 200, path
+
+
+async def test_password_login_no_longer_exists(client):
+    """Пароля больше нет: форма входа и logout отвечают 404 даже владельцу."""
+    await _login(client)
+
+    assert (await client.get("/admin/login")).status_code == 404
+    assert (await client.post("/admin/login", data={"password": "test-admin-password"})).status_code == 404
+    assert (await client.post("/admin/logout")).status_code == 404
+
+
+async def test_old_admin_cookie_gives_nothing(client):
+    client.cookies.set("admin_session", "9999999999.deadbeef")
+
+    assert (await client.get("/admin")).status_code == 404
+
+
+async def test_forged_session_for_owner_id_is_rejected(client):
+    """Подделать вход владельца, не зная SESSION_SECRET, нельзя."""
+    client.cookies.set("driver_session", f"{OWNER_ID}.{int(time.time()) + 3600}.{'0' * 64}")
+
+    assert (await client.get("/admin")).status_code == 404
+
+
+async def test_header_tab_only_for_owner(client):
+    guest = await client.get("/")
+    assert "Админка" not in guest.text
+
+    await _login(client, STRANGER_ID)
+    assert "Админка" not in (await client.get("/")).text
+
+    client.cookies.clear()
+    await _login(client)
+    assert "Админка" in (await client.get("/")).text
+
+
+async def test_admin_is_absent_without_ids(client, monkeypatch):
+    """ADMIN_TELEGRAM_IDS пуст — админки нет ни у кого, в том числе у вошедших."""
+    await _login(client)
+    monkeypatch.setattr(settings, "admin_telegram_ids", "")
+
+    for path in ADMIN_PATHS:
+        assert (await client.get(path)).status_code == 404, path
+
+
+async def test_admin_is_absent_when_telegram_login_is_off(client, monkeypatch):
+    """Без входа через Telegram админку открывать нечем — она выключена."""
+    await _login(client)
+    monkeypatch.setattr(settings, "telegram_login_bot_token", "")
+
+    assert (await client.get("/admin")).status_code == 404
 
 
 # --- Сводка ------------------------------------------------------------------
@@ -273,8 +290,7 @@ async def test_order_actions_require_admin(client, make_order, action):
 
     response = await client.post(f"/admin/orders/{order.id}/{action}")
 
-    assert response.status_code == 303
-    assert response.headers["location"] == "/admin/login"
+    assert response.status_code == 404
 
 
 # --- Очередь разбора ---------------------------------------------------------
@@ -348,11 +364,11 @@ async def test_queue_retry_requires_admin(client):
 
     response = await client.post(f"/admin/queue/{stuck.id}/retry")
 
-    assert response.headers["location"] == "/admin/login"
+    assert response.status_code == 404
     assert (await _reload_pending(stuck.id)).status == PendingStatus.FAILED
 
 
-async def test_admin_cookie_gives_no_privileges_on_public_pages(client, make_order):
+async def test_admin_gives_no_privileges_on_public_pages(client, make_order):
     """Админ не брал заказ — значит контакты клиента ему тоже закрыты."""
     await _login(client)
     order = await make_order(client_phone="+79990000000", client_name="Иван Петров")

@@ -405,7 +405,8 @@ async def test_healthz_reports_database_ok(client):
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["database"] is True
-    assert payload["admin_enabled"] is True
+    # О существовании админки healthz не сообщает: для чужих её нет.
+    assert "admin_enabled" not in payload
 
 
 async def test_robots_txt_forbids_indexing(client):
@@ -566,3 +567,11 @@ async def test_header_brand_links_to_the_feed_from_any_page(client, make_order):
         page = (await client.get(path)).text
         assert re.search(r'<a href="/" class="brand"[^>]*>\s*<img class="logo"', page), path
         assert "Лента заказов</span>" in page, path
+
+
+async def test_app_js_restores_feed_scroll_after_returning_from_an_order(client):
+    script = (await client.get("/static/app.js")).text
+
+    assert "scrollBeforeCard" in script and "sessionStorage" in script
+    assert "back_forward" in script and "scrollTo(0, saved.y)" in script
+    assert "requestAnimationFrame" not in script  # в фоновой вкладке не срабатывает

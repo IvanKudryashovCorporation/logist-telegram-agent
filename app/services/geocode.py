@@ -64,6 +64,14 @@ async def _geocode_order(session, order: Order) -> None:
     origin = geo.pick(from_candidates, near_from)
     destination = geo.pick(to_candidates, near_to)
 
+    # Деревню, найденную не там, поправляет адрес из заявки («Мрия», «Оползневое»).
+    origin = await geo.refine_by_address(
+        session, origin, order.from_address, near=destination.coords if destination else None
+    )
+    destination = await geo.refine_by_address(
+        session, destination, order.to_address, near=origin.coords if origin else None
+    )
+
     await session.execute(
         update(Order)
         .where(Order.id == order.id)
@@ -73,6 +81,9 @@ async def _geocode_order(session, order: Order) -> None:
             to_lat=destination.lat if destination else None,
             to_lon=destination.lon if destination else None,
             geo_checked_at=now_utc_naive(),
+            # Координаты поменялись — расстояние по ним устарело, пусть пересчитается.
+            distance_km=None,
+            route_checked_at=None,
             # Явное значение отключает onupdate: геокодирование не должно
             # «освежать» заказ в админке, сортирующей по updated_at.
             updated_at=Order.updated_at,

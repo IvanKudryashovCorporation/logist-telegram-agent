@@ -1,11 +1,11 @@
 """Зависимости веб-слоя: кто такой «текущий водитель» и «админ».
 
-Регистрации на сайте нет по продуктовой задумке: водителя различаем анонимной
-cookie, админку — подписанной cookie с паролем из .env. Обе живут здесь, чтобы
-роуты не занимались криптографией и куками самостоятельно.
+Водителя различаем анонимной cookie, а после входа через Telegram — подписанной
+сессией; админ — это вошедший владелец из ``ADMIN_TELEGRAM_IDS``. Всё это живёт
+здесь, чтобы роуты не занимались криптографией и куками самостоятельно.
 
-Секреты сравниваются через :func:`hmac.compare_digest` — обычное ``==``
-уязвимо к timing-атаке, а для пароля/подписи это критично.
+Подписи сравниваются через :func:`hmac.compare_digest` — обычное ``==``
+уязвимо к timing-атаке.
 """
 
 import hashlib
@@ -23,11 +23,6 @@ from app.config import settings
 
 DRIVER_COOKIE = "driver_id"
 DRIVER_COOKIE_MAX_AGE = 60 * 60 * 24 * 365 * 2  # 2 года
-
-# --- Админка ----------------------------------------------------------------
-
-ADMIN_COOKIE = "admin_session"
-ADMIN_COOKIE_MAX_AGE = 60 * 60 * 12  # 12 часов
 
 
 def driver_token(request: Request) -> tuple[str, Optional[str]]:
@@ -77,18 +72,11 @@ def client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-# --- Подписанная cookie админки ---------------------------------------------
+# --- Подпись ----------------------------------------------------------------
 
 
 def _is_https() -> bool:
     return settings.web_host not in {"127.0.0.1", "localhost", "::1"}
-
-
-def admin_cookie_value(*, now: Optional[int] = None, ttl: int = ADMIN_COOKIE_MAX_AGE) -> str:
-    """``<unix_ts>.<hmac>`` — значение cookie админки."""
-    expires = int(now if now is not None else time.time()) + ttl
-    signature = _sign(str(expires))
-    return f"{expires}.{signature}"
 
 
 def _sign(payload: str) -> str:
@@ -97,25 +85,16 @@ def _sign(payload: str) -> str:
     ).hexdigest()
 
 
-def is_valid_admin_cookie(value: Optional[str], *, now: Optional[int] = None) -> bool:
-    """Проверяет подпись и срок действия cookie админки."""
-    if not value or "." not in value:
-        return False
-    expires_raw, _, signature = value.partition(".")
-    expected = _sign(expires_raw)
-    if not hmac.compare_digest(expected, signature):
-        return False
-    try:
-        expires = int(expires_raw)
-    except ValueError:
-        return False
-    return expires > int(now if now is not None else time.time())
-
-
 def is_admin(request: Request) -> bool:
-    return settings.admin_enabled and is_valid_admin_cookie(
-        request.cookies.get(ADMIN_COOKIE)
-    )
+    """Админ — вошедший через Telegram владелец из ``ADMIN_TELEGRAM_IDS``.
+
+    Id берётся из подписанной cookie входа (её нельзя подделать без секрета),
+    а не из чего-либо, что присылает браузер.
+    """
+    if not settings.admin_enabled:
+        return False
+    telegram_id = logged_in_telegram_id(request)
+    return telegram_id is not None and telegram_id in settings.admin_ids
 
 
 # --- Вход через Telegram Login Widget ----------------------------------------
@@ -200,30 +179,6 @@ def resolve_driver(request: Request) -> tuple[Optional[str], Optional[str], bool
     if telegram_id is None:
         return None, None, True
     return f"tg:{telegram_id}", None, False
-
-
-def check_admin_password(candidate: str) -> bool:
-    """Сверка пароля админки без утечки длины/префикса через время ответа."""
-    if not settings.admin_enabled:
-        return False
-    return hmac.compare_digest(
-        settings.admin_password.encode("utf-8"), (candidate or "").encode("utf-8")
-    )
-
-
-def set_admin_cookie(response: Response) -> None:
-    response.set_cookie(
-        ADMIN_COOKIE,
-        admin_cookie_value(),
-        max_age=ADMIN_COOKIE_MAX_AGE,
-        httponly=True,
-        samesite="strict",
-        secure=_is_https(),
-    )
-
-
-def clear_admin_cookie(response: Response) -> None:
-    response.delete_cookie(ADMIN_COOKIE)
 
 
 # --- Одноразовые сообщения (flash) ------------------------------------------

@@ -9,8 +9,9 @@
   насколько предфильтр экономит обращения к LLM;
 * ручное скрытие/возврат заявки в ленту.
 
-Доступ — по паролю из ``ADMIN_PASSWORD`` (подписанная cookie, samesite=strict).
-Если пароль не задан, админка отвечает 404 на все маршруты: её просто нет.
+Доступ — только вошедшему через Telegram владельцу (``ADMIN_TELEGRAM_IDS``).
+Всем остальным, включая гостей, админка отвечает 404 на все маршруты: страницы
+входа у неё нет, так что снаружи не видно даже того, что она существует.
 """
 
 import logging
@@ -20,7 +21,6 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import func, select, update
 
-from app.config import settings
 from app.db.base import SessionLocal
 from app.models import (
     ORDER_STATUS_LABELS,
@@ -34,12 +34,7 @@ from app.models import (
 from app.parsing.llm_parser import cache_stats
 from app.services import reporting
 from app.timeutil import now_utc_naive
-from app.web.deps import (
-    check_admin_password,
-    clear_admin_cookie,
-    is_admin,
-    set_admin_cookie,
-)
+from app.web.deps import is_admin
 from app.web.rate_limit import limiter_stats
 from app.web.templates_env import templates
 
@@ -55,16 +50,10 @@ def _disabled() -> HTMLResponse:
     return HTMLResponse("Not Found", status_code=404)
 
 
-def _login_redirect() -> RedirectResponse:
-    return RedirectResponse(url="/admin/login", status_code=303)
-
-
 def _guard(request: Request) -> Optional[Response]:
-    """Проверка доступа: 404 если админка выключена, редирект если не залогинен."""
-    if not settings.admin_enabled:
-        return _disabled()
+    """404 для всех, кроме владельца: админки для остальных просто нет."""
     if not is_admin(request):
-        return _login_redirect()
+        return _disabled()
     return None
 
 
@@ -72,36 +61,6 @@ def _render(request: Request, template: str, **context) -> HTMLResponse:
     return templates.TemplateResponse(
         template, {"request": request, "admin_enabled": True, **context}
     )
-
-
-@router.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request):
-    if not settings.admin_enabled:
-        return _disabled()
-    if is_admin(request):
-        return RedirectResponse(url="/admin", status_code=303)
-    return _render(request, "admin_login.html", error=None)
-
-
-@router.post("/login")
-async def login_submit(request: Request):
-    if not settings.admin_enabled:
-        return _disabled()
-    form = await request.form()
-    password = str(form.get("password") or "")
-    if not check_admin_password(password):
-        log.warning("Неудачная попытка входа в админку с %s", request.client.host if request.client else "?")
-        return _render(request, "admin_login.html", error="Неверный пароль")
-    response = RedirectResponse(url="/admin", status_code=303)
-    set_admin_cookie(response)
-    return response
-
-
-@router.post("/logout")
-async def logout(request: Request):
-    response = RedirectResponse(url="/", status_code=303)
-    clear_admin_cookie(response)
-    return response
 
 
 @router.get("", response_class=HTMLResponse)

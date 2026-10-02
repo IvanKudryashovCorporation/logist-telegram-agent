@@ -79,7 +79,7 @@
             Фильтры
             {% if filters.active_count %}<span class="tab-count">{{ filters.active_count }}</span>{% endif %}
           </summary>
-          <form class="filters-panel" method="get" action="/">
+          <form class="filters-panel" {% if is_logged_in %}method="post" action="/filter"{% else %}method="get" action="/"{% endif %}>
             <input type="hidden" name="q" value="{{ q or '' }}">
             {% if sort is defined %}
               <input type="hidden" name="sort" value="{{ sort }}">
@@ -158,6 +158,15 @@
                 <input type="number" min="0" name="price_max" value="{{ filters.price_max or '' }}" placeholder="До">
               </div>
             </div>
+            {% if is_logged_in %}
+              <label class="notify-toggle">
+                <input type="checkbox" name="notify" {{ 'checked' if notify_checked else '' }}>
+                <span>Присылать новые подходящие заказы в Telegram</span>
+              </label>
+              {% if subscription_error %}<div class="hint notify-error">{{ subscription_error }}</div>{% endif %}
+            {% elif telegram_login_enabled %}
+              <div class="hint notify-toggle">Войдите, чтобы получать новые заказы по фильтру в Telegram.</div>
+            {% endif %}
             <div class="filters-actions">
               <button type="submit">Применить</button>
               <a href="/{{ '?q=' + q if q else '' }}" class="btn btn-secondary">Сбросить фильтры</a>

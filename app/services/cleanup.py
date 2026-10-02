@@ -32,6 +32,7 @@ from app.models import (
     Order,
     OrderStatus,
     ParseStat,
+    SubscriptionNotification,
 )
 from app.timeutil import now_msk_naive, now_utc_naive
 
@@ -243,6 +244,21 @@ async def purge_old_orders(*, retention_days: Optional[int] = None) -> int:
     return len(ids)
 
 
+async def prune_old_notifications(*, keep_days: int = 7) -> int:
+    """Чистит журнал отправленных уведомлений о заказах.
+
+    Заказ рассылается только пока ему меньше 30 минут (см. app.services.subscriptions),
+    так что записи старше нескольких дней нужны разве что для разбора жалоб.
+    """
+    cutoff = now_utc_naive() - timedelta(days=keep_days)
+    async with SessionLocal() as session:
+        result = await session.execute(
+            delete(SubscriptionNotification).where(SubscriptionNotification.sent_at < cutoff)
+        )
+        await session.commit()
+    return result.rowcount or 0
+
+
 async def prune_old_stats(*, retention_days: Optional[int] = None) -> int:
     """Удаляет старые строки ``parse_stats``, чтобы таблица не росла вечно."""
     days = settings.stats_retention_days if retention_days is None else retention_days
@@ -265,12 +281,14 @@ async def cleanup_once() -> dict[str, int]:
     expired = await expire_stale_orders()
     started, completed = await advance_agreed_orders()
     purged = await purge_old_orders()
+    notifications = await prune_old_notifications()
     pruned = await prune_old_stats()
     return {
         "expired": expired,
         "work_started": started,
         "auto_completed": completed,
         "orders_purged": purged,
+        "notifications_pruned": notifications,
         "stats_pruned": pruned,
     }
 
