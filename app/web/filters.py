@@ -1,4 +1,4 @@
-"""Структурные фильтры ленты: откуда/куда, дата и время подачи, цена, пассажиры.
+"""Структурные фильтры ленты: откуда/куда, дата и время подачи, цена, тип авто.
 
 Все поля опциональны и комбинируются по И.
 
@@ -19,10 +19,11 @@
 ``sql()`` остаётся синхронным и сам в БД за центрами не ходит. Заказы без
 координат по-прежнему находятся по названию — радиус ничего не отнимает.
 
-Исправленный баг: фильтр «Пассажиров (мин.)» раньше отбрасывал заявки, где
-число пассажиров не указано (``None`` трактовался как 0). Диспетчер часто не
-пишет пассажиров — получалось, что фильтр «от 1» прятал большую часть ленты.
-Теперь неизвестное число пассажиров НЕ отсеивается.
+Тип авто («легковой» / «минивэн») заменил прежний фильтр по числу пассажиров:
+диспетчеры пассажиров почти не пишут, а тип авто по заявке определяется надёжнее
+(см. :func:`app.search.vehicle_type_of`). Параметр ``passengers`` из старых ссылок
+и сохранённых подписок принимается и игнорируется. Заявка без пометок считается
+легковой: минивэн нужен только там, где он назван или пассажиров пять и больше.
 """
 
 from datetime import date, datetime, time
@@ -36,6 +37,9 @@ from app.city_aliases import canonical_city_variants, city_matches, split_city_t
 from app.geo import KM_PER_DEGREE, Coords, flat_distance_km, parse_radius
 from app.models import Order
 
+#: Допустимые значения фильтра «тип авто».
+VEHICLE_CHOICES = {"car": "Легковой", "minivan": "Минивэн"}
+
 
 class Filters:
     """Структурные фильтры ленты."""
@@ -44,7 +48,7 @@ class Filters:
         self,
         from_city: str = "",
         to_city: str = "",
-        passengers: str = "",
+        vehicle: str = "",
         date_from: str = "",
         date_to: str = "",
         time_from: str = "",
@@ -53,10 +57,12 @@ class Filters:
         price_max: str = "",
         from_radius: str = "",
         to_radius: str = "",
+        passengers: str = "",  # устарело: принимается и игнорируется
     ) -> None:
         self.from_city = (from_city or "").strip()
         self.to_city = (to_city or "").strip()
-        self.passengers = self._parse_int(passengers)
+        vehicle = (vehicle or "").strip().lower()
+        self.vehicle = vehicle if vehicle in VEHICLE_CHOICES else ""
         self.date_from = self._parse_date(date_from)
         self.date_to = self._parse_date(date_to)
         self.time_from = self._parse_time(time_from)
@@ -116,7 +122,7 @@ class Filters:
         return sum(
             1
             for value in (
-                self.from_city, self.to_city, self.passengers, self.date_from,
+                self.from_city, self.to_city, self.vehicle, self.date_from,
                 self.date_to, self.time_from, self.time_to, self.price_min,
                 self.price_max,
             )
@@ -128,7 +134,7 @@ class Filters:
         return {
             "from_city": self.from_city,
             "to_city": self.to_city,
-            "passengers": str(self.passengers) if self.passengers is not None else "",
+            "vehicle": self.vehicle,
             "date_from": self.date_from.isoformat() if self.date_from else "",
             "date_to": self.date_to.isoformat() if self.date_to else "",
             "time_from": self.time_from.strftime("%H:%M") if self.time_from else "",
@@ -176,14 +182,11 @@ class Filters:
         if to_clause is not None:
             clauses.append(to_clause)
 
-        if self.passengers is not None:
-            # Неизвестное число пассажиров (NULL) НЕ отсеиваем — см. docstring.
-            clauses.append(
-                or_(
-                    Order.passengers.is_(None),
-                    Order.passengers >= self.passengers,
-                )
-            )
+        if self.vehicle == "minivan":
+            clauses.append(Order.vehicle_type == "minivan")
+        elif self.vehicle == "car":
+            # Нет пометки (NULL) — обычная легковая.
+            clauses.append(or_(Order.vehicle_type.is_(None), Order.vehicle_type == "car"))
 
         if self.date_from is not None:
             clauses.append(Order.pickup_at >= datetime.combine(self.date_from, time.min))
@@ -219,13 +222,9 @@ class Filters:
             self.to_radius, self.to_centers,
         ):
             return False
-        # Неизвестное число пассажиров (None) намеренно НЕ отсеивается:
-        # диспетчеры часто его не пишут, и фильтр «от 1» прятал бы пол-ленты.
-        if (
-            self.passengers is not None
-            and order.passengers is not None
-            and order.passengers < self.passengers
-        ):
+        if self.vehicle == "minivan" and order.vehicle_type != "minivan":
+            return False
+        if self.vehicle == "car" and order.vehicle_type == "minivan":
             return False
         if self.date_from is not None and (
             order.pickup_at is None or order.pickup_at.date() < self.date_from

@@ -24,8 +24,8 @@ CASES = [
     ("город в другом регистре", {"from_city": "симферополь"}, ""),
     ("сокращение города", {"from_city": "симф"}, ""),
     ("города через запятую", {"from_city": "Симферополь, Севастополь"}, ""),
-    ("минимум пассажиров", {"passengers": "3"}, ""),
-    ("минимум пассажиров = 1", {"passengers": "1"}, ""),
+    ("только легковые", {"vehicle": "car"}, ""),
+    ("только минивэны", {"vehicle": "minivan"}, ""),
     ("диапазон цены", {"price_min": "5000", "price_max": "15000"}, ""),
     ("только нижняя граница цены", {"price_min": "10000"}, ""),
     ("только верхняя граница цены", {"price_max": "4000"}, ""),
@@ -35,7 +35,7 @@ CASES = [
     ("поиск по городу", {}, "севастополь"),
     ("поиск без результата", {}, "абракадабра"),
     ("фильтр + поиск", {"to_city": "Сочи"}, "иван"),
-    ("всё сразу", {"from_city": "Симферополь", "price_min": "1000", "passengers": "2"}, ""),
+    ("всё сразу", {"from_city": "Симферополь", "price_min": "1000", "vehicle": "car"}, ""),
 ]
 
 
@@ -55,7 +55,12 @@ async def _seed(make_order) -> None:
     await make_order(from_city="г. Севастополь", to_city="Сочи", price="9000",
                      passengers=None, client_name=None, client_phone=None,
                      pickup_at=base + timedelta(days=3, hours=18))
-    # Цена неизвестна: фильтр по цене должен её отсечь, а по пассажирам — нет.
+    # Минивэны: по числу пассажиров и по слову в тексте заявки.
+    await make_order(from_city="Симферополь", to_city="Сочи", price="20000", passengers=6,
+                     pickup_at=base + timedelta(days=2, hours=9))
+    await make_order(from_city="Севастополь", to_city="Сочи", price="18000", passengers=2,
+                     raw_text="Севастополь Сочи минивэн 18000", pickup_at=base + timedelta(days=3, hours=9))
+    # Цена неизвестна: фильтр по цене должен её отсечь.
     await make_order(from_city="Симферополь", to_city="Краснодар", price="",
                      passengers=None, client_name="Иван", pickup_at=base + timedelta(days=4, hours=10))
     # Время подачи неизвестно.
@@ -120,20 +125,18 @@ async def test_date_window_filter(session, make_order):
     assert all(order.pickup_at is not None for order in page.items)
 
 
-async def test_passengers_filter_keeps_unknown(session, make_order):
-    """Исправленный баг: заявка без числа пассажиров НЕ отсеивается фильтром «от 1».
-
-    Диспетчеры часто не пишут пассажиров, и старый фильтр прятал из-за этого
-    большую часть ленты.
-    """
+async def test_vehicle_filter_splits_the_feed(session, make_order):
+    """«Легковой» и «Минивэн» вместе дают всю ленту, не пересекаясь."""
     await _seed(make_order)
 
-    filters = Filters(passengers="1")
-    page = await queries.fetch_feed(session, filters=filters, page=1, page_size=200)
-    passengers = [order.passengers for order in page.items]
+    everything = await queries.fetch_feed(session, filters=Filters(), page=1, page_size=200)
+    cars = await queries.fetch_feed(session, filters=Filters(vehicle="car"), page=1, page_size=200)
+    vans = await queries.fetch_feed(session, filters=Filters(vehicle="minivan"), page=1, page_size=200)
 
-    assert None in passengers, "заявки с неизвестным числом пассажиров должны оставаться"
-    assert all(value is None or value >= 1 for value in passengers)
+    car_ids = {order.id for order in cars.items}
+    van_ids = {order.id for order in vans.items}
+    assert van_ids and car_ids and not car_ids & van_ids
+    assert car_ids | van_ids == {order.id for order in everything.items}
 
 
 async def test_closed_and_taken_orders_never_in_feed(session, make_order):

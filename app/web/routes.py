@@ -120,7 +120,7 @@ async def feed(
     q: str = "",
     from_city: str = "",
     to_city: str = "",
-    passengers: str = "",
+    vehicle: str = "",
     date_from: str = "",
     date_to: str = "",
     time_from: str = "",
@@ -130,17 +130,20 @@ async def feed(
     from_radius: str = "",
     to_radius: str = "",
     sort: str = queries.DEFAULT_SORT,
+    dir: str = "",
     lat: str = "",
     lon: str = "",
     page: int = 1,
 ):
     token, new_token = driver_token(request)
     filters = Filters(
-        from_city, to_city, passengers, date_from, date_to,
-        time_from, time_to, price_min, price_max, from_radius, to_radius,
+        from_city=from_city, to_city=to_city, vehicle=vehicle,
+        date_from=date_from, date_to=date_to, time_from=time_from, time_to=time_to,
+        price_min=price_min, price_max=price_max, from_radius=from_radius, to_radius=to_radius,
     )
     if sort not in queries.SORT_LABELS:
         sort = queries.DEFAULT_SORT
+    direction = queries.effective_direction(sort, dir)
     coords = _parse_coords(lat, lon) if sort == "distance" else None
 
     async with SessionLocal() as session:
@@ -152,6 +155,7 @@ async def feed(
             filters=filters,
             q=q,
             sort=sort,
+            direction=direction,
             page=page,
             coords=coords,
         )
@@ -177,6 +181,7 @@ async def feed(
             "notify_checked": subscription is None or subscription.is_active,
             "subscription_error": subscription.error if subscription else None,
             "sort": sort,
+            "direction": direction,
             "lat": lat,
             "lon": lon,
         },
@@ -211,7 +216,7 @@ async def my_orders_page(request: Request):
 
 
 _FILTER_FIELDS = (
-    "from_city", "to_city", "passengers", "date_from", "date_to",
+    "from_city", "to_city", "vehicle", "date_from", "date_to",
     "time_from", "time_to", "price_min", "price_max", "from_radius", "to_radius",
 )
 
@@ -234,6 +239,8 @@ async def apply_filter(request: Request):
             view[extra] = str(form[extra])[:200]
     if str(form.get("sort") or "") in queries.SORT_LABELS:
         view["sort"] = str(form["sort"])
+        if str(form.get("dir") or "") in queries.DIRECTION_LABELS:
+            view["dir"] = str(form["dir"])
     target = f"/?{urlencode(view)}" if view else "/"
 
     _token, new_token, login_required = resolve_driver(request)

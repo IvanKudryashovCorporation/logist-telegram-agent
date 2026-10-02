@@ -27,7 +27,7 @@ from app.db.base import SessionLocal
 from app.models import Order, OrderSubscription, SubscriptionNotification
 from app.timeutil import now_msk_naive, now_utc_naive
 from app.web import queries
-from app.web.filters import Filters
+from app.web.filters import VEHICLE_CHOICES, Filters
 from app.web.presenters import pickup_label
 
 log = logging.getLogger("app.subscriptions")
@@ -55,8 +55,8 @@ def describe_filters(params: dict) -> list[str]:
 
     place("Откуда", params.get("from_city", ""), params.get("from_radius", ""))
     place("Куда", params.get("to_city", ""), params.get("to_radius", ""))
-    if params.get("passengers"):
-        lines.append(f"Пассажиров от {params['passengers']}")
+    if params.get("vehicle") in VEHICLE_CHOICES:
+        lines.append(f"Тип авто: {VEHICLE_CHOICES[params['vehicle']].lower()}")
     if params.get("date_from") or params.get("date_to"):
         lines.append(f"Дата: {params.get('date_from') or '…'} — {params.get('date_to') or '…'}")
     if params.get("time_from") or params.get("time_to"):

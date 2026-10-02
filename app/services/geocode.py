@@ -12,7 +12,7 @@ import asyncio
 import logging
 from typing import Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 
 from app import geo
 from app.config import settings
@@ -40,7 +40,14 @@ async def geocode_pending(*, limit: Optional[int] = None) -> int:
             (
                 await session.execute(
                     select(Order)
-                    .where(Order.geo_checked_at.is_(None))
+                    .where(
+                        or_(
+                            Order.geo_checked_at.is_(None),
+                            # Обработан старой логикой — пересчитываем новой.
+                            Order.geo_version.is_(None),
+                            Order.geo_version < geo.GEO_VERSION,
+                        )
+                    )
                     # Живые заказы раньше скрытых: ленте нужны именно они.
                     .order_by(Order.status.in_(HIDDEN_STATUSES), Order.id.desc())
                     .limit(batch)
@@ -66,10 +73,12 @@ async def _geocode_order(session, order: Order) -> None:
 
     # Деревню, найденную не там, поправляет адрес из заявки («Мрия», «Оползневое»).
     origin = await geo.refine_by_address(
-        session, origin, order.from_address, near=destination.coords if destination else None
+        session, origin, order.from_address,
+        near=destination.coords if destination else None, city=order.from_city,
     )
     destination = await geo.refine_by_address(
-        session, destination, order.to_address, near=origin.coords if origin else None
+        session, destination, order.to_address,
+        near=origin.coords if origin else None, city=order.to_city,
     )
 
     await session.execute(
@@ -81,6 +90,7 @@ async def _geocode_order(session, order: Order) -> None:
             to_lat=destination.lat if destination else None,
             to_lon=destination.lon if destination else None,
             geo_checked_at=now_utc_naive(),
+            geo_version=geo.GEO_VERSION,
             # Координаты поменялись — расстояние по ним устарело, пусть пересчитается.
             distance_km=None,
             route_checked_at=None,

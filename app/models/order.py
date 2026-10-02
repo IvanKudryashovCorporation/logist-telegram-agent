@@ -118,6 +118,12 @@ class Order(Base, TimestampMixin):
     to_lon: Mapped[Optional[float]] = mapped_column(Float)
     #: NULL — геокодер этим заказом ещё не занимался (или города поменялись).
     geo_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=False))
+    #: ``car`` / ``minivan`` — какой автомобиль нужен (app.search.vehicle_type_of).
+    #: Считается при каждом сохранении вместе с остальными производными полями.
+    vehicle_type: Mapped[Optional[str]] = mapped_column(String(8))
+    #: Версия логики геокодера (app.geo.GEO_VERSION), которой посчитаны координаты.
+    #: NULL или меньше текущей — воркер пересчитает заказ.
+    geo_version: Mapped[Optional[int]] = mapped_column(Integer)
     #: Расстояние по дорогам между концами маршрута, км (маршрутизатор OSRM,
     #: app/routing.py). Считает фоновый воркер после геокодера; NULL — ещё не
     #: посчитано или посчитать не вышло (тогда сайт просто не показывает цифру).

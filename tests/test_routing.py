@@ -154,6 +154,14 @@ def test_distance_label():
     assert presenters.distance_label(Order(distance_km=0.4)) == ""
 
 
+def test_price_per_km_label():
+    assert presenters.price_per_km_label(Order(distance_km=200.0, client_price=8000)) == "40 ₽/км"
+    assert presenters.price_per_km_label(Order(distance_km=243.5, client_price=8000)) == "33 ₽/км"
+    assert presenters.price_per_km_label(Order(distance_km=None, client_price=8000)) == ""
+    assert presenters.price_per_km_label(Order(distance_km=200.0, client_price=None)) == ""
+    assert presenters.price_per_km_label(Order(distance_km=0.4, client_price=8000)) == ""
+
+
 async def test_site_shows_distance_on_feed_and_card(client, make_order, session):
     order = await make_order(from_coords=PETROZAVODSK, to_coords=SORTAVALA)
     order.distance_km = 243.5
@@ -162,8 +170,8 @@ async def test_site_shows_distance_on_feed_and_card(client, make_order, session)
     feed = await client.get("/")
     card = await client.get(f"/orders/{order.id}")
 
-    assert "Расстояние: 244 км" in feed.text
-    assert "Расстояние: 244 км" in card.text
+    for page in (feed, card):
+        assert "Расстояние: 244 км · 57 ₽/км" in page.text  # цена заказа по умолчанию 14000
 
 
 async def test_site_without_distance_shows_nothing(client, make_order):

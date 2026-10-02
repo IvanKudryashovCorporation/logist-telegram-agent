@@ -55,7 +55,7 @@
       </div>
     </div>
     {% set distance = distance_label(order) %}
-    {% if distance %}<div class="route-distance">Расстояние: {{ distance }}</div>{% endif %}
+    {% if distance %}<div class="route-distance">Расстояние: {{ distance }}{% set per_km = price_per_km_label(order) %}{% if per_km %} · {{ per_km }}{% endif %}</div>{% endif %}
   </div>
 
   <div class="fields-grid">
@@ -108,12 +108,12 @@
     {% else %}
       {% if link %}
         <form id="contactForm" data-message="{{ dispatcher_text }}" method="post" action="/orders/{{ order.id }}/contact{% if back %}?back={{ back | urlencode }}{% endif %}">
-          <button type="submit" class="btn-ok">Написать диспетчеру</button>
+          <button type="submit" class="btn-contact">Написать диспетчеру</button>
         </form>
       {% endif %}
       {% if is_mine and order.status.value in ("agreed", "in_progress") %}
         <form method="post" action="/orders/{{ order.id }}/complete{% if back %}?back={{ back | urlencode }}{% endif %}">
-          <button type="submit" class="btn-ok">Выполнил заказ</button>
+          <button type="submit" class="btn-done">Выполнил заказ</button>
         </form>
         <form method="post" action="/orders/{{ order.id }}/release">
           <button type="submit" class="btn-secondary">Отменить</button>

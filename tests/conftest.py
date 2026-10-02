@@ -49,6 +49,7 @@ import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
 
+from app import geo  # noqa: E402
 from app.db.base import Base, SessionLocal, engine  # noqa: E402
 from app.models import Order, OrderStatus  # noqa: E402
 from app.search import refresh_derived  # noqa: E402
@@ -172,6 +173,7 @@ async def create_order(
         order.from_lat, order.from_lon = from_coords or (None, None)
         order.to_lat, order.to_lon = to_coords or (None, None)
         order.geo_checked_at = now_utc_naive()
+        order.geo_version = geo.GEO_VERSION
     session.add(order)
     await session.commit()
     await session.refresh(order)

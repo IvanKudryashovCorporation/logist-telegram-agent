@@ -132,6 +132,14 @@ def distance_label(order: Order) -> str:
     return f"{round(km)} км"
 
 
+def price_per_km_label(order: Order) -> str:
+    """«33 ₽/км» — цена заказа на километр пути; пусто, если нет цены или расстояния."""
+    km = order.distance_km
+    if not order.client_price or not km or km < 1:
+        return ""
+    return f"{round(float(order.client_price) / km)} ₽/км"
+
+
 def pickup_subtext(order: Order, *, now: Optional[datetime] = None) -> str:
     """Короткая подпись под временем подачи — как давно/скоро подача."""
     if order.pickup_at is None:

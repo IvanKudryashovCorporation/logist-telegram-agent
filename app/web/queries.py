@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import Float, case, cast, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.city_aliases import KNOWN_CITIES, city_coords, expand_city_term
@@ -41,10 +41,31 @@ log = logging.getLogger("web.queries")
 SORT_LABELS = {
     "recent": "Недавности",
     "price": "Цене",
+    "per_km": "Цене за км",
+    "trip_km": "Расстоянию",
     "date": "Дате подачи",
-    "distance": "Близости",
+    "distance": "Близости ко мне",
 }
 DEFAULT_SORT = "recent"
+
+#: Направление каждой сортировки, когда водитель его не выбирал. Совпадает с тем,
+#: как сайт сортировал раньше: свежие и дорогие сверху, ближайшая подача и
+#: ближайший к водителю — первыми.
+DEFAULT_DIRECTION = {
+    "recent": "desc",
+    "price": "desc",
+    "per_km": "desc",
+    "trip_km": "desc",
+    "date": "asc",
+    "distance": "asc",
+}
+DIRECTION_LABELS = {"desc": "По убыванию", "asc": "По возрастанию"}
+
+
+def effective_direction(sort: str, direction: str = "") -> str:
+    """``asc`` / ``desc``: выбранное водителем или обычное для этой сортировки."""
+    direction = (direction or "").strip().lower()
+    return direction if direction in DIRECTION_LABELS else DEFAULT_DIRECTION.get(sort, "desc")
 
 #: Жёсткий потолок на размер страницы — защита от ?page_size=999999.
 MAX_PAGE_SIZE = 200
@@ -97,26 +118,55 @@ def feed_conditions(*, now=None) -> list:
     ]
 
 
-def sort_clause(sort: str):
-    """SQL-порядок сортировки для режимов, которые считаются в БД."""
+def price_per_km_expr():
+    """Цена заказа на километр пути; NULL, если нет цены или расстояния (< 1 км)."""
+    return case(
+        (
+            Order.distance_km >= 1,
+            cast(Order.client_price, Float) / Order.distance_km,
+        ),
+        else_=None,
+    )
+
+
+def sort_clause(sort: str, direction: str = ""):
+    """SQL-порядок сортировки для режимов, которые считаются в БД.
+
+    Заказы, у которых нет значения (цена, расстояние), всегда в конце списка —
+    в любом направлении, иначе «по возрастанию» начиналось бы с пустых.
+    """
+    desc = effective_direction(sort, direction) == "desc"
+
+    def ordered(expr):
+        return (expr.is_(None), expr.desc() if desc else expr.asc(), Order.id.desc())
+
     if sort == "price":
-        # Сначала «цена неизвестна», дальше по убыванию цены.
-        return (Order.client_price.is_(None), Order.client_price.desc())
+        return ordered(Order.client_price)
+    if sort == "trip_km":
+        return ordered(Order.distance_km)
+    if sort == "per_km":
+        return ordered(price_per_km_expr())
     if sort == "date":
-        # Срочные («в ближайшее время») — первыми, заказы без времени — в конце.
-        return (Order.pickup_asap.desc(), Order.pickup_at.is_(None), Order.pickup_at.asc())
-    # recent — самые свежие сверху.
-    return (Order.created_at.desc(), Order.id.desc())
+        # «В ближайшее время» (без времени подачи) — раньше всех при сортировке
+        # по возрастанию, позже всех при сортировке по убыванию.
+        if desc:
+            return (Order.pickup_at.is_(None), Order.pickup_at.desc(), Order.id.desc())
+        return (Order.pickup_asap.desc(), Order.pickup_at.is_(None), Order.pickup_at.asc(), Order.id.asc())
+    # recent — по времени появления.
+    if desc:
+        return (Order.created_at.desc(), Order.id.desc())
+    return (Order.created_at.asc(), Order.id.asc())
 
 
-def distance_sort(orders: list, coords: tuple[float, float]) -> list:
+def distance_sort(orders: list, coords: tuple[float, float], *, descending: bool = False) -> list:
     """Сортировка по удалённости от водителя; города без координат — в конец."""
 
     def _distance(order: Order) -> float:
-        city = city_coords(order.from_city)
-        return haversine_km(coords, city) if city else float("inf")
+        return haversine_km(coords, city_coords(order.from_city))
 
-    return sorted(orders, key=_distance)
+    known = [o for o in orders if city_coords(o.from_city)]
+    unknown = [o for o in orders if not city_coords(o.from_city)]
+    return sorted(known, key=_distance, reverse=descending) + unknown
 
 
 # --- Справочник городов для автодополнения ----------------------------------
@@ -190,6 +240,7 @@ async def fetch_feed(
     filters: Optional[Filters] = None,
     q: str = "",
     sort: str = DEFAULT_SORT,
+    direction: str = "",
     page: int = 1,
     page_size: Optional[int] = None,
     coords: Optional[tuple[float, float]] = None,
@@ -220,7 +271,8 @@ async def fetch_feed(
     if sort == "distance" and coords is not None:
         # Расстояние считается в Python — пагинируем уже отсортированный список.
         rows = list((await session.execute(base)).scalars().all())
-        rows = distance_sort(rows, coords)
+        descending = effective_direction(sort, direction) == "desc"
+        rows = distance_sort(rows, coords, descending=descending)
         total = len(rows)
         start = (current_page - 1) * size
         return FeedPage(items=rows[start:start + size], total=total,
@@ -230,7 +282,7 @@ async def fetch_feed(
         await session.execute(select(func.count()).select_from(base.subquery()))
     ).scalar_one()
 
-    stmt = base.order_by(*sort_clause(sort)).limit(size).offset((current_page - 1) * size)
+    stmt = base.order_by(*sort_clause(sort, direction)).limit(size).offset((current_page - 1) * size)
     items = list((await session.execute(stmt)).scalars().all())
     return FeedPage(items=items, total=total, page=current_page, page_size=size)
 

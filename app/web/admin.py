@@ -32,7 +32,7 @@ from app.models import (
     PendingStatus,
 )
 from app.parsing.llm_parser import cache_stats
-from app.services import reporting
+from app.services import geo_health, reporting
 from app.timeutil import now_utc_naive
 from app.web.deps import is_admin
 from app.web.rate_limit import limiter_stats
@@ -86,6 +86,7 @@ async def dashboard(request: Request, days: int = 7):
                 )
             ).scalars().all()
         )
+        distance_issues = await geo_health.distance_issues(session)
 
     return _render(
         request,
@@ -94,6 +95,7 @@ async def dashboard(request: Request, days: int = 7):
         parse=parse,
         queue=queue,
         problems=problems,
+        distance_issues=distance_issues,
         days=days,
         cache=cache_stats(),
         rate_limit=limiter_stats(),

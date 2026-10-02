@@ -455,6 +455,10 @@
     }
     .btn-secondary { background: var(--card); color: var(--text); border-color: var(--border); }
     .btn-ok { background: var(--ok); border-color: var(--ok); }
+    /* Кнопки заказа — разных цветов, чтобы не перепутать: написать — синяя,
+       договорился — зелёная, выполнил — фиолетовая, отменить — серая. */
+    .btn-contact { background: #2563eb; border-color: #2563eb; color: #ffffff; }
+    .btn-done { background: #7c3aed; border-color: #7c3aed; color: #ffffff; }
     form { display: inline-block; margin: 0; }
 
     input[type="text"], input[type="number"], input[type="date"], input[type="time"] {

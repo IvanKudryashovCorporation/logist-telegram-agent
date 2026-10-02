@@ -42,8 +42,8 @@
               {% if order.to_address %}<div class="route-point-address">{{ order.to_address }}</div>{% endif %}
             </div>
           </div>
-          {% set distance = distance_label(order) %}
-          {% if distance %}<div class="route-distance">Расстояние: {{ distance }}</div>{% endif %}
+{% set distance = distance_label(order) %}
+          {% if distance %}<div class="route-distance">Расстояние: {{ distance }}{% set per_km = price_per_km_label(order) %}{% if per_km %} · {{ per_km }}{% endif %}</div>{% endif %}
         </div>
 
         {% set tags = order_tags(order) %}

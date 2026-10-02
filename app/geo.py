@@ -214,6 +214,43 @@ def pick(candidates: list[Candidate], near: Optional[Coords] = None) -> Optional
     return min(candidates, key=lambda c: haversine_km(c.coords, near))
 
 
+#: Версия логики геокодирования. Подняли её — фоновый воркер сам перегеокодирует
+#: все заказы, обработанные старой версией: исправления не нужно «накатывать»
+#: на прод руками, а старые ошибки (не та деревня) не живут вечно.
+GEO_VERSION = 2
+
+#: Часть адреса, называющая регион: «Астраханская область», «Краснодарский край».
+_REGION_PART_RE = re.compile(r"област|\bкрай\b|республик", re.IGNORECASE)
+
+
+def region_hint(address: Optional[str]) -> Optional[str]:
+    """Регион из адреса заявки («Ля Дача, Астраханская область, …» -> «Астраханская область»)."""
+    for part in (address or "").split(","):
+        part = part.strip()
+        if part and len(part) <= 60 and _REGION_PART_RE.search(part):
+            return part
+    return None
+
+
+async def _lookup_with_region(
+    session: AsyncSession, city: Optional[str], address: Optional[str], near: Optional[Coords]
+) -> Optional["Candidate"]:
+    """Ищет город уже с регионом из адреса: «Вышка» + «Астраханская область».
+
+    Без региона Nominatim отдаёт первую «Вышку» в мире (Закарпатье) — а диспетчер
+    часто пишет регион в адресе. Названия, где регион указан в самом городе
+    («Брянка ЛНР»), не трогаем.
+    """
+    region = region_hint(address)
+    if not region or not city:
+        return None
+    base, own_hint = normalize_place(city)
+    if not base or own_hint is not None:
+        return None
+    found = await resolve(session, f"{base}, {region}")
+    return pick(found, near) if found else None
+
+
 #: Если адрес — сам населённый пункт и он дальше этого от найденной деревни,
 #: верим адресу, а не названию (см. :func:`refine_by_address`).
 ADDRESS_OVERRIDE_KM = 100
@@ -242,6 +279,7 @@ async def refine_by_address(
     chosen: Optional["Candidate"],
     address: Optional[str],
     near: Optional[Coords] = None,
+    city: Optional[str] = None,
 ) -> Optional["Candidate"]:
     """Исправляет заведомо неверно найденную деревню по адресу из заявки.
 
@@ -255,8 +293,19 @@ async def refine_by_address(
     не попадают, крупные города и места из справочника не переопределяются.
     Бросает :class:`GeocoderUnavailable`, как и :func:`resolve`.
     """
-    if chosen is None or chosen.kind not in _SMALL_PLACE_KINDS:
+    if chosen is not None and chosen.kind not in _SMALL_PLACE_KINDS:
         return chosen
+
+    # Регион из адреса: и когда деревню не нашли вовсе, и когда нашли не ту.
+    with_region = await _lookup_with_region(session, city, address, near)
+    if with_region is not None:
+        if chosen is None or haversine_km(chosen.coords, with_region.coords) > 5:
+            log.info("Регион из адреса «%s» уточнил место «%s»", address, city)
+            return with_region
+        return chosen
+    if chosen is None:
+        return chosen
+
     raw = (address or "").strip()
     if not raw or len(raw) > 60 or _NOT_A_PLACE_ADDRESS_RE.search(raw):
         return chosen

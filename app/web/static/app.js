@@ -273,8 +273,17 @@
       var lonInput = document.getElementById('sortLon');
       var form = document.getElementById('searchForm');
       var lastValue = select.value; // на случай отказа геолокации — откатиться сюда
+      var dirSelect = document.getElementById('dirSelect');
+      var defaults = {};
+      try { defaults = JSON.parse(dirSelect.getAttribute('data-defaults') || '{}'); } catch (e) {}
+
+      // Направление меняется отдельно — сразу перезагружаем ленту.
+      dirSelect.addEventListener('change', function () { form.submit(); });
 
       select.addEventListener('change', function () {
+        // Новая сортировка — с её обычным направлением (свежие и дорогие сверху,
+        // ближайшая подача первой); водитель может переключить его после.
+        if (defaults[select.value]) dirSelect.value = defaults[select.value];
         if (select.value !== 'distance') {
           form.submit();
           return;

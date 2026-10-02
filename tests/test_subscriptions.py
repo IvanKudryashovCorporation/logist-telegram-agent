@@ -213,18 +213,18 @@ async def test_many_matches_are_one_digest_not_a_flood(session, make_order, monk
 
 def test_describe_filters_in_plain_russian():
     params = Filters(
-        from_city="Краснодар", from_radius="50", to_city="Сочи", passengers="3", price_min="5000"
+        from_city="Краснодар", from_radius="50", to_city="Сочи", vehicle="minivan", price_min="5000"
     ).as_dict()
 
     assert describe_filters(params) == [
-        "Откуда: Краснодар (+50 км)", "Куда: Сочи", "Пассажиров от 3", "Цена: от 5000 до ∞ ₽",
+        "Откуда: Краснодар (+50 км)", "Куда: Сочи", "Тип авто: минивэн", "Цена: от 5000 до ∞ ₽",
     ]
 
 
 def test_filter_without_a_city_is_not_a_valid_subscription():
     assert svc.has_route(Filters(from_city="Краснодар").as_dict())
     assert svc.has_route(Filters(to_city="Сочи").as_dict())
-    assert not svc.has_route(Filters(price_min="5000", passengers="2").as_dict())
+    assert not svc.has_route(Filters(price_min="5000", vehicle="car").as_dict())
 
 
 # --- Веб: «Применить» и профиль ----------------------------------------------------------

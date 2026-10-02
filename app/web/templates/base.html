@@ -50,7 +50,7 @@
         {% if filters is defined %}
           <input type="hidden" name="from_city" value="{{ filters.from_city }}">
           <input type="hidden" name="to_city" value="{{ filters.to_city }}">
-          <input type="hidden" name="passengers" value="{{ filters.passengers or '' }}">
+          <input type="hidden" name="vehicle" value="{{ filters.vehicle }}">
           <input type="hidden" name="date_from" value="{{ filters.date_from.isoformat() if filters.date_from else '' }}">
           <input type="hidden" name="date_to" value="{{ filters.date_to.isoformat() if filters.date_to else '' }}">
           <input type="hidden" name="time_from" value="{{ filters.time_from.strftime('%H:%M') if filters.time_from else '' }}">
@@ -69,6 +69,12 @@
               <option value="{{ value }}" {{ 'selected' if sort == value else '' }}>{{ label }}</option>
             {% endfor %}
           </select>
+          <select name="dir" id="dirSelect" form="searchForm" aria-label="Порядок сортировки"
+                  data-defaults="{{ default_directions | tojson | forceescape }}">
+            {% for value, label in direction_labels.items() %}
+              <option value="{{ value }}" {{ 'selected' if direction == value else '' }}>{{ '↓' if value == 'desc' else '↑' }} {{ label }}</option>
+            {% endfor %}
+          </select>
           <input type="hidden" name="lat" id="sortLat" value="{{ lat or '' }}" form="searchForm">
           <input type="hidden" name="lon" id="sortLon" value="{{ lon or '' }}" form="searchForm">
         </div>
@@ -83,6 +89,7 @@
             <input type="hidden" name="q" value="{{ q or '' }}">
             {% if sort is defined %}
               <input type="hidden" name="sort" value="{{ sort }}">
+              <input type="hidden" name="dir" value="{{ direction }}">
               <input type="hidden" name="lat" value="{{ lat or '' }}">
               <input type="hidden" name="lon" value="{{ lon or '' }}">
             {% endif %}
@@ -115,8 +122,13 @@
               </select>
             </div>
             <div>
-              <label>Пассажиров (мин.)</label>
-              <input type="number" min="1" name="passengers" value="{{ filters.passengers or '' }}" placeholder="Любое">
+              <label>Тип авто</label>
+              <select name="vehicle" aria-label="Тип авто">
+                <option value="" {{ 'selected' if not filters.vehicle else '' }}>Любой</option>
+                {% for value, label in vehicle_choices.items() %}
+                  <option value="{{ value }}" {{ 'selected' if filters.vehicle == value else '' }}>{{ label }}</option>
+                {% endfor %}
+              </select>
             </div>
             <div class="date-range-field" id="dateRangeField">
               <label>Дата подачи</label>

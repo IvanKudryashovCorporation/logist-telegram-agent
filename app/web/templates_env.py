@@ -14,7 +14,8 @@ from fastapi.templating import Jinja2Templates
 from app.geo import RADIUS_CHOICES
 from app.models import ORDER_STATUS_LABELS
 from app.web import presenters
-from app.web.queries import DEFAULT_SORT, SORT_LABELS
+from app.web.filters import VEHICLE_CHOICES
+from app.web.queries import DEFAULT_DIRECTION, DEFAULT_SORT, DIRECTION_LABELS, SORT_LABELS
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -38,6 +39,9 @@ TEMPLATE_GLOBALS = {
     "static_url": static_url,
     "status_labels": ORDER_STATUS_LABELS,
     "sort_labels": SORT_LABELS,
+    "vehicle_choices": VEHICLE_CHOICES,
+    "direction_labels": DIRECTION_LABELS,
+    "default_directions": DEFAULT_DIRECTION,
     "radius_choices": RADIUS_CHOICES,
     "default_sort": DEFAULT_SORT,
     "bucket_titles": presenters.BUCKET_TITLES,
@@ -45,6 +49,7 @@ TEMPLATE_GLOBALS = {
     "pickup_label": presenters.pickup_label,
     "pickup_subtext": presenters.pickup_subtext,
     "distance_label": presenters.distance_label,
+    "price_per_km_label": presenters.price_per_km_label,
     "is_overdue": presenters.is_overdue,
     "relative_ago": presenters.relative_ago,
     "order_tags": presenters.order_tags,

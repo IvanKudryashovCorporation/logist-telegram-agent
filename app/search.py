@@ -59,6 +59,30 @@ def refresh_search_text(order: Any) -> Any:
 SEARCH_FIELDS_SQL = ", ".join(SEARCH_FIELDS)
 
 
+#: Признаки минивэна в классе авто и в тексте заявки. «Альфард» и «спринтер» —
+#: марки, которые диспетчеры пишут вместо слова «минивэн».
+_MINIVAN_RE = re.compile(
+    r"мини-?в[эе]н|компакт-?в[эе]н|\bв[эе]н\b|микроавтобус|минибас|альфард|спринтер|\bvan\b",
+    re.IGNORECASE,
+)
+#: В легковой помещаются четверо пассажиров; пять и больше — уже минивэн.
+_MINIVAN_PASSENGERS = 5
+
+
+def vehicle_type_of(car_class: Optional[str], raw_text: Optional[str], passengers: Optional[int]) -> str:
+    """``minivan`` или ``car`` — тип авто, который нужен заказу.
+
+    Минивэн: так назван класс авто, или слово «минивэн» есть в тексте заявки, или
+    пассажиров пять и больше. Всё остальное (включая «комфорт», «бизнес» и
+    заявки без пометок) — обычная легковая.
+    """
+    if _MINIVAN_RE.search(car_class or "") or _MINIVAN_RE.search(raw_text or ""):
+        return "minivan"
+    if passengers is not None and passengers >= _MINIVAN_PASSENGERS:
+        return "minivan"
+    return "car"
+
+
 def refresh_derived(order: Any) -> Any:
     """Пересчитывает все денормализованные поля поиска/фильтрации заказа.
 
@@ -80,6 +104,11 @@ def refresh_derived(order: Any) -> Any:
     order.from_city_key = new_from_key
     order.to_city_key = new_to_key
     order.pickup_time_key = pickup_time_key(getattr(order, "pickup_at", None))
+    order.vehicle_type = vehicle_type_of(
+        getattr(order, "car_class", None),
+        getattr(order, "raw_text", None),
+        getattr(order, "passengers", None),
+    )
     return order
 
 

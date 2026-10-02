@@ -123,6 +123,35 @@
   </table>
 </div>
 
+<div class="card" id="distance-issues">
+  <h2>Расстояния: что не определилось{% if distance_issues %} ({{ distance_issues|length }}){% endif %}</h2>
+  {% if distance_issues %}
+    <p class="muted">
+      Заказы ленты, у которых километры не посчитаны или выглядят неверно. Чаще всего
+      место не нашлось в OpenStreetMap или нашлось не то: задать координаты можно командой
+      <span class="mono">python -m scripts.geo_places set "Название" широта долгота</span> —
+      заказы с этим названием пересчитаются сами.
+    </p>
+    <table>
+      <thead>
+        <tr><th>Заказ</th><th>Маршрут</th><th>Что не так</th><th>Подробности</th></tr>
+      </thead>
+      <tbody>
+        {% for issue in distance_issues %}
+          <tr>
+            <td class="num mono"><a href="/orders/{{ issue.order.id }}" target="_blank" rel="noopener">#{{ issue.order.id }}</a></td>
+            <td>{{ issue.order.from_city or '?' }} → {{ issue.order.to_city or '?' }}</td>
+            <td>{{ issue.label }}</td>
+            <td class="muted">{{ issue.detail }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">Всё определилось.</div>
+  {% endif %}
+</div>
+
 <div class="card" id="problems">
   <h2>Жалобы водителей</h2>
   {% if problems %}
