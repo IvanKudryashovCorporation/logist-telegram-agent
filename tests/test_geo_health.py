@@ -30,7 +30,7 @@ def test_region_hint_from_address():
     assert geo.region_hint("Ля Дача, Астраханская область, Лиманский район") == "Астраханская область"
     assert geo.region_hint("ул. Ленина 5, Краснодарский край") == "Краснодарский край"
     assert geo.region_hint("Республика Крым") == "Республика Крым"
-    assert geo.region_hint("новоайдарский район") is None
+    assert geo.region_hint("новоайдарский район") == "Новоайдарский район"  # район тоже сужает поиск
     assert geo.region_hint("Аэропорт") is None
     assert geo.region_hint(None) is None
 
@@ -125,8 +125,8 @@ def test_classify_ok_and_waiting():
 
 def test_classify_problems():
     no_coords = _checked(from_city="Гречишкино", to_city="Ижевск", from_lat=None, to_lat=56.8, to_lon=53.2)
-    same = _checked(from_city="Уфа", to_city="Уфа", from_lat=54.7, from_lon=55.9, to_lat=54.7, to_lon=55.9,
-                    route_checked_at=now_utc_naive())
+    same = _checked(from_city="Уфа", to_city="Стерлитамак", from_lat=54.7, from_lon=55.9, to_lat=54.7,
+                    to_lon=55.9, route_checked_at=now_utc_naive())
     no_route = _checked(from_city="А", to_city="Б", from_lat=1.0, from_lon=1.0, to_lat=2.0, to_lon=2.0,
                         route_checked_at=now_utc_naive())
     odd = _checked(from_city="Астрахань", to_city="село Вышка", from_lat=46.3, from_lon=48.0,

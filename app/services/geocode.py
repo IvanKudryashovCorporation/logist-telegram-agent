@@ -12,7 +12,7 @@ import asyncio
 import logging
 from typing import Optional
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import and_, or_, select, update
 
 from app import geo
 from app.config import settings
@@ -46,6 +46,12 @@ async def geocode_pending(*, limit: Optional[int] = None) -> int:
                             # Обработан старой логикой — пересчитываем новой.
                             Order.geo_version.is_(None),
                             Order.geo_version < geo.GEO_VERSION,
+                            # Без координат и проверен до последнего улучшения поиска:
+                            # возможно, теперь место найдётся.
+                            and_(
+                                or_(Order.from_lat.is_(None), Order.to_lat.is_(None)),
+                                Order.geo_checked_at < geo.GEO_LOGIC_DATE,
+                            ),
                         )
                     )
                     # Живые заказы раньше скрытых: ленте нужны именно они.
@@ -75,10 +81,12 @@ async def _geocode_order(session, order: Order) -> None:
     origin = await geo.refine_by_address(
         session, origin, order.from_address,
         near=destination.coords if destination else None, city=order.from_city,
+        raw_text=order.raw_text,
     )
     destination = await geo.refine_by_address(
         session, destination, order.to_address,
         near=origin.coords if origin else None, city=order.to_city,
+        raw_text=order.raw_text,
     )
 
     await session.execute(

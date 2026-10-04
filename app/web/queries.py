@@ -21,7 +21,7 @@ from typing import Optional
 from sqlalchemy import Float, case, cast, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.city_aliases import KNOWN_CITIES, city_coords, expand_city_term
+from app.city_aliases import KNOWN_CITIES, _compact, city_coords, city_key, expand_city_term
 from app.config import settings
 from app.geo import haversine_km
 from app.models import (
@@ -225,13 +225,52 @@ async def known_cities(session: AsyncSession) -> list[str]:
     # На всякий случай раскрываем сокращения и здесь — часть заказов в базе
     # ещё может хранить город как есть, «Симф» и «Симферополь» не должны
     # попадать в подсказки как два разных города.
-    real_cities = {expand_city_term(c) for c in [*from_cities, *to_cities]}
-    value = sorted(set(KNOWN_CITIES) | real_cities)
+    # Один город — одна запись: названия сводятся к каноническому и дедуплицируются по
+    # «сжатой» форме («Мелитополь» и «мелитополь» — не два города).
+    chosen: dict[str, str] = {}
+    for name in [*KNOWN_CITIES, *(expand_city_term(c) for c in [*from_cities, *to_cities])]:
+        key = _compact(city_key(name))
+        if not key:
+            continue
+        current = chosen.get(key)
+        # Предпочитаем написание с заглавной буквы; из равных — по алфавиту.
+        if current is None or (name[:1].isupper(), current) > (current[:1].isupper(), name):
+            chosen[key] = name
+    value = sorted(chosen.values())
     _city_cache.set(value)
     return list(value)
 
 
 # --- Лента ------------------------------------------------------------------
+
+
+def feed_where(filters: Optional[Filters] = None, q: str = "", conditions: Optional[list] = None) -> list:
+    """WHERE ленты: базовые условия + структурные фильтры + поиск по тексту.
+
+    Одно место и для самой ленты, и для счётчика на кнопке «Применить (N)» —
+    иначе число на кнопке разошлось бы с тем, что покажет лента.
+    """
+    filters = filters or Filters()
+    where = list(conditions if conditions is not None else feed_conditions())
+    where += filters.sql()
+
+    q = (q or "").strip().lower()
+    if q:
+        # Ищем по подготовленной search_text (всё уже в нижнем регистре):
+        # LOWER() в SQLite не понимает кириллицу, поэтому приводить регистр
+        # нужно при записи, а не в запросе. autoescape — чтобы «%» в запросе
+        # не превращался в wildcard.
+        where.append(Order.search_text.contains(q, autoescape=True))
+    return where
+
+
+async def count_feed(session: AsyncSession, *, filters: Optional[Filters] = None, q: str = "") -> int:
+    """Сколько заказов покажет лента с этим фильтром (для «Применить (N)»)."""
+    return (
+        await session.execute(
+            select(func.count()).select_from(Order).where(*feed_where(filters, q))
+        )
+    ).scalar_one()
 
 
 async def fetch_feed(
@@ -251,22 +290,10 @@ async def fetch_feed(
     ``conditions`` позволяет переиспользовать запрос для других списков
     (например, «мои заказы»), подставив свой базовый WHERE.
     """
-    filters = filters or Filters()
     size = min(max(1, page_size or settings.web_page_size), MAX_PAGE_SIZE)
     current_page = max(1, page)
 
-    where = list(conditions if conditions is not None else feed_conditions())
-    where += filters.sql()
-
-    q = (q or "").strip().lower()
-    if q:
-        # Ищем по подготовленной search_text (всё уже в нижнем регистре):
-        # LOWER() в SQLite не понимает кириллицу, поэтому приводить регистр
-        # нужно при записи, а не в запросе. autoescape — чтобы «%» в запросе
-        # не превращался в wildcard.
-        where.append(Order.search_text.contains(q, autoescape=True))
-
-    base = select(Order).where(*where)
+    base = select(Order).where(*feed_where(filters, q, conditions))
 
     if sort == "distance" and coords is not None:
         # Расстояние считается в Python — пагинируем уже отсортированный список.

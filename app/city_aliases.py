@@ -9,8 +9,14 @@
 
 import re
 
-#: Префиксы-мусор перед названием города: «г. Симферополь», «город Керчь».
-_CITY_PREFIX_RE = re.compile(r"^(?:г\.|гор\.|город|city)\s+", re.IGNORECASE)
+#: Префиксы-мусор перед названием: «г. Симферополь», «город Керчь», «с.Лев Толстое»,
+#: «посёлок Грицовский», «деревня Родионцева». Тип населённого пункта в ключ не входит:
+#: «Поселок Грицовский» и «Посёлок Грицовский» — одно место.
+_CITY_PREFIX_RE = re.compile(
+    r"^(?:(?:г|гор|с|д|п|пос|ст|х|ст-ца)\.\s*|"
+    r"(?:город|city|село|деревня|посёлок|поселок|станица|хутор|пгт)\s+)",
+    re.IGNORECASE,
+)
 
 CITY_ALIASES: dict[str, str] = {
     # Крым
@@ -42,6 +48,9 @@ CITY_ALIASES: dict[str, str] = {
     "новороссийск": "Новороссийск",
     "сочи": "Сочи",
     "адлер": "Адлер",
+    "будденовск": "Буденновск",
+    "буденовск": "Буденновск",
+    "будённовск": "Буденновск",
     "поляна": "Красная Поляна",
     "красная поляна": "Красная Поляна",
     "роза хутор": "Красная Поляна",
@@ -77,21 +86,62 @@ CITY_ALIASES: dict[str, str] = {
 }
 
 
+def _compact(value: str | None) -> str:
+    """Название без регистра, пробелов, точек и дефисов, «ё» = «е».
+
+    «Мин Воды», «мин.воды», «МИН-ВОДЫ» и «Минводы» дают одну строку «минводы».
+    Раньше справочник искал точную строку в нижнем регистре, и любое отличие
+    (лишний пробел, заглавная буква, точка) делало город «новым»: в автодополнении
+    фильтра появлялось три «Минеральных Воды», а фильтр по одной записи не находил
+    остальные.
+    """
+    text = str(value or "").lower().replace("ё", "е")
+    return re.sub(r"[^0-9a-zа-я]+", "", text)
+
+
+def _build_alias_index() -> dict[str, str]:
+    index: dict[str, str] = {}
+    for alias, canonical in CITY_ALIASES.items():
+        index[_compact(alias)] = canonical
+        index[_compact(canonical)] = canonical
+    return index
+
+
+_ALIAS_INDEX: dict[str, str] = _build_alias_index()
+
+
+def canonical_city_name(raw: str | None) -> str | None:
+    """Каноническое название, если ``raw`` — известный город или его написание/сокращение.
+
+    Единственная точка стандарта: точное совпадение по «сжатой» форме (см.
+    :func:`_compact`), без угадывания по началу строки. ``None`` — город не из
+    справочника, его название остаётся как написано.
+    """
+    if not raw:
+        return None
+    return _ALIAS_INDEX.get(_compact(city_key(raw)))
+
+
 def expand_city_term(raw: str) -> str:
     """Раскрывает сокращение в полное название города. Если сокращение
     неизвестно — возвращает исходный текст как есть (сравнение всё равно
     идёт как substring, так что не-раскрытые города продолжают работать)."""
-    term = raw.strip().lower()
+    term = raw.strip()
     if not term:
-        return raw.strip()
-    if term in CITY_ALIASES:
-        return CITY_ALIASES[term]
+        return term
+    exact = canonical_city_name(term)
+    if exact:
+        return exact
     # Частичное совпадение по префиксу в любую сторону — так "минеральные"
     # находит "минеральные воды", а "минвод" находит алиас "минводы".
+    compact = _compact(city_key(term))
+    if not compact:
+        return term
     for alias, canonical in CITY_ALIASES.items():
-        if alias.startswith(term) or term.startswith(alias):
+        alias_compact = _compact(alias)
+        if alias_compact.startswith(compact) or compact.startswith(alias_compact):
             return canonical
-    return raw.strip()
+    return term
 
 
 def city_matches(term: str, order_city: str | None) -> bool:
@@ -127,9 +177,13 @@ def city_key(value: str | None) -> str:
     """
     if not value:
         return ""
-    text = str(value).strip().lower()
-    text = _CITY_PREFIX_RE.sub("", text)
-    text = re.sub(r"\s+", " ", text)
+    text = str(value).strip().lower().replace("ё", "е")
+    for _ in range(2):  # «г. п. Мостовской» — два префикса подряд
+        text = _CITY_PREFIX_RE.sub("", text)
+    # «М.О.» и «М. О.» — одно и то же: точки считаем пробелами.
+    text = re.sub(r"[.\s]+", " ", text)
+    text = re.sub(r"\s*\(\s*", " (", text)  # «Толстое( Район )» = «Толстое (Район)»
+    text = re.sub(r"\s*\)", ")", text)
     return text.strip(" .,;-")
 
 

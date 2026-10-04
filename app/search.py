@@ -89,11 +89,15 @@ def refresh_derived(order: Any) -> Any:
     Вызывается перед каждым сохранением (создание и обновление) — в одном
     месте, чтобы колонки не могли «разъехаться» с исходными значениями.
     """
-    from app.city_aliases import city_key
+    from app.city_aliases import canonical_city_name, city_key
 
     refresh_search_text(order)
-    new_from_key = city_key(getattr(order, "from_city", None)) or None
-    new_to_key = city_key(getattr(order, "to_city", None)) or None
+    # Ключ строится по каноническому названию: «Мин воды» и «Минеральные Воды» —
+    # один ключ, какой бы вариант ни остался в поле города.
+    from_city = getattr(order, "from_city", None)
+    to_city = getattr(order, "to_city", None)
+    new_from_key = city_key(canonical_city_name(from_city) or from_city) or None
+    new_to_key = city_key(canonical_city_name(to_city) or to_city) or None
     if new_from_key != order.from_city_key or new_to_key != order.to_city_key:
         # Город поменялся (правка сообщения) — старые координаты ему уже не
         # соответствуют, геокодер должен пересчитать оба конца.

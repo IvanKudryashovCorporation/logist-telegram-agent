@@ -49,6 +49,8 @@ TEMPLATE_GLOBALS = {
     "pickup_label": presenters.pickup_label,
     "pickup_subtext": presenters.pickup_subtext,
     "distance_label": presenters.distance_label,
+    "message_link": presenters.message_link,
+    "direct_chat_link": presenters.direct_chat_link,
     "price_per_km_label": presenters.price_per_km_label,
     "is_overdue": presenters.is_overdue,
     "relative_ago": presenters.relative_ago,

@@ -28,6 +28,13 @@ from telethon import TelegramClient, events
 from app.city_aliases import canonical_city_variants, city_key, expand_city_term
 from app.config import settings
 from app.db.base import SessionLocal
+from app.dedupe_rules import (
+    ASAP_WINDOW,
+    TIME_TOLERANCE,
+    LiveOrder,
+    clearly_different_clients,
+    is_repost,
+)
 from app.models import (
     HIDDEN_STATUSES,
     ActionLog,
@@ -38,7 +45,7 @@ from app.models import (
 )
 from app.parsing import stats as parse_stats
 from app.parsing.llm_parser import parse_orders, text_hash
-from app.parsing.order_builder import apply_parsed_fields, combine_pickup_at
+from app.parsing.order_builder import apply_parsed_fields, resolve_pickup_at
 from app.parsing.prefilter import PrefilterDecision, prefilter
 from app.parsing.schema import ParsedOrder
 from app.telegram import pending as pending_queue
@@ -58,6 +65,7 @@ _DUPLICATE_DATE_TOLERANCE = timedelta(days=1)
 # нечего — один и тот же рейс, разосланный диспетчером по нескольким группам,
 # узнаём по маршруту, цене и тому, что обе заявки свежие.
 _DUPLICATE_ASAP_WINDOW = timedelta(hours=6)
+
 
 # Telethon раздаёт события НЕЗАВИСИМЫМИ задачами — сообщения из разных групп,
 # пришедшие почти одновременно, разбираются конкурентно, каждое в своей сессии
@@ -94,7 +102,56 @@ def _city_match_clauses(column, raw_city: str):
     return or_(*clauses)
 
 
-async def _find_duplicate(session, parsed: ParsedOrder) -> Optional[Order]:
+def _live_order(order: Order) -> LiveOrder:
+    return LiveOrder(
+        id=order.id, tg_id=order.dispatcher_tg_id, username=order.dispatcher_username,
+        from_city=order.from_city, to_city=order.to_city, pickup_at=order.pickup_at,
+        phone=order.client_phone, passengers=order.passengers, created_at=order.created_at,
+        raw_text=order.raw_text, from_address=order.from_address, to_address=order.to_address,
+    )
+
+
+async def _find_repost(session, new: LiveOrder) -> Optional[Order]:
+    """Заявка уже опубликована раньше? Правило — в :mod:`app.dedupe_rules`.
+
+    Тот же диспетчер, маршрут и время — ТА ЖЕ заявка (он меняет цену, дублирует в другую
+    группу, пишет «Родионцева»/«Родионцево»); цена тут не критерий. Тот же текст сообщения
+    тоже считается повтором, даже если диспетчер не определился.
+    """
+    if not new.from_city or not new.to_city:
+        return None
+    if new.pickup_at is None:
+        when = (
+            Order.pickup_asap.is_(True),
+            Order.pickup_at.is_(None),
+            Order.created_at >= now_utc_naive() - ASAP_WINDOW,
+        )
+    else:
+        when = (
+            Order.pickup_at >= new.pickup_at - TIME_TOLERANCE,
+            Order.pickup_at <= new.pickup_at + TIME_TOLERANCE,
+        )
+    candidates = (
+        await session.execute(
+            select(Order)
+            .where(Order.status.notin_(HIDDEN_STATUSES), *when)
+            .order_by(Order.id.asc())
+            .limit(300)
+        )
+    ).scalars().all()
+    for candidate in candidates:
+        if is_repost(_live_order(candidate), new):
+            return candidate
+    return None
+
+
+async def _find_duplicate(
+    session,
+    parsed: ParsedOrder,
+    dispatcher_tg_id: Optional[int] = None,
+    dispatcher_username: Optional[str] = None,
+    raw_text: Optional[str] = None,
+) -> Optional[Order]:
     """Тот же маршрут, подача в пределах суток И та же цена уже есть в
     активной ленте — разные диспетчеры иногда публикуют один и тот же рейс
     порознь, в разных группах, слегка другими словами (сокращённые города,
@@ -108,9 +165,26 @@ async def _find_duplicate(session, parsed: ParsedOrder) -> Optional[Order]:
     Закрытые заказы (CANCELLED/AGREED/EXPIRED) дублями не считаются: заявка
     уже отработана, свежая публикация того же рейса — новая возможность.
     """
-    pickup_at = combine_pickup_at(parsed.pickup_date, parsed.pickup_time)
+    # То же вычисление, что при сохранении заказа: «20:00» без даты — это сегодня/завтра,
+    # а не «срочно». Раньше здесь стояло combine_pickup_at, и все заявки с одним временем
+    # без даты искались как «срочные» и никогда не находили уже сохранённую (с датой).
+    pickup_at = resolve_pickup_at(parsed.pickup_date, parsed.pickup_time)
     # Без времени подачи заказ считается срочным (Order.pickup_asap).
     asap = pickup_at is None
+
+    repost = await _find_repost(
+        session,
+        LiveOrder(
+            id=None, tg_id=dispatcher_tg_id, username=dispatcher_username,
+            from_city=parsed.from_city, to_city=parsed.to_city, pickup_at=pickup_at,
+            phone=parsed.client_phone, passengers=parsed.passengers,
+            created_at=now_utc_naive(), raw_text=raw_text,
+            from_address=parsed.from_address, to_address=parsed.to_address,
+        ),
+    )
+    if repost is not None:
+        return repost
+
     if not parsed.from_city or not parsed.to_city or parsed.client_price is None:
         return None
 
@@ -149,6 +223,13 @@ async def _find_duplicate(session, parsed: ParsedOrder) -> Optional[Order]:
     # Страховка от слишком широкого LIKE: финальная сверка канонических городов.
     from_canon = city_key(expand_city_term(parsed.from_city))
     to_canon = city_key(expand_city_term(parsed.to_city))
+    candidates = [
+        c for c in candidates
+        if not clearly_different_clients(
+            _live_order(c),
+            LiveOrder(None, None, None, None, None, None, parsed.client_phone, parsed.passengers, None, None),
+        )
+    ]
     for candidate in candidates:
         if city_key(candidate.from_city) == from_canon and city_key(candidate.to_city) == to_canon:
             return candidate
@@ -324,8 +405,31 @@ async def _save_orders(
             continue
 
         if is_new_order:
-            duplicate = await _find_duplicate(db, parsed)
+            duplicate = await _find_duplicate(
+                db, parsed, dispatcher_tg_id, dispatcher_username,
+                raw_text=_order_raw_text(parsed, text),
+            )
             if duplicate is not None:
+                if (
+                    parsed.client_price is not None
+                    and duplicate.client_price is not None
+                    and duplicate.client_price != parsed.client_price
+                ):
+                    # Диспетчер сменил цену и опубликовал заново — актуальна новая.
+                    log.info(
+                        "Дубль #%s: цена %s -> %s (chat=%s msg=%s)",
+                        duplicate.id, duplicate.client_price, parsed.client_price, chat_id, message_id,
+                    )
+                    duplicate.client_price = parsed.client_price
+                    db.add(
+                        ActionLog(
+                            order_id=duplicate.id,
+                            actor=ActorType.DISPATCHER,
+                            actor_tg_id=dispatcher_tg_id,
+                            action="duplicate_price_updated",
+                            details=f"chat={chat_id} msg={message_id} sub={index}",
+                        )
+                    )
                 db.add(
                     ActionLog(
                         order_id=duplicate.id,

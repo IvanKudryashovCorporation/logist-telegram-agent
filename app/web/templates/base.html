@@ -80,12 +80,12 @@
         </div>
       {% endif %}
       {% if filters is defined %}
-        <details class="filters-details" {{ 'open' if filters.active_count else '' }}>
+        <details class="filters-details" id="filtersDetails">
           <summary>
             Фильтры
             {% if filters.active_count %}<span class="tab-count">{{ filters.active_count }}</span>{% endif %}
           </summary>
-          <form class="filters-panel" {% if is_logged_in %}method="post" action="/filter"{% else %}method="get" action="/"{% endif %}>
+          <form class="filters-panel" id="filtersForm" {% if is_logged_in %}method="post" action="/filter"{% else %}method="get" action="/"{% endif %}>
             <input type="hidden" name="q" value="{{ q or '' }}">
             {% if sort is defined %}
               <input type="hidden" name="sort" value="{{ sort }}">
@@ -103,7 +103,7 @@
               </div>
               <select name="from_radius" class="radius-select" aria-label="Радиус">
                 {% for km in radius_choices %}
-                  <option value="{{ km }}" {{ 'selected' if filters.from_radius == km else '' }}>{{ 'Только город' if km == 0 else '+ ' ~ km ~ ' км' }}</option>
+                  <option value="{{ km }}" {{ 'selected' if filters.from_radius == km else '' }}>{{ 'Радиус' if km == 0 else '+ ' ~ km ~ ' км' }}</option>
                 {% endfor %}
               </select>
             </div>
@@ -117,13 +117,13 @@
               </div>
               <select name="to_radius" class="radius-select" aria-label="Радиус">
                 {% for km in radius_choices %}
-                  <option value="{{ km }}" {{ 'selected' if filters.to_radius == km else '' }}>{{ 'Только город' if km == 0 else '+ ' ~ km ~ ' км' }}</option>
+                  <option value="{{ km }}" {{ 'selected' if filters.to_radius == km else '' }}>{{ 'Радиус' if km == 0 else '+ ' ~ km ~ ' км' }}</option>
                 {% endfor %}
               </select>
             </div>
             <div>
               <label>Тип авто</label>
-              <select name="vehicle" aria-label="Тип авто">
+              <select name="vehicle" class="radius-select" style="margin-top:0" aria-label="Тип авто">
                 <option value="" {{ 'selected' if not filters.vehicle else '' }}>Любой</option>
                 {% for value, label in vehicle_choices.items() %}
                   <option value="{{ value }}" {{ 'selected' if filters.vehicle == value else '' }}>{{ label }}</option>
@@ -180,8 +180,8 @@
               <div class="hint notify-toggle">Войдите, чтобы получать новые заказы по фильтру в Telegram.</div>
             {% endif %}
             <div class="filters-actions">
-              <button type="submit">Применить</button>
-              <a href="/{{ '?q=' + q if q else '' }}" class="btn btn-secondary">Сбросить фильтры</a>
+              <button type="submit" id="filterApply">Применить{% if page_info is defined and page_info %} <span id="filterApplyCount">({{ page_info.total }})</span>{% endif %}</button>
+              <a href="/{{ '?q=' + q if q else '' }}" class="btn btn-secondary">Сбросить</a>
             </div>
           </form>
         </details>
@@ -195,6 +195,11 @@
     {% endif %}
     {% block content %}{% endblock %}
   </main>
+  {% if owner_contact_url %}
+    <footer class="site-footer">
+      <a class="collab-btn" href="{{ owner_contact_url }}" target="_blank" rel="noopener">Для сотрудничества и предложений</a>
+    </footer>
+  {% endif %}
   <script src="{{ static_url('app.js') }}" defer></script>
 </body>
 </html>

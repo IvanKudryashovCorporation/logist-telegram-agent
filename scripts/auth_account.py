@@ -8,6 +8,10 @@
         --code 12345 --phone-code-hash <hash из первого запуска>
     ... --password "2fa-пароль"       # если включена двухфакторная защита
 
+    python -m scripts.auth_account --phone +79788674077 --session acc_4077 --interactive
+        # код из Telegram и пароль 2FA вводятся прямо в терминале (запускать по
+        # ``ssh -t``): они нигде не сохраняются и не попадают в историю команд
+
 Запускать тем же Python, что и агент (.venv): файл сессии зависит от версии Telethon.
 """
 
@@ -31,6 +35,16 @@ def build_account_client(session_name: str) -> TelegramClient:
 
 async def main(args: argparse.Namespace) -> None:
     client = build_account_client(args.session)
+
+    if args.interactive:
+        # Telethon сам спросит код и (если включён) пароль 2FA через input()/getpass().
+        await client.start(phone=args.phone)
+        me = await client.get_me()
+        print(f"Авторизован: {me.first_name} (@{me.username}), id={me.id}")
+        print(f"Файл сессии: {args.session}.session")
+        await client.disconnect()
+        return
+
     await client.connect()
 
     if await client.is_user_authorized():
@@ -67,4 +81,8 @@ if __name__ == "__main__":
     parser.add_argument("--code", default=None)
     parser.add_argument("--phone-code-hash", default=None)
     parser.add_argument("--password", default=None)
+    parser.add_argument(
+        "--interactive", action="store_true",
+        help="спросить код и пароль 2FA в терминале (нужен ssh -t)",
+    )
     asyncio.run(main(parser.parse_args()))

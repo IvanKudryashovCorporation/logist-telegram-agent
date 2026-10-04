@@ -14,6 +14,31 @@ from pydantic import BaseModel, field_validator
 #: Цена меньше этого — это тысячи: «25» = 25 000 ₽. Междугородний трансфер
 #: дешевле 100 ₽ не бывает, а цен 100–999 ₽ на проде не встречалось вовсе.
 _THOUSANDS_BELOW = Decimal(100)
+#: Цена за поездку не бывает миллионной. От этой суммы считаем, что тысячи
+#: применили дважды: диспетчер написал «4000 тыс» (то есть 4000 ₽), а разбор
+#: умножил ещё раз и получил 4 000 000.
+_IMPLAUSIBLE_FROM = Decimal(300_000)
+#: Всё, что и после деления остаётся выше, — явный мусор: цену не показываем.
+_ABSURD_ABOVE = Decimal(1_000_000)
+
+
+def normalize_price(value: Optional[Decimal]) -> Optional[Decimal]:
+    """Приводит цену к реальной сумме в рублях (или ``None``, если ей нельзя верить).
+
+    * меньше 100 — диспетчер писал в тысячах («25», «14т»): умножаем на 1000;
+    * от 300 000 и кратно 1000 — «4000 тыс» разобрано как 4 000 000: делим на 1000;
+    * после этого больше миллиона — цена неизвестна, лучше пустая, чем нереальная.
+    """
+    if value is None:
+        return None
+    if 0 < value < _THOUSANDS_BELOW:
+        return value * 1000
+    for _ in range(2):
+        if value >= _IMPLAUSIBLE_FROM and value % 1000 == 0:
+            value = value / 1000
+    if value > _ABSURD_ABOVE:
+        return None
+    return value
 
 _RECORD_ORDERS_NAME = "record_orders"
 _RECORD_ORDERS_DESCRIPTION = (
@@ -77,7 +102,9 @@ _ORDER_ITEM_PROPERTIES = {
             "Полная стоимость для клиента в рублях, если указана. Иначе null (не оставлять "
             "поле пустым). Диспетчеры часто пишут в тысячах: «25», «14т», «7.5к», «25+платка» "
             "означают 25000, 14000, 7500 и 25000 ₽ («+платка» — платная дорога сверху, в "
-            "цену не входит)."
+            "цену не входит). Если сумма уже полная (от 1000), а рядом стоит «т»/«тыс»/«т.р.» "
+            "(«4000 т», «12000т», «2000 т.р.»), это лишнее слово: цена 4000, 12000 и 2000, "
+            "на 1000 НЕ умножай."
         ),
     },
     "is_urgent": {"type": "boolean", "description": "Заявка помечена как срочная."},
@@ -139,10 +166,8 @@ class ParsedOrder(BaseModel):
     @field_validator("client_price")
     @classmethod
     def _price_in_thousands(cls, value: Optional[Decimal]) -> Optional[Decimal]:
-        """Страховка поверх промпта: LLM иногда переносит «25+платка» как 25."""
-        if value is not None and 0 < value < _THOUSANDS_BELOW:
-            return value * 1000
-        return value
+        """Страховка поверх промпта: «25+платка» -> 25000, «4000 тыс» -> 4000."""
+        return normalize_price(value)
 
     @property
     def is_complete(self) -> bool:

@@ -55,8 +55,14 @@
         hint.textContent = (rangeStart && !rangeEnd) ? 'Выберите дату окончания' : 'Выберите дату начала';
       }
       function updateInputs() {
+        var before = fromInput.value + '|' + toInput.value;
         fromInput.value = rangeStart ? toISO(rangeStart) : '';
         toInput.value = rangeEnd ? toISO(rangeEnd) : '';
+        // Скрытые поля из JS событий не порождают — сообщаем сами, чтобы
+        // пересчитался счётчик на «Применить (N)».
+        if (before !== fromInput.value + '|' + toInput.value) {
+          fromInput.dispatchEvent(new Event('change', { bubbles: true }));
+        }
       }
 
       function render() {
@@ -166,7 +172,11 @@
           .filter(Boolean);
 
         function syncHidden() {
+          var before = hiddenInput.value;
           hiddenInput.value = selected.join(', ');
+          if (before !== hiddenInput.value) {
+            hiddenInput.dispatchEvent(new Event('change', { bubbles: true }));
+          }
         }
 
         function renderChips() {
@@ -329,6 +339,68 @@
       form.addEventListener('submit', copy);
     })();
 
+
+    // Панель фильтра: «Применить (N)» пересчитывается на лету, кнопка прилипает
+    // к низу экрана, а после применения панель закрывается.
+    (function () {
+      var details = document.getElementById('filtersDetails');
+      var form = document.getElementById('filtersForm');
+      if (!details || !form) return;
+
+      // Высота панели — до нижнего края экрана: поля прокручиваются внутри,
+      // а кнопки «Применить»/«Сбросить» всегда на виду (и на телефоне).
+      function fitPanel() {
+        if (!details.open) return;
+        var top = form.getBoundingClientRect().top;
+        form.style.maxHeight = Math.max(240, window.innerHeight - top - 12) + 'px';
+      }
+      details.addEventListener('toggle', fitPanel);
+      window.addEventListener('resize', fitPanel);
+
+      form.addEventListener('submit', function () { details.open = false; });
+
+      var countEl = document.getElementById('filterApplyCount');
+      if (!countEl) return;
+      var SKIP = { notify: 1, sort: 1, dir: 1, lat: 1, lon: 1 };
+      var timer = null;
+      var controller = null;
+      var lastQuery = null;
+
+      function query() {
+        var params = new URLSearchParams();
+        new FormData(form).forEach(function (value, key) {
+          if (!SKIP[key] && value !== '' && value !== '0') params.append(key, value);
+        });
+        return params.toString();
+      }
+      lastQuery = query();
+
+      function refresh() {
+        var current = query();
+        if (current === lastQuery) return; // поле без значения для фильтра (ввод города и т.п.)
+        lastQuery = current;
+        if (controller) controller.abort();
+        controller = window.AbortController ? new AbortController() : null;
+        countEl.classList.add('is-loading');
+        fetch('/feed/count?' + current, { signal: controller ? controller.signal : undefined })
+          .then(function (response) { return response.ok ? response.json() : null; })
+          .then(function (data) {
+            if (data && typeof data.total === 'number') countEl.textContent = '(' + data.total + ')';
+            countEl.classList.remove('is-loading');
+          })
+          .catch(function (error) {
+            if (error && error.name === 'AbortError') return; // уже идёт свежий запрос
+            countEl.classList.remove('is-loading');
+          });
+      }
+
+      function schedule() {
+        clearTimeout(timer);
+        timer = setTimeout(refresh, 350);
+      }
+      form.addEventListener('input', schedule);
+      form.addEventListener('change', schedule);
+    })();
 
     (function () {
       var toggle = document.getElementById('themeToggle');

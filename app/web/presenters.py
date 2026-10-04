@@ -86,6 +86,29 @@ def dispatcher_link(order: Order, text: Optional[str] = None) -> Optional[str]:
     if username:
         url = f"https://t.me/{username}"
         return f"{url}?text={quote(text, safe='')}" if text else url
+    # Без @username: ссылка на само сообщение в группе — обычная https, она открывается
+    # в приложении Telegram даже из мобильного браузера (в отличие от tg://, который
+    # браузеры блокируют при перенаправлении с сайта). Из сообщения чат с автором в один тап.
+    return message_link(order) or direct_chat_link(order)
+
+
+def message_link(order: Order) -> Optional[str]:
+    """Ссылка на исходное сообщение заявки в группе (``https://t.me/c/<чат>/<сообщение>``).
+
+    Работает для супергрупп (id вида ``-100…``); открывается у тех, кто состоит в группе —
+    а водители диспетчерских групп в них состоят.
+    """
+    chat_id, message_id = order.source_chat_id, order.source_message_id
+    if chat_id is None or message_id is None:
+        return None
+    digits = str(abs(int(chat_id)))
+    if int(chat_id) < 0 and digits.startswith("100") and len(digits) > 3:
+        return f"https://t.me/c/{digits[3:]}/{int(message_id)}"
+    return None
+
+
+def direct_chat_link(order: Order) -> Optional[str]:
+    """Прямая ссылка на чат по числовому id диспетчера (работает, если Telegram его «знает»)."""
     if order.dispatcher_tg_id:
         return f"tg://user?id={order.dispatcher_tg_id}"
     return None

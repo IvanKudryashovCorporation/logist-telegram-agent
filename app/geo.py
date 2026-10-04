@@ -14,11 +14,12 @@
 """
 
 import asyncio
+import difflib
 import logging
 import re
 import time
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from math import asin, cos, radians, sin, sqrt
 from typing import Optional
 
@@ -26,7 +27,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.city_aliases import CITY_ALIASES, CITY_COORDS, city_key, split_city_terms
+from app.city_aliases import CITY_COORDS, canonical_city_name, city_key, split_city_terms
 from app.config import settings
 from app.models.geo_place import (
     SOURCE_NOMINATIM,
@@ -54,7 +55,7 @@ _NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 _COUNTRY_CODES = "ru,ua,by,kz,ge"
 #: Типы объектов Nominatim, которые считаем «населённым пунктом».
 _PLACE_KINDS = frozenset(
-    {"city", "town", "village", "hamlet", "suburb", "locality", "isolated_dwelling"}
+    {"city", "town", "village", "hamlet", "suburb", "locality", "isolated_dwelling", "aeroway"}
 )
 _MAX_CANDIDATES = 5
 
@@ -95,7 +96,8 @@ def parse_radius(value) -> int:
 # --- Нормализация названий ---------------------------------------------------
 
 _PLACE_PREFIX_RE = re.compile(
-    r"^(?:г\.?|гор\.|город|с\.?|село|ст\.?|ст-ца|станица|пгт\.?|пос\.?|посёлок|поселок|"
+    r"^(?:сельское\s+поселение|городское\s+поселение|муниципальный\s+округ|городской\s+округ|"
+    r"г\.?|гор\.|город|с\.?|село|ст\.?|ст-ца|станица|пгт\.?|пос\.?|посёлок|поселок|"
     r"п\.?|д\.?|деревня|х\.?|хутор|кпп|мкр\.?|аул|рп\.?)\s+",
     re.IGNORECASE,
 )
@@ -118,6 +120,81 @@ _ABBREVIATION_RE = re.compile(
     r"\s*[,(]?\s*\b(" + "|".join(_REGION_ABBREVIATIONS) + r")\b\)?\s*$", re.IGNORECASE
 )
 _PAREN_RE = re.compile(r"\(([^)]*)\)")
+
+#: Области и края, названия которых встречаются в заявках (в именительном падеже).
+_REGION_NAMES = (
+    "Алтайский край", "Амурская область", "Архангельская область", "Астраханская область",
+    "Белгородская область", "Брянская область", "Владимирская область", "Волгоградская область",
+    "Вологодская область", "Воронежская область", "Ивановская область", "Иркутская область",
+    "Калининградская область", "Калужская область", "Камчатский край", "Кемеровская область",
+    "Кировская область", "Костромская область", "Краснодарский край", "Красноярский край",
+    "Курганская область", "Курская область", "Ленинградская область", "Липецкая область",
+    "Магаданская область", "Московская область", "Мурманская область", "Нижегородская область",
+    "Новгородская область", "Новосибирская область", "Омская область", "Оренбургская область",
+    "Орловская область", "Пензенская область", "Пермский край", "Приморский край",
+    "Псковская область", "Ростовская область", "Рязанская область", "Самарская область",
+    "Саратовская область", "Сахалинская область", "Свердловская область", "Смоленская область",
+    "Ставропольский край", "Тамбовская область", "Тверская область", "Томская область",
+    "Тульская область", "Тюменская область", "Ульяновская область", "Хабаровский край",
+    "Челябинская область", "Забайкальский край", "Ярославская область",
+    "Луганская область", "Донецкая область", "Запорожская область", "Херсонская область",
+    "Харьковская область", "Сумская область", "Черниговская область", "Киевская область",
+    "Николаевская область", "Одесская область", "Днепропетровская область",
+)
+_REGION_BY_ADJECTIVE = {name.split()[0].lower(): name for name in _REGION_NAMES}
+#: «обл.», «р-н» и т.п. — что Nominatim не понимает.
+_ABBREV_FIXES = (
+    (re.compile(r"\bобл\.?(?=\W|$)", re.IGNORECASE), "область"),
+    (re.compile(r"\bр-н\b\.?", re.IGNORECASE), "район"),
+    (re.compile(r"\bкр\.(?=\W|$)", re.IGNORECASE), "край"),
+    (re.compile(r"\bресп\.?(?=\W|$)", re.IGNORECASE), "республика"),
+)
+_REGION_TOKEN_RE = re.compile(r"([а-яё\-]+)\s*(обл\.?|област[ьи]|край|кр\.)", re.IGNORECASE)
+_DISTRICT_TOKEN_RE = re.compile(r"([а-яё\-]+(?:ский|цкий|ной|ый|ий))\s*(?:р-н|район)", re.IGNORECASE)
+_HINT_NEEDS_CLEANING_RE = re.compile(r"обл\b|обл\.|р-н|\bкр\.|\bресп\b|крым|област|район|край", re.IGNORECASE)
+
+
+def canonical_region(text: Optional[str]) -> Optional[str]:
+    """«брянсская обл.» -> «Брянская область», «Крым» -> «Республика Крым», «Выборгский р-н» ->
+    «Выборгский район». ``None``, если в тексте региона не видно."""
+    raw = re.sub(r"\s+", " ", (text or "").strip())
+    if not raw:
+        return None
+    lowered = raw.lower()
+    for abbreviation, full in _REGION_ABBREVIATIONS.items():
+        if re.search(rf"\b{abbreviation}\b", lowered):
+            return full
+    if "крым" in lowered and "севастопол" not in lowered:
+        return "Республика Крым"
+
+    token = _REGION_TOKEN_RE.search(lowered)
+    if token:
+        adjective = token.group(1)
+        close = difflib.get_close_matches(adjective, list(_REGION_BY_ADJECTIVE), n=1, cutoff=0.8)
+        if close:
+            return _REGION_BY_ADJECTIVE[close[0]]
+        suffix = "край" if token.group(2).startswith(("кра", "кр")) else "область"
+        return f"{adjective.capitalize()} {suffix}"
+    district = _DISTRICT_TOKEN_RE.search(lowered)
+    if district:
+        return f"{district.group(1).capitalize()} район"
+    return None
+
+
+def _clean_hint(hint: Optional[str]) -> Optional[str]:
+    """Приводит подсказку региона к виду, который понимает Nominatim.
+
+    Подсказки без «обл./р-н/Крым» («Татарстан», «Джанкой») остаются как есть.
+    """
+    if not hint or not _HINT_NEEDS_CLEANING_RE.search(hint):
+        return hint
+    canonical = canonical_region(hint)
+    if canonical:
+        return canonical
+    cleaned = hint
+    for pattern, replacement in _ABBREV_FIXES:
+        cleaned = pattern.sub(replacement, cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip(" ,.") or hint
 
 
 def normalize_place(raw: Optional[str]) -> tuple[str, Optional[str]]:
@@ -156,19 +233,13 @@ def normalize_place(raw: Optional[str]) -> tuple[str, Optional[str]]:
     text = _PLACE_PREFIX_RE.sub("", text).strip(" .,;-")
 
     canonical = _canonical_alias(text)
-    return canonical or text, hint
+    return canonical or text, _clean_hint(hint)
 
 
 def _canonical_alias(name: str) -> Optional[str]:
     """Точное совпадение со справочником сокращений (без префиксного — он
     превратил бы деревню «Краснодарский» в Краснодар)."""
-    key = city_key(name)
-    if key in CITY_ALIASES:
-        return CITY_ALIASES[key]
-    squeezed = key.replace(" ", "")
-    if squeezed in CITY_ALIASES:
-        return CITY_ALIASES[squeezed]
-    return None
+    return canonical_city_name(name)
 
 
 def place_key(name: str, hint: Optional[str]) -> str:
@@ -214,41 +285,100 @@ def pick(candidates: list[Candidate], near: Optional[Coords] = None) -> Optional
     return min(candidates, key=lambda c: haversine_km(c.coords, near))
 
 
+#: Когда логика поиска мест менялась в последний раз. Записи кэша «не найдено», проверенные
+#: раньше, считаются устаревшими и ищутся заново — иначе улучшение не доходит до мест,
+#: которые уже один раз не нашлись (а «не найдено» живёт неделю), и заказы без координат
+#: остаются без них. Меняя поиск, обновляйте эту дату.
+GEO_LOGIC_DATE = datetime(2026, 10, 4, 15, 0)
+
 #: Версия логики геокодирования. Подняли её — фоновый воркер сам перегеокодирует
 #: все заказы, обработанные старой версией: исправления не нужно «накатывать»
 #: на прод руками, а старые ошибки (не та деревня) не живут вечно.
-GEO_VERSION = 2
+GEO_VERSION = 4
 
 #: Часть адреса, называющая регион: «Астраханская область», «Краснодарский край».
 _REGION_PART_RE = re.compile(r"област|\bкрай\b|республик", re.IGNORECASE)
 
 
 def region_hint(address: Optional[str]) -> Optional[str]:
-    """Регион из адреса заявки («Ля Дача, Астраханская область, …» -> «Астраханская область»)."""
+    """Регион из адреса заявки («Ля Дача, Астраханская область, …» -> «Астраханская область»).
+
+    Нет области/края/республики — берём район («Выборгский район»), он тоже сужает поиск.
+    """
+    district: Optional[str] = None
     for part in (address or "").split(","):
         part = part.strip()
-        if part and len(part) <= 60 and _REGION_PART_RE.search(part):
-            return part
+        if not part or len(part) > 60:
+            continue
+        if _REGION_PART_RE.search(part):
+            return canonical_region(part) or part
+        if district is None and re.search(r"район|р-н", part, re.IGNORECASE):
+            district = canonical_region(part)
+    return district
+
+
+def region_from_text(raw_text: Optional[str], city: Optional[str]) -> Optional[str]:
+    """Регион, который диспетчер написал рядом с городом в самой заявке.
+
+    «Село Вершины запорожская обл», «Адлер - Красногвардейский (Крым)»,
+    «Кромы ( Орловская обл.)», «Степановка (Курская обл. Рыльский р-н)»: модель
+    разбора часто оставляет в названии только город, а регион теряется — и
+    Nominatim выбирает однофамильца на другом конце страны.
+    """
+    base, own_hint = normalize_place(city)
+    if not raw_text or not base or own_hint is not None or len(base) < 3:
+        return None
+    stem = re.escape(base[: max(3, len(base) - 2)])
+    for line in raw_text.splitlines():
+        match = re.search(stem + r"[а-яё\-]*", line, re.IGNORECASE)
+        if not match:
+            continue
+        tail = line[match.end(): match.end() + 80]
+        paren = re.match(r"\s*\(([^)]{2,60})\)", tail)
+        if paren:
+            candidate = paren.group(1)
+        else:
+            words = re.match(
+                r"\s*,?\s*([а-яё\-]+\s*(?:обл\.?|област\w*|край|р-н|район))", tail, re.IGNORECASE
+            )
+            candidate = words.group(1) if words else None
+        region = canonical_region(candidate) if candidate else None
+        if region:
+            return region
     return None
 
 
-async def _lookup_with_region(
-    session: AsyncSession, city: Optional[str], address: Optional[str], near: Optional[Coords]
-) -> Optional["Candidate"]:
-    """Ищет город уже с регионом из адреса: «Вышка» + «Астраханская область».
+def _name_variants(name: str) -> list[str]:
+    """«Красногвардейский» -> + «Красногвардейское»: диспетчеры пишут не в том роде."""
+    variants = [name]
+    if name.endswith(("ский", "цкий", "ный", "ый", "ий")):
+        variants.append(re.sub(r"(ский|цкий|ный|ый|ий)$", lambda m: m.group(1)[:-2] + "ое", name))
+    return variants
 
-    Без региона Nominatim отдаёт первую «Вышку» в мире (Закарпатье) — а диспетчер
-    часто пишет регион в адресе. Названия, где регион указан в самом городе
-    («Брянка ЛНР»), не трогаем.
+
+async def _lookup_with_region(
+    session: AsyncSession, city: Optional[str], region: Optional[str], near: Optional[Coords]
+) -> Optional["Candidate"]:
+    """Ищет город уже с регионом: «Вышка» + «Астраханская область».
+
+    Без региона Nominatim отдаёт первую «Вышку» в мире (Закарпатье). Названия, где
+    регион указан в самом городе («Брянка ЛНР»), не трогаем.
     """
-    region = region_hint(address)
     if not region or not city:
         return None
     base, own_hint = normalize_place(city)
     if not base or own_hint is not None:
         return None
-    found = await resolve(session, f"{base}, {region}")
-    return pick(found, near) if found else None
+    for variant in _name_variants(base):
+        found = await resolve(session, f"{variant}, {region}")
+        if found:
+            return pick(found, near)
+    return None
+
+
+def _region_stem(region: str) -> str:
+    words = [w for w in re.split(r"\s+", region.lower()) if w not in {"республика", "область", "край", "район"}]
+    return (words[0] if words else region.lower())[:5]
 
 
 #: Если адрес — сам населённый пункт и он дальше этого от найденной деревни,
@@ -280,6 +410,7 @@ async def refine_by_address(
     address: Optional[str],
     near: Optional[Coords] = None,
     city: Optional[str] = None,
+    raw_text: Optional[str] = None,
 ) -> Optional["Candidate"]:
     """Исправляет заведомо неверно найденную деревню по адресу из заявки.
 
@@ -293,17 +424,30 @@ async def refine_by_address(
     не попадают, крупные города и места из справочника не переопределяются.
     Бросает :class:`GeocoderUnavailable`, как и :func:`resolve`.
     """
-    if chosen is not None and chosen.kind not in _SMALL_PLACE_KINDS:
+    # Место из справочника (в названии нет запятых) — проверенное, не трогаем.
+    seeded = chosen is not None and "," not in chosen.name and chosen.kind == "city"
+    if seeded:
         return chosen
 
-    # Регион из адреса: и когда деревню не нашли вовсе, и когда нашли не ту.
-    with_region = await _lookup_with_region(session, city, address, near)
-    if with_region is not None:
-        if chosen is None or haversine_km(chosen.coords, with_region.coords) > 5:
-            log.info("Регион из адреса «%s» уточнил место «%s»", address, city)
-            return with_region
-        return chosen
-    if chosen is None:
+    # Регион из адреса или из текста заявки: и когда место не нашли вовсе, и когда
+    # нашли однофамильца в другом регионе.
+    region = region_hint(address) or region_from_text(raw_text, city)
+    if region:
+        with_region = await _lookup_with_region(session, city, region, near)
+        if with_region is not None:
+            if chosen is None or haversine_km(chosen.coords, with_region.coords) > 5:
+                log.info("Регион «%s» уточнил место «%s»", region, city)
+                return with_region
+            return chosen
+        # Регион назван, но с ним ничего не нашлось. Найденное без региона годится,
+        # только если оно и правда в этом регионе, иначе лучше без координат, чем
+        # однофамилец за тысячу километров.
+        if chosen is not None and _region_stem(region) not in chosen.name.lower():
+            log.info("«%s» (%s): найденное место не в регионе «%s» — координаты не ставим",
+                     city, chosen.name[:50], region)
+            return None
+
+    if chosen is None or chosen.kind not in _SMALL_PLACE_KINDS:
         return chosen
 
     raw = (address or "").strip()
@@ -318,6 +462,13 @@ async def refine_by_address(
         return chosen
     by_address = matches[0]
     if haversine_km(chosen.coords, by_address.coords) <= ADDRESS_OVERRIDE_KM:
+        return chosen
+    # Адрес — улика, а не приговор: «тихая гавань» (пляж в Алахадзах) совпала с
+    # посёлком Тихая Гавань на Кольском и утащила заказ за 3500 км. Верим адресу, только
+    # когда он ближе к другому концу маршрута, чем найденное место (Мрия: Киевская
+    # область против Оползневого в Крыму, а едут в Севастополь). Другого конца нет —
+    # проверить нечем, оставляем найденное.
+    if near is None or haversine_km(by_address.coords, near) >= haversine_km(chosen.coords, near):
         return chosen
     log.info(
         "Адрес «%s» противоречит найденному месту «%s» — беру координаты адреса",
@@ -398,9 +549,38 @@ def _is_fresh(place: GeoPlace) -> bool:
     """Годна ли запись кэша без повторного запроса."""
     if place.status in (STATUS_OK, STATUS_MANUAL):
         return True
-    if place.checked_at is None:
+    if place.checked_at is None or place.checked_at < GEO_LOGIC_DATE:
         return False
     return now_utc_naive() - place.checked_at < NOT_FOUND_RETRY
+
+
+#: Если села нет в OpenStreetMap, но рядом названо известное место, берём его (село обычно
+#: в десятках километров). Одноимённое место ближе этого к названному — считаем найденным.
+APPROXIMATE_RADIUS_KM = 150
+
+
+def _is_region_hint(hint: str) -> bool:
+    """Подсказка — регион или район, а не соседний населённый пункт."""
+    return bool(re.search(r"област|край|республик|район|р-н|округ", hint, re.IGNORECASE)) or (
+        canonical_region(hint) is not None
+    )
+
+
+async def _approximate_by_hint(session: AsyncSession, name: str, hint: str) -> list[Candidate]:
+    """«Хлебодаровка (Волноваха)»: села нет в OSM — ставим рядом с Волновахой.
+
+    Сначала ищем одноимённое место без подсказки: годится, если оно в пределах
+    :data:`APPROXIMATE_RADIUS_KM` от названного соседа. Иначе — сам сосед.
+    """
+    anchors = await resolve(session, hint)
+    if not anchors:
+        return []
+    anchor = anchors[0]
+    plain = [c for c in await resolve(session, name) if haversine_km(c.coords, anchor.coords) <= APPROXIMATE_RADIUS_KM]
+    if plain:
+        return [min(plain, key=lambda c: haversine_km(c.coords, anchor.coords))]
+    neighbour = anchor.name.split(",")[0] or hint
+    return [Candidate(lat=anchor.lat, lon=anchor.lon, name=f"{name} (рядом с {neighbour})", kind="near")]
 
 
 async def resolve(session: AsyncSession, raw: Optional[str]) -> list[Candidate]:
@@ -427,6 +607,8 @@ async def resolve(session: AsyncSession, raw: Optional[str]) -> list[Candidate]:
 
     query = f"{name}, {hint}" if hint else name
     found = await _nominatim_search(query)
+    if not found and hint and not _is_region_hint(hint):
+        found = await _approximate_by_hint(session, name, hint)
 
     if place is None:
         place = GeoPlace(key=key)

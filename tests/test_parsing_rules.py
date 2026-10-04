@@ -13,7 +13,7 @@ from sqlalchemy import select
 from app.models import Order, OrderStatus
 from app.parsing.llm_parser import ParseResult
 from app.parsing.order_builder import apply_parsed_fields, resolve_pickup_at
-from app.parsing.schema import ParsedOrder
+from app.parsing.schema import ParsedOrder, normalize_price
 from app.services.cleanup import expire_stale_orders
 from app.telegram import work_group
 from app.timeutil import now_msk_naive
@@ -296,11 +296,11 @@ async def test_asap_orders_with_different_price_are_not_duplicates(session, monk
 
 
 async def test_old_asap_order_is_not_a_duplicate_of_a_new_one(session, monkeypatch):
-    """Вчерашний висящий «сейчас» не должен поглощать сегодняшнюю заявку."""
+    """Позавчерашний висящий «сейчас» не должен поглощать сегодняшнюю заявку (повторы — в сутки)."""
     await _asap_parse(monkeypatch)
     ids = await work_group.upsert_order_text(chat_id=-100001, message_id=1, text="НА СЕЙЧАС Ленинский-Ревда 3000")
     old = (await session.execute(select(Order).where(Order.id == ids[0]))).scalar_one()
-    old.created_at = old.created_at - timedelta(hours=7)
+    old.created_at = old.created_at - timedelta(hours=25)
     await session.commit()
 
     await work_group.upsert_order_text(chat_id=-100002, message_id=9, text="НА СЕЙЧАС Ленинский-Ревда 3000")
@@ -418,3 +418,50 @@ async def test_message_with_a_route_and_a_routeless_part_keeps_only_the_route(se
     orders = (await session.execute(select(Order))).scalars().all()
     assert len(ids) == 1 and [(o.from_city, o.to_city) for o in orders] == [("Ялта", "Керчь")]
     assert orders[0].source_sub_index == 1  # индекс сохранён: правка сообщения найдёт свой заказ
+
+
+# --- «4000 тыс»: тысячи применили дважды ---------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("4000000", "4000"),  # «4000 тыс»
+        ("12000000", "12000"),
+        ("7500000", "7500"),
+        ("2000000", "2000"),
+        ("4000000000", "4000"),  # дважды
+        ("300000", "300"),  # граница: уже не цена поездки
+        ("250000", "250000"),  # правдоподобно (дальняя поездка) — не трогаем
+        ("52000", "52000"),
+        ("299999", "299999"),
+    ],
+)
+def test_price_with_thousands_applied_twice_is_fixed(raw, expected):
+    assert str(ParsedOrder(client_price=raw).client_price) == expected
+
+
+def test_absurd_price_that_cannot_be_fixed_becomes_unknown():
+    assert ParsedOrder(client_price="1234567").client_price is None
+    assert ParsedOrder(client_price="4500500.5").client_price is None
+
+
+def test_fixed_price_is_used_for_completeness():
+    order = ParsedOrder(from_city="Москва", to_city="Тула", client_price="4000000")
+
+    assert order.client_price == Decimal(4000)
+    assert order.is_complete
+
+
+def test_migration_rule_matches_the_parser_rule():
+    """Правило в миграции скопировано (она не зависит от кода приложения) — сверяем."""
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parent.parent / "migrations" / "versions" / "b9f5e7a2c4d6_fix_double_thousand_prices.py"
+    spec = importlib.util.spec_from_file_location("price_migration", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    for raw in ("4000000", "12000000", "300000", "250000", "1234567", "4000000000", "52000"):
+        assert module._fixed(Decimal(raw)) == normalize_price(Decimal(raw)), raw

@@ -34,6 +34,7 @@ from app.models import (
     ParseStat,
     SubscriptionNotification,
 )
+from app.services.dedupe import cancel_duplicate_orders
 from app.timeutil import now_msk_naive, now_utc_naive
 
 log = logging.getLogger("app.cleanup")
@@ -283,6 +284,7 @@ async def cleanup_once() -> dict[str, int]:
     purged = await purge_old_orders()
     notifications = await prune_old_notifications()
     pruned = await prune_old_stats()
+    duplicates = await cancel_duplicate_orders()
     return {
         "expired": expired,
         "work_started": started,
@@ -290,6 +292,7 @@ async def cleanup_once() -> dict[str, int]:
         "orders_purged": purged,
         "notifications_pruned": notifications,
         "stats_pruned": pruned,
+        "duplicates_cancelled": duplicates,
     }
 
 

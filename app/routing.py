@@ -13,6 +13,7 @@ OSRM строит маршрут по дорожному графу OpenStreetMa
 
 import asyncio
 import logging
+import re
 import time
 from typing import Optional
 
@@ -27,6 +28,22 @@ log = logging.getLogger("app.routing")
 _MIN_INTERVAL = 1.1
 #: Дорога не бывает короче прямой; чуть ниже — допуск на неточность координат.
 _MIN_RATIO = 0.9
+
+#: Дорога длиннее прямой больше чем в 4 раза (и больше чем на 100 км) — это ошибка графа.
+_MAX_RATIO = 4.0
+_MAX_EXTRA_KM = 100.0
+#: Для короткой поездки при сбое графа считаем «по прямой с запасом на извилистость».
+_SHORT_TRIP_KM = 100.0
+_DETOUR = 1.3
+
+#: Диспетчеры часто сами пишут километраж («Расстояние: 70 км», «🗺 382 км», «395 км»).
+_STATED_EXPLICIT_RE = re.compile(
+    r"(?:расстояни[ея]|дистанци[яи]|протяж[её]нность|🗺)\D{0,12}?(\d{1,4}(?:[.,]\d+)?)\s*км(?![\wа-яё/])",
+    re.IGNORECASE,
+)
+_STATED_PLAIN_RE = re.compile(r"(?<![\d.,])(\d{2,4})\s*км(?![\wа-яё/])", re.IGNORECASE)
+#: Насколько расчёт может расходиться с написанным, прежде чем верим написанному.
+STATED_TOLERANCE = 0.4
 
 _lock = asyncio.Lock()
 _last_request_at = 0.0
@@ -71,6 +88,25 @@ async def road_distance_km(origin: Coords, destination: Coords) -> Optional[floa
     return parse_distance_km(payload, origin, destination)
 
 
+def parse_stated_km(text: Optional[str]) -> Optional[float]:
+    """Километраж, который диспетчер написал в заявке. ``None`` — не написал или неясно.
+
+    Явное «Расстояние: 70 км» / «🗺 382 км» берём сразу; голое «395 км» — только если
+    оно единственное в тексте (иначе это может быть «+20 км за город»).
+    """
+    if not text:
+        return None
+    explicit = _STATED_EXPLICIT_RE.search(text)
+    if explicit:
+        value = float(explicit.group(1).replace(",", "."))
+    else:
+        plain = _STATED_PLAIN_RE.findall(text)
+        if len(plain) != 1:
+            return None
+        value = float(plain[0])
+    return value if 5 <= value <= 5000 else None
+
+
 def parse_distance_km(payload: dict, origin: Coords, destination: Coords) -> Optional[float]:
     """Достаёт километры из ответа OSRM и отбрасывает заведомо неверные."""
     if payload.get("code") != "Ok":
@@ -80,9 +116,23 @@ def parse_distance_km(payload: dict, origin: Coords, destination: Coords) -> Opt
         meters = float(payload["routes"][0]["distance"])
     except (KeyError, IndexError, TypeError, ValueError):
         return None
-    km = meters / 1000
+    return check_km(meters / 1000, origin, destination)
+
+
+def check_km(km: float, origin: Coords, destination: Coords) -> Optional[float]:
+    """Проверяет километраж на здравый смысл относительно прямой между точками.
+
+    Используется и для свежего ответа OSRM, и для расстояния, взятого из другого
+    заказа с теми же точками: неверное число иначе перекочёвывает от заказа к заказу.
+    """
     straight = haversine_km(origin, destination)
     if km < straight * _MIN_RATIO:
         log.warning("OSRM вернул %.0f км при прямой %.0f км — отбрасываю", km, straight)
         return None
+    if km > straight * _MAX_RATIO + _MAX_EXTRA_KM:
+        # Граф дорог «разорван» (граница, паром): Алахадзы → Гагра в 9 км по прямой
+        # OSRM вёл через полмира, 3554 км. Для короткой поездки берём прямую с запасом,
+        # для длинной — лучше без расстояния, чем с неверным.
+        log.warning("OSRM вернул %.0f км при прямой %.0f км — маршрут нереальный", km, straight)
+        return round(straight * _DETOUR, 1) if straight < _SHORT_TRIP_KM else None
     return round(km, 1)

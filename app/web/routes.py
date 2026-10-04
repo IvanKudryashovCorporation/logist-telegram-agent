@@ -10,7 +10,7 @@ from typing import Optional
 from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import select
 
 from app import geo
@@ -105,6 +105,10 @@ def _base_context(request: Request, counts: dict, notice: Optional[str] = None) 
         "telegram_login_enabled": settings.telegram_login_enabled,
         "is_logged_in": logged_in_telegram_id(request) is not None,
         "is_admin": is_admin(request),
+        "owner_contact_url": (
+            f"https://t.me/{settings.owner_contact_username.strip().lstrip('@')}"
+            if settings.owner_contact_username.strip() else ""
+        ),
         **counts,
     }
 
@@ -189,6 +193,38 @@ async def feed(
     attach_driver_cookie(html, new_token)
     clear_flash(html)
     return html
+
+
+@router.get("/feed/count")
+async def feed_count(
+    q: str = "",
+    from_city: str = "",
+    to_city: str = "",
+    vehicle: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    time_from: str = "",
+    time_to: str = "",
+    price_min: str = "",
+    price_max: str = "",
+    from_radius: str = "",
+    to_radius: str = "",
+) -> JSONResponse:
+    """Сколько заказов найдётся по фильтру — число на кнопке «Применить (N)».
+
+    Пересчитывается на лету, пока водитель меняет поля фильтра. Те же условия,
+    что у ленты (:func:`queries.feed_where`), поэтому число совпадает с
+    «Показано … из N» после применения.
+    """
+    filters = Filters(
+        from_city=from_city, to_city=to_city, vehicle=vehicle,
+        date_from=date_from, date_to=date_to, time_from=time_from, time_to=time_to,
+        price_min=price_min, price_max=price_max, from_radius=from_radius, to_radius=to_radius,
+    )
+    async with SessionLocal() as session:
+        await _attach_radius_centers(session, filters)
+        total = await queries.count_feed(session, filters=filters, q=q)
+    return JSONResponse({"total": total}, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/my", response_class=HTMLResponse)
