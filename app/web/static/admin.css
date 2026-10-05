@@ -93,6 +93,24 @@ th { color: var(--muted); font-weight: 600; font-size: 12px; white-space: nowrap
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 tbody tr:hover { background: #f8fafc; }
 
+.period { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 14px; color: var(--muted); font-size: 13px; }
+
+.period a {
+  padding: 5px 10px;
+  border-radius: 9px;
+  background: #fff;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.period a.current { background: var(--ink); border-color: var(--ink); color: #fff; }
+
+.bar-cell { width: 55%; }
+.bar { height: 12px; min-width: 1px; border-radius: 6px; background: var(--accent); }
+
+.two-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+
 .tag {
   display: inline-block;
   padding: 2px 7px;
@@ -207,4 +225,6 @@ tbody tr:hover { background: #f8fafc; }
   .admin-shell { padding: 14px 10px 40px; }
   th, td { padding: 6px 5px; }
   .pre-wrap { max-width: 200px; }
+  .two-cols { grid-template-columns: 1fr; gap: 0; }
+  .bar-cell { width: 40%; }
 }

@@ -19,7 +19,7 @@ async def active_groups_by_session() -> dict[Optional[str], list[int]]:
         rows = (
             await session.execute(
                 select(WorkGroup.session_name, WorkGroup.tg_chat_id)
-                .where(WorkGroup.is_active.is_(True))
+                .where(WorkGroup.is_active.is_(True), WorkGroup.watch_only.is_(False))
                 .order_by(WorkGroup.id)
             )
         ).all()

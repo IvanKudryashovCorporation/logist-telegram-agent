@@ -2,12 +2,18 @@
 
     python -m scripts.manage_work_groups list
     python -m scripts.manage_work_groups add <chat_id_или_@username_или_ссылка> ["<title>"] [--session NAME]
+    python -m scripts.manage_work_groups add <@username_или_t.me/ссылка> --watch --session NAME
     python -m scripts.manage_work_groups remove <id>
     python -m scripts.manage_work_groups deactivate <id>
     python -m scripts.manage_work_groups activate <id>
 
 --session NAME — читать группу дополнительным аккаунтом (файл NAME.session,
 создаётся scripts.auth_account); без него группа читается основной сессией.
+
+--watch — «наблюдение без вступления»: ПУБЛИЧНУЮ группу (есть @username) агент читает
+опросом истории, аккаунт в неё не вступает. Перед добавлением группа проверяется:
+находится ли по username и читается ли история без вступления. Закрытые группы
+(пригласительные ссылки) так не читаются.
 
 Если title не указан при add — возьмём название чата из Telegram (нужна
 рабочая сессия, см. scripts.auth_telegram). Для чата по числовому id без
@@ -31,8 +37,42 @@ async def list_groups() -> None:
             return
         for g in groups:
             status = "активна" if g.is_active else "выключена"
-            account = g.session_name or "основной"
+            account = (g.session_name or "основной") + (" · без вступления" if g.watch_only else "")
             print(f"#{g.id:<3} {g.tg_chat_id:<16} {g.title:<40} {status:<10} {account}")
+
+
+async def add_watch_group(chat_ref: str, session_name: str | None) -> None:
+    """Публичная группа «без вступления»: проверка, затем запись в БД."""
+    from app.telegram.probe import inspect_public_group, parse_username
+
+    username = parse_username(chat_ref)
+    if username is None:
+        print("Нужен публичный username или ссылка t.me/<имя>. Закрытые группы без вступления не читаются.")
+        return
+    info = await inspect_public_group(username, session_name)
+    if not info.readable:
+        print(f"«{info.title}»: историю без вступления прочитать нельзя ({info.reason}). Нужно вступление.")
+        return
+    note = " (аккаунт уже состоит в группе — можно добавить и обычным способом)" if info.is_member else ""
+    print(f"«{info.title}» читается без вступления (проба: {info.sample} сообщений){note}")
+
+    async with SessionLocal() as session:
+        existing = (
+            await session.execute(select(WorkGroup).where(WorkGroup.tg_chat_id == info.peer_id))
+        ).scalar_one_or_none()
+        if existing is not None:
+            print(f"Уже добавлена как #{existing.id}: {existing.title}")
+            return
+        group = WorkGroup(
+            tg_chat_id=info.peer_id, title=info.title, session_name=session_name,
+            watch_only=True, username=info.username,
+        )
+        session.add(group)
+        await session.commit()
+        print(
+            f"Добавлена группа #{group.id}: {group.title} (tg_chat_id={info.peer_id}), "
+            "режим: наблюдение без вступления"
+        )
 
 
 async def add_group(chat_ref: str, title: str | None, session_name: str | None = None) -> None:
@@ -106,6 +146,9 @@ def main() -> None:
     add_parser.add_argument("chat_ref", help="tg_chat_id (число) или @username / ссылка на чат")
     add_parser.add_argument("title", nargs="?", default=None)
     add_parser.add_argument("--session", default=None, help="имя сессии дополнительного аккаунта")
+    add_parser.add_argument(
+        "--watch", action="store_true", help="читать публичную группу опросом, не вступая в неё"
+    )
 
     remove_parser = sub.add_parser("remove")
     remove_parser.add_argument("group_id", type=int)
@@ -120,6 +163,8 @@ def main() -> None:
 
     if args.command == "list":
         asyncio.run(list_groups())
+    elif args.command == "add" and args.watch:
+        asyncio.run(add_watch_group(args.chat_ref, args.session))
     elif args.command == "add":
         asyncio.run(add_group(args.chat_ref, args.title, args.session))
     elif args.command == "remove":

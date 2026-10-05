@@ -4,6 +4,7 @@
 вручную. Здесь собрано то, что нужно каждый день:
 
 * сколько заказов в каждом статусе и сколько помечено водителями как проблемные;
+* сколько заказов появляется в день и какие направления самые популярные;
 * очередь повторного разбора (сообщения, где LLM отказала) и кнопка «повторить»;
 * качество разбора: доля неполных заявок, расход токенов, латентность,
   насколько предфильтр экономит обращения к LLM;
@@ -74,6 +75,8 @@ async def dashboard(request: Request, days: int = 7):
     statuses = await reporting.order_status_breakdown()
     parse = await reporting.parse_summary(days=days)
     queue = await reporting.queue_summary()
+    daily = await reporting.orders_per_day(days=days)
+    routes = await reporting.popular_routes(days=days)
 
     async with SessionLocal() as session:
         problems = list(
@@ -94,6 +97,8 @@ async def dashboard(request: Request, days: int = 7):
         statuses=statuses,
         parse=parse,
         queue=queue,
+        daily=daily,
+        routes=routes,
         problems=problems,
         distance_issues=distance_issues,
         days=days,

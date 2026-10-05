@@ -175,6 +175,62 @@ async def test_dashboard_period_is_clamped(client):
         assert (await client.get(f"/admin?days={days}")).status_code == 200
 
 
+# --- Статистика: заказы по дням и направления --------------------------------
+
+
+async def _created(session, order, days_ago: int) -> None:
+    order.created_at = now_utc_naive() - timedelta(days=days_ago, hours=1)
+    session.add(order)
+    await session.commit()
+
+
+async def test_orders_per_day_counts_days_and_skips_cancelled(make_order, session):
+    from app.services import reporting
+
+    for days_ago in (0, 0, 2):
+        await _created(session, await make_order(), days_ago)
+    hidden = await make_order(status=OrderStatus.CANCELLED, pickup_at=now_utc_naive() + timedelta(days=1))
+    await _created(session, hidden, 0)
+    await _created(session, await make_order(), 40)  # вне периода
+
+    daily = await reporting.orders_per_day(days=7)
+
+    assert daily["total"] == 3
+    assert [row["count"] for row in daily["rows"]] == [2, 0, 1, 0, 0, 0, 0]  # новые сверху, нули остаются
+    assert daily["today"] == 2
+    assert daily["peak"] == 2
+    assert daily["rows"][0]["share"] == 1.0
+
+
+async def test_popular_routes_merge_city_spellings(make_order, session):
+    from app.services import reporting
+
+    for origin in ("Мин. Воды", "Минводы", "Минеральные Воды"):
+        await _created(session, await make_order(from_city=origin, to_city="Кисловодск", price="2000"), 1)
+    await _created(session, await make_order(from_city="Симферополь", to_city="Ялта", price="3000"), 1)
+
+    stats = await reporting.popular_routes(days=7)
+
+    top = stats["routes"][0]
+    assert top["count"] == 3
+    assert top["to"] == "Кисловодск"
+    assert top["avg_price"] == 2000
+    assert stats["from_cities"][0]["count"] == 3
+    assert len(stats["routes"]) == 2
+
+
+async def test_dashboard_shows_daily_and_routes(client, make_order, session):
+    await _login(client)
+    await _created(session, await make_order(from_city="Симферополь", to_city="Ялта"), 0)
+
+    response = await client.get("/admin?days=30")
+
+    assert response.status_code == 200
+    assert "Заказов в день" in response.text
+    assert "Популярные направления" in response.text
+    assert "Симферополь → Ялта" in response.text
+
+
 # --- Список заказов ----------------------------------------------------------
 
 

@@ -8,10 +8,12 @@
 сколько денег уходит в месяц и не молчит ли агент.
 """
 
-from datetime import timedelta
+from collections import Counter
+from datetime import date, datetime, time, timedelta
 
 from sqlalchemy import func, select
 
+from app.city_aliases import canonical_city_name
 from app.db.base import SessionLocal
 from app.models import (
     ORDER_STATUS_LABELS,
@@ -22,7 +24,10 @@ from app.models import (
     PendingMessage,
     PendingStatus,
 )
-from app.timeutil import now_utc_naive
+from app.timeutil import MSK, now_utc_naive
+
+#: Сдвиг МСК от UTC: ``created_at`` лежит в UTC, а «день» владельцу нужен по Москве.
+MSK_OFFSET = MSK.utcoffset(None)
 
 
 async def order_status_breakdown() -> dict[str, int]:
@@ -56,6 +61,110 @@ async def order_status_breakdown() -> dict[str, int]:
         "taken": taken,
         "with_problems": problems,
         "total": sum(by_status.values()),
+    }
+
+
+def _msk_day(moment: datetime) -> date:
+    """День по МСК для наивного UTC-момента (``created_at``)."""
+    return (moment + MSK_OFFSET).date()
+
+
+async def orders_per_day(days: int = 7) -> dict:
+    """Сколько заказов появилось в ленте за каждый из последних ``days`` дней (по МСК).
+
+    Считаются все заявки, кроме скрытых (дубли, мусор, удалённые в Telegram), —
+    иначе цифра показывала бы не заказы, а шум. Дни без заказов остаются в ряду
+    нулями, чтобы по графику было видно провалы.
+    """
+    days = max(1, days)
+    today = _msk_day(now_utc_naive())
+    first = today - timedelta(days=days - 1)
+    since = datetime.combine(first, time.min) - MSK_OFFSET  # полночь МСК в наивном UTC
+    async with SessionLocal() as session:
+        moments = (
+            await session.execute(
+                select(Order.created_at).where(
+                    Order.created_at >= since, Order.status != OrderStatus.CANCELLED
+                )
+            )
+        ).scalars().all()
+
+    counts = Counter(_msk_day(moment) for moment in moments)
+    rows = [
+        {"day": first + timedelta(days=offset), "count": counts.get(first + timedelta(days=offset), 0)}
+        for offset in range(days)
+    ]
+    total = sum(row["count"] for row in rows)
+    peak = max((row["count"] for row in rows), default=0)
+    for row in rows:
+        row["share"] = (row["count"] / peak) if peak else 0.0
+    return {
+        "days": days,
+        "rows": list(reversed(rows)),  # новые сверху
+        "total": total,
+        "today": rows[-1]["count"],
+        "average": total / days,
+        "peak": peak,
+    }
+
+
+async def popular_routes(days: int = 7, limit: int = 10) -> dict:
+    """Самые частые направления и города за период.
+
+    Города берутся из нормализованных ключей (``from_city_key``/``to_city_key``),
+    поэтому «Мин. Воды», «Минводы» и «Минеральные Воды» — одно направление.
+    """
+    since = now_utc_naive() - timedelta(days=max(1, days))
+    live = (Order.created_at >= since, Order.status != OrderStatus.CANCELLED)
+    async with SessionLocal() as session:
+        route_rows = (
+            await session.execute(
+                select(
+                    Order.from_city_key,
+                    Order.to_city_key,
+                    func.count(Order.id),
+                    func.avg(Order.client_price),
+                    func.avg(Order.distance_km),
+                    func.max(Order.from_city),
+                    func.max(Order.to_city),
+                )
+                .where(*live, Order.from_city_key.is_not(None), Order.to_city_key.is_not(None))
+                .group_by(Order.from_city_key, Order.to_city_key)
+                .order_by(func.count(Order.id).desc())
+                .limit(limit)
+            )
+        ).all()
+        city_rows = {}
+        for column, label in ((Order.from_city_key, "from"), (Order.to_city_key, "to")):
+            city_rows[label] = (
+                await session.execute(
+                    select(column, func.count(Order.id), func.max(
+                        Order.from_city if label == "from" else Order.to_city
+                    ))
+                    .where(*live, column.is_not(None))
+                    .group_by(column)
+                    .order_by(func.count(Order.id).desc())
+                    .limit(limit)
+                )
+            ).all()
+
+    def name(raw: str | None) -> str:
+        return canonical_city_name(raw) or raw or "?"
+
+    return {
+        "days": days,
+        "routes": [
+            {
+                "from": name(from_city),
+                "to": name(to_city),
+                "count": count,
+                "avg_price": int(price) if price else None,
+                "avg_km": int(km) if km else None,
+            }
+            for _fk, _tk, count, price, km, from_city, to_city in route_rows
+        ],
+        "from_cities": [{"name": name(city), "count": count} for _key, count, city in city_rows["from"]],
+        "to_cities": [{"name": name(city), "count": count} for _key, count, city in city_rows["to"]],
     }
 
 

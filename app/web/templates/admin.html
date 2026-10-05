@@ -7,6 +7,14 @@
     <div class="metric-value">{{ statuses.total }}</div>
     <div class="metric-label">всего заказов</div>
   </div>
+  <div class="metric">
+    <div class="metric-value">{{ daily.today }}</div>
+    <div class="metric-label">заказов сегодня</div>
+  </div>
+  <div class="metric">
+    <div class="metric-value">{{ "%.1f"|format(daily.average) }}</div>
+    <div class="metric-label">в среднем в день ({{ daily.days }} дн.)</div>
+  </div>
   <div class="metric ok">
     <div class="metric-value">{{ statuses.taken }}</div>
     <div class="metric-label">взято водителями</div>
@@ -35,6 +43,74 @@
     <div class="metric-value">{{ parse.avg_latency_ms }} мс</div>
     <div class="metric-label">средняя задержка LLM</div>
   </div>
+</div>
+
+<div class="period">
+  Период:
+  {% for option in [7, 14, 30, 90] %}
+    <a href="/admin?days={{ option }}" class="{{ 'current' if option == days else '' }}">{{ option }} дн.</a>
+  {% endfor %}
+</div>
+
+<div class="card" id="daily">
+  <h2>Заказов в день · последние {{ daily.days }} дн.</h2>
+  <p class="muted">
+    Всего {{ daily.total }}, в среднем {{ "%.1f"|format(daily.average) }} в день, максимум {{ daily.peak }}.
+    Дни по Москве; скрытые заявки (дубли, мусор) не считаются.
+  </p>
+  <table>
+    <tbody>
+      {% for row in daily.rows %}
+        <tr>
+          <td class="nowrap">{{ row.day.strftime('%d.%m') }} <span class="muted">{{ ['пн','вт','ср','чт','пт','сб','вс'][row.day.weekday()] }}</span></td>
+          <td class="num">{{ row.count }}</td>
+          <td class="bar-cell"><div class="bar" style="width: {{ (row.share * 100)|round(1) }}%"></div></td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card" id="routes">
+  <h2>Популярные направления · {{ routes.days }} дн.</h2>
+  {% if routes.routes %}
+    <table>
+      <thead>
+        <tr><th>Направление</th><th class="num">Заказов</th><th class="num">Средняя цена</th><th class="num">Средний км</th></tr>
+      </thead>
+      <tbody>
+        {% for route in routes.routes %}
+          <tr>
+            <td>{{ route.from }} → {{ route.to }}</td>
+            <td class="num">{{ route.count }}</td>
+            <td class="num">{{ ('{:,}'.format(route.avg_price).replace(',', ' ') ~ ' ₽') if route.avg_price else '—' }}</td>
+            <td class="num">{{ route.avg_km if route.avg_km else '—' }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <div class="two-cols">
+      <div>
+        <h3>Откуда чаще всего</h3>
+        <table><tbody>
+          {% for city in routes.from_cities %}
+            <tr><td>{{ city.name }}</td><td class="num">{{ city.count }}</td></tr>
+          {% endfor %}
+        </tbody></table>
+      </div>
+      <div>
+        <h3>Куда чаще всего</h3>
+        <table><tbody>
+          {% for city in routes.to_cities %}
+            <tr><td>{{ city.name }}</td><td class="num">{{ city.count }}</td></tr>
+          {% endfor %}
+        </tbody></table>
+      </div>
+    </div>
+  {% else %}
+    <div class="empty">За этот период заказов нет.</div>
+  {% endif %}
 </div>
 
 <div class="card">

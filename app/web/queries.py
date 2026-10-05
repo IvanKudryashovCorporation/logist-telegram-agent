@@ -16,6 +16,7 @@ Python их фильтровал и сортировал — при росте �
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Optional
 
 from sqlalchemy import Float, case, cast, func, or_, select, update
@@ -115,6 +116,12 @@ def feed_conditions(*, now=None) -> list:
         Order.status.notin_(HIDDEN_STATUSES),
         Order.taken_by_token.is_(None),
         or_(Order.pickup_at.is_(None), Order.pickup_at >= reference),
+        # «В ближайшее время» живёт ASAP_EXPIRE_HOURS: из ленты такая заявка пропадает сразу,
+        # не дожидаясь фоновой очистки (она раз в 15 минут переводит её в EXPIRED).
+        or_(
+            Order.pickup_asap.is_(False),
+            Order.created_at >= now_utc_naive() - timedelta(hours=max(0, settings.asap_expire_hours)),
+        ),
     ]
 
 

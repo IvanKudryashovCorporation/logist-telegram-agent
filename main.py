@@ -34,6 +34,7 @@ from app.services import (
 from app.telegram.accounts import active_groups_by_session
 from app.telegram.client import build_client
 from app.telegram.queue_worker import run_queue_worker
+from app.telegram.watcher import run_watch_worker, watch_groups
 from app.telegram.work_group import register_work_group_handlers
 
 logging.basicConfig(
@@ -130,7 +131,15 @@ async def main() -> None:
         register_work_group_handlers(owner, list(chat_ids))
         chat_clients.update({chat_id: owner for chat_id in chat_ids})
 
-    if not chat_clients:
+    # Группы «наблюдение без вступления» читаются опросом, но клиент для их сессии нужен так же.
+    watching = await watch_groups()
+    for group in watching:
+        if group.session_name not in clients:
+            extra = await _start_extra_client(group.session_name)
+            if extra is not None:
+                clients[group.session_name] = extra
+
+    if not chat_clients and not watching:
         log.warning(
             "Нет ни одной активной рабочей группы — заявки читать неоткуда. "
             "Добавьте: python -m scripts.manage_work_groups add <chat_id_или_@username>"
@@ -139,7 +148,9 @@ async def main() -> None:
         log.info(
             "Слушаю заявки в %s рабочих группах (аккаунтов: %s).", len(chat_clients), len(clients)
         )
-    work_group_ids = list(chat_clients)
+    if watching:
+        log.info("Без вступления читаем (опросом) групп: %s", len(watching))
+    work_group_ids = list(chat_clients) + [g.tg_chat_id for g in watching]
 
     # Уведомления владельца ходят через тот же Telethon-клиент, поэтому
     # подключаются только после client.start().
@@ -155,6 +166,8 @@ async def main() -> None:
     background = _start_background(
         client, stop_event, client_for=lambda chat_id: chat_clients.get(chat_id, client)
     )
+    if watching:
+        background.append(asyncio.create_task(run_watch_worker(clients, stop_event), name="watcher"))
 
     log.info("Ожидание событий. Ctrl+C для остановки.")
     try:

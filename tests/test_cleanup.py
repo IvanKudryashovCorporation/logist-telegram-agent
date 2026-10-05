@@ -197,11 +197,11 @@ async def _make_asap(session, make_order, *, age_hours: float, **kwargs):
     return order
 
 
-async def test_asap_order_expires_after_48_hours(session, make_order):
-    old = await _make_asap(session, make_order, age_hours=49)
-    fresh = await _make_asap(session, make_order, age_hours=47)
+async def test_asap_order_expires_after_12_hours(session, make_order):
+    old = await _make_asap(session, make_order, age_hours=13)
+    fresh = await _make_asap(session, make_order, age_hours=11)
 
-    affected = await expire_stale_orders(asap_hours=48)
+    affected = await expire_stale_orders(asap_hours=12)
 
     assert affected == 1
     assert (await _reload(session, old.id)).status == OrderStatus.EXPIRED
@@ -209,16 +209,16 @@ async def test_asap_order_expires_after_48_hours(session, make_order):
 
 
 async def test_asap_limit_comes_from_settings_by_default(session, make_order):
-    order = await _make_asap(session, make_order, age_hours=49)
+    order = await _make_asap(session, make_order, age_hours=13)
 
-    assert await expire_stale_orders() == 1  # ASAP_EXPIRE_HOURS по умолчанию 48
+    assert await expire_stale_orders() == 1  # ASAP_EXPIRE_HOURS по умолчанию 12
     assert (await _reload(session, order.id)).status == OrderStatus.EXPIRED
 
 
 async def test_asap_order_taken_by_driver_is_not_expired(session, make_order):
     order = await _make_asap(session, make_order, age_hours=100, taken_by_token="driver-x")
 
-    assert await expire_stale_orders(asap_hours=48) == 0
+    assert await expire_stale_orders(asap_hours=12) == 0
     assert (await _reload(session, order.id)).status == OrderStatus.NEW
 
 
@@ -438,3 +438,16 @@ async def test_old_notification_log_rows_are_pruned(session, make_order):
     async with SessionLocal() as db:
         left = (await db.execute(select(func.count(SubscriptionNotification.id)))).scalar_one()
     assert left == 1
+
+
+async def test_feed_hides_an_asap_order_as_soon_as_its_12_hours_pass(session, make_order):
+    """Не ждём фоновую очистку (раз в 15 минут): заявка «в ближайшее время» пропадает из ленты сразу."""
+    from app.web import queries
+
+    old = await _make_asap(session, make_order, age_hours=13)
+    fresh = await _make_asap(session, make_order, age_hours=11)
+
+    page = await queries.fetch_feed(session, page_size=50)
+
+    assert [o.id for o in page.items] == [fresh.id]
+    assert old.id not in [o.id for o in page.items]
