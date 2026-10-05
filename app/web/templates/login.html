@@ -7,24 +7,105 @@
     <div class="detail-card login-card-block">
       <div class="detail-title">Вход через Telegram</div>
       <p class="hint" style="margin-top: 8px;">
-        Без пароля и регистрации отдельной анкетой — просто подтвердите вход
-        в приложении Telegram. Если аккаунта на сайте ещё нет, он заведётся
-        автоматически при первом входе.
+        Без пароля и анкеты: откройте нашего бота в Telegram, нажмите «Старт» и
+        подтвердите вход. Если аккаунта на сайте ещё нет, он заведётся автоматически.
+        Бот открывается в том Telegram, где вы сейчас авторизованы, — так можно
+        зарегистрировать любой свой аккаунт.
       </p>
-      <div class="telegram-login-widget" style="margin-top: 16px;">
-        <script async src="https://telegram.org/js/telegram-widget.js?22"
-          data-telegram-login="{{ bot_username }}"
-          data-size="large"
-          data-radius="10"
-          data-auth-url="/auth/telegram?next={{ next | urlencode }}"
-          data-request-access="write"></script>
+
+      <div id="botLogin" data-next="{{ next }}" style="margin-top: 16px;">
+        <a id="botLoginLink" class="btn" href="#" target="_blank" rel="noopener" hidden>Открыть бота в Telegram</a>
+        <p id="botLoginState" class="hint" style="margin-top: 12px;">Готовим ссылку…</p>
+        <button type="button" id="botLoginRetry" class="btn btn-secondary" hidden>Получить новую ссылку</button>
       </div>
+
+      <details class="alt-login" style="margin-top: 20px;">
+        <summary class="hint">Другой способ: виджет Telegram</summary>
+        <div class="telegram-login-widget" style="margin-top: 12px;">
+          <script async src="https://telegram.org/js/telegram-widget.js?22"
+            data-telegram-login="{{ bot_username }}"
+            data-size="large"
+            data-radius="10"
+            data-auth-url="/auth/telegram?next={{ next | urlencode }}"
+            data-request-access="write"></script>
+        </div>
+        <p class="hint" id="otherAccountHint" style="margin-top: 12px;">
+          Кнопка «Войти как …» показывает аккаунт Telegram, которым этот браузер входил
+          в прошлый раз, — это память самого Telegram. Для другого аккаунта используйте
+          бота выше или откройте страницу в окне инкогнито.
+        </p>
+      </details>
+
       <p class="hint" style="margin-top: 16px;">
         Зачем вход: написать диспетчеру, договориться о заказе и вести «Мои
         заказы» можно только от своего имени, чтобы заказ не достался
         анонимному браузеру. Лента и карточки заказов открыты без входа.
       </p>
     </div>
+
+    <script>
+    (function () {
+      var root = document.getElementById('botLogin');
+      var link = document.getElementById('botLoginLink');
+      var stateEl = document.getElementById('botLoginState');
+      var retry = document.getElementById('botLoginRetry');
+      var token = null, timer = null, busy = false;
+
+      function say(text) { stateEl.textContent = text; }
+
+      function stop() { if (timer) { clearInterval(timer); timer = null; } }
+
+      function begin() {
+        stop();
+        retry.hidden = true;
+        link.hidden = true;
+        say('Готовим ссылку…');
+        fetch('/auth/bot/start?next=' + encodeURIComponent(root.dataset.next || '/'), {method: 'POST'})
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (!data.token) { throw new Error('no token'); }
+            token = data.token;
+            link.href = data.url;
+            link.hidden = false;
+            say('Откройте бота, нажмите «Старт» и подтвердите вход. Эта страница откроется сама.');
+            timer = setInterval(check, 2000);
+          })
+          .catch(function () {
+            say('Не удалось подготовить вход. Попробуйте ещё раз.');
+            retry.hidden = false;
+          });
+      }
+
+      function check() {
+        if (!token || busy) { return; }
+        busy = true;
+        fetch('/auth/bot/status?token=' + encodeURIComponent(token), {cache: 'no-store'})
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (data.status === 'done') {
+              stop();
+              say('Готово, входим…');
+              location.href = data.next || '/';
+            } else if (data.status === 'asked') {
+              say('Подтвердите вход в Telegram: нажмите «Войти» в сообщении бота.');
+            } else if (data.status === 'expired') {
+              stop();
+              link.hidden = true;
+              say('Ссылка устарела или вход отменён.');
+              retry.hidden = false;
+            }
+          })
+          .catch(function () { /* сеть мигнула — следующий опрос повторит */ })
+          .then(function () { busy = false; });
+      }
+
+      retry.addEventListener('click', begin);
+      document.addEventListener('visibilitychange', function () {
+        if (!document.hidden) { check(); }
+      });
+      begin();
+    })();
+    </script>
   {% else %}
     <div class="detail-card login-card-block">
       <div class="detail-title">Вход временно недоступен</div>

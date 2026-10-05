@@ -12,7 +12,9 @@
 не изменилась.
 """
 
+import asyncio
 import logging
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -24,6 +26,7 @@ from app.config import settings
 from app.db.base import SessionLocal
 from app.web import admin as admin_module
 from app.web import auth as auth_module
+from app.web import bot_login
 from app.web import routes as public_routes
 from app.web.rate_limit import RateLimitMiddleware
 
@@ -77,8 +80,25 @@ class SecurityHeadersMiddleware:
         await self.app(scope, receive, send_with_headers)
 
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Запускает приём сообщений бота входа, пока живёт сайт."""
+    poller = None
+    if settings.telegram_login_enabled and settings.bot_login_polling:
+        poller = asyncio.create_task(bot_login.run_bot_poller(), name="bot-login")
+    try:
+        yield
+    finally:
+        if poller is not None:
+            poller.cancel()
+            with suppress(asyncio.CancelledError):
+                await poller
+
+
 def create_app() -> FastAPI:
-    application = FastAPI(title="Лента заказов — заказы для водителей", **_DOCS_DISABLED)
+    application = FastAPI(
+        title="Лента заказов — заказы для водителей", lifespan=lifespan, **_DOCS_DISABLED
+    )
 
     # Порядок важен: middleware, добавленные позже, выполняются раньше.
     application.add_middleware(RateLimitMiddleware)

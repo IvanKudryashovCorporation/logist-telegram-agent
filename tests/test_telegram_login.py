@@ -35,6 +35,19 @@ def _signed_params(bot_token: str = BOT_TOKEN, **overrides) -> dict:
     return fields
 
 
+async def test_login_page_explains_how_to_use_another_account(client, monkeypatch):
+    """«Войти как …» — память Telegram, а не сайта: страница входа подсказывает, как сменить аккаунт."""
+    monkeypatch.setattr(settings, "telegram_login_bot_token", BOT_TOKEN)
+    monkeypatch.setattr(settings, "telegram_login_bot_username", "podacha_bot")
+
+    page = await client.get("/login")
+
+    assert page.status_code == 200
+    assert 'id="otherAccountHint"' in page.text
+    assert "инкогнито" in page.text
+    assert "бота" in page.text
+
+
 # --- Проверка подписи (юнит, без HTTP) ---------------------------------------
 
 

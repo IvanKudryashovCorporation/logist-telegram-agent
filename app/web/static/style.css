@@ -876,3 +876,6 @@ input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), select, t
 .subscription-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .subscription-filter { margin: 12px 0 14px; padding-left: 18px; font-size: 14px; line-height: 1.6; }
 .subscription-filter li::marker { color: var(--accent); }
+
+/* Атрибут hidden должен скрывать элемент, даже если у класса задан display. */
+[hidden] { display: none !important; }

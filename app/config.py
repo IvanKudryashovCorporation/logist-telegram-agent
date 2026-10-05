@@ -120,6 +120,10 @@ class Settings(BaseSettings):
     #: Username бота без @ — виджету нужно знать, через какого бота логинить.
     telegram_login_bot_username: str = ""
 
+    #: Принимать сообщения бота входа (опрос getUpdates) в процессе сайта. Выключите,
+    #: если бота уже читает другая программа или на него настроен вебхук.
+    bot_login_polling: bool = True
+
     @property
     def telegram_login_enabled(self) -> bool:
         # SESSION_SECRET обязателен явно: подпись сессии водителя (и доступ в

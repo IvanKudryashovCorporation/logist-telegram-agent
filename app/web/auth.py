@@ -1,8 +1,10 @@
 """Вход через Telegram Login Widget.
 
-Три маршрута:
+Маршруты:
 
-* ``GET /login`` — страница с самим виджетом (кнопка «Войти через Telegram»).
+* ``GET /login`` — страница входа: основной способ — через бота (см.
+  :mod:`app.web.bot_login`), запасной — виджет Telegram.
+* ``POST /auth/bot/start`` и ``GET /auth/bot/status`` — вход через бота.
 * ``GET /auth/telegram`` — сюда виджет редиректит браузер после подтверждения
   в Telegram; проверяем подпись, заводим/обновляем :class:`Driver`, ставим
   подписанную сессию.
@@ -16,11 +18,11 @@
 import logging
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from app.config import settings
 from app.db.base import SessionLocal
-from app.web import queries
+from app.web import bot_login, queries
 from app.web.deps import (
     clear_driver_session_cookie,
     is_admin,
@@ -83,6 +85,69 @@ async def telegram_callback(request: Request):
     response = RedirectResponse(next_url, status_code=303)
     set_driver_session_cookie(response, driver.telegram_id)
     log.info("Вход: водитель tg:%s (%s)", driver.telegram_id, driver.display_name)
+    return response
+
+
+_NO_STORE = {"Cache-Control": "no-store"}
+
+
+@router.post("/auth/bot/start")
+async def bot_login_start(next: str = "/"):
+    """Заводит одноразовый вход через бота: токен и ссылку на бота с этим токеном."""
+    if not settings.telegram_login_enabled:
+        return JSONResponse({"error": "disabled"}, status_code=404, headers=_NO_STORE)
+    item = bot_login.store.create(_safe_next(next))
+    return JSONResponse(
+        {"token": item.token, "url": bot_login.bot_link(item.token)}, headers=_NO_STORE
+    )
+
+
+@router.get("/auth/bot/status")
+async def bot_login_status(token: str = ""):
+    """Опрос страницей входа: ждём бота → просим подтвердить → готово (ставим сессию)."""
+    if not settings.telegram_login_enabled:
+        return JSONResponse({"status": "expired"}, status_code=404, headers=_NO_STORE)
+
+    item = bot_login.store.get(token)
+    if item is None:
+        return JSONResponse({"status": "expired"}, headers=_NO_STORE)
+    if item.state != bot_login.CONFIRMED:
+        return JSONResponse({"status": item.state}, headers=_NO_STORE)
+
+    confirmed = bot_login.store.take_confirmed(token)
+    if confirmed is None:  # другой запрос успел забрать вход
+        return JSONResponse({"status": "expired"}, headers=_NO_STORE)
+
+    async with SessionLocal() as session:
+        driver = await queries.upsert_driver(session, confirmed.user)
+    response = JSONResponse({"status": "done", "next": confirmed.next_url}, headers=_NO_STORE)
+    set_driver_session_cookie(response, driver.telegram_id)
+    log.info("Вход через бота: водитель tg:%s (%s)", driver.telegram_id, driver.display_name)
+    return response
+
+
+@router.get("/auth/bot/enter")
+async def bot_login_enter(token: str = ""):
+    """Кнопка «На сайт» из сообщения бота: входит в том браузере, где её открыли.
+
+    Нужна, потому что ссылка из Telegram чаще всего открывается во встроенном
+    браузере, а не там, где человек начинал вход, — и без этого сайт открылся бы
+    без входа. Токен одноразовый и приходит только подтвердившему вход.
+    """
+    if not settings.telegram_login_enabled:
+        return RedirectResponse("/", status_code=303)
+
+    confirmed = bot_login.store.take_by_enter(token)
+    if confirmed is None:
+        # Ссылка устарела или уже использована. Если этот браузер уже вошёл,
+        # /login сразу перекинет на сайт, иначе покажет страницу входа.
+        return RedirectResponse("/login", status_code=303, headers=_NO_STORE)
+
+    async with SessionLocal() as session:
+        driver = await queries.upsert_driver(session, confirmed.user)
+    response = RedirectResponse(confirmed.next_url, status_code=303, headers=_NO_STORE)
+    set_driver_session_cookie(response, driver.telegram_id)
+    log.info("Вход через бота (кнопка «На сайт»): водитель tg:%s", driver.telegram_id)
     return response
 
 
