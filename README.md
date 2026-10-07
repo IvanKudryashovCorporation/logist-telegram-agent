@@ -96,6 +96,12 @@ SQLite остаётся для разработки и тестов — код �
   все таблицы с теми же id, выставляет счётчики и сверяет количества строк.
 * **Бэкап:** `deploy/backup-db.sh` делает `pg_dump | gzip` в `/root/backups` и хранит
   14 дней; cron `15 3 * * *`. Восстановление: `gunzip -c файл.sql.gz | psql -d база`.
+* **Копия вне сервера:** `scripts/offsite_backup.py` (cron `30 3 * * *`) шифрует последний дамп
+  паролем (gpg, AES-256) и присылает файл `logist-….sql.gz.gpg` ботом в личку владельцу
+  (`ALERT_CHAT_ID`); сторож следит, что отправка была за последние 26 часов. Один раз выполните
+  `python -m scripts.offsite_backup --init`: пароль придёт в Telegram, **сохраните его отдельно**
+  (без него копии не открыть) и удалите сообщение. Восстановление:
+  `gpg --decrypt файл.gpg | gunzip | psql -d база`.
 * **Время** в БД везде наивное UTC: колонки `timestamp without time zone`, сессия
   с `timezone=UTC` (см. `app/db/base.py`).
 * **Тесты на PostgreSQL:** `TEST_DATABASE_URL=postgresql+asyncpg://user:pass@host/logist_test`

@@ -140,6 +140,9 @@ class Settings(BaseSettings):
     geocoding_enabled: bool = True
     #: Nominatim требует User-Agent с контактом — анонимные клиенты банят.
     geocoder_user_agent: str = "podacha-geocoder/1.0 (skoottv9@gmail.com)"
+    #: Нечёткий поиск (Photon) для опечаток в названиях и центр района для деревень, которых нет в картах.
+    geocoding_fuzzy_enabled: bool = True
+    photon_url: str = "https://photon.komoot.io/api/"
     #: Как часто воркер просматривает заказы без координат, секунд.
     geocode_poll_seconds: int = 30
     #: Сколько заказов обрабатывает за один проход.
@@ -182,6 +185,11 @@ class Settings(BaseSettings):
     alert_bot_token: str = ""
     #: Тревога, если за столько часов агент не обработал ни одного сообщения.
     watchdog_agent_silence_hours: int = 3
+    #: Тревога, если из групп одного Telegram-аккаунта за столько часов ничего не пришло
+    #: (при этом другие аккаунты могут работать — общая проверка этого не видит).
+    watchdog_account_silence_hours: int = 6
+    #: Тревога, если за столько часов не создано ни одной новой заявки.
+    watchdog_orders_silence_hours: int = 6
     #: Тревога, если ошибок разбора заявок за последний час не меньше этого числа.
     watchdog_llm_errors_per_hour: int = 10
     #: Тревога, если диск занят больше чем на столько процентов.
@@ -190,6 +198,10 @@ class Settings(BaseSettings):
     watchdog_reminder_hours: int = 6
     watchdog_backup_dir: str = "/root/backups"
     watchdog_state_path: str = ".watchdog_state.json"
+    #: Пароль шифрования внешних копий базы (app/services/offsite_backup.py). Создаётся
+    #: командой ``scripts.offsite_backup --init`` и присылается владельцу; файла нет — копия
+    #: вне сервера не настроена.
+    offsite_backup_passphrase_path: str = ".offsite_backup_passphrase"
 
     # --- Фоновая очистка протухших заявок ---
     #: Через сколько часов после времени подачи заявка становится EXPIRED.

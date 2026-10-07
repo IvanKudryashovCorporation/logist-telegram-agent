@@ -48,3 +48,8 @@ class SubscriptionNotification(Base):
     #: Без внешнего ключа: заказ могут удалить очисткой, а запись о рассылке — нет смысла держать вечно.
     order_id: Mapped[int] = mapped_column(index=True, nullable=False)
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
+    #: Номер сообщения бота у водителя (одно сообщение может нести несколько заказов).
+    #: Пусто у уведомлений, отправленных до появления этого поля.
+    message_id: Mapped[Optional[int]] = mapped_column(BigInteger)
+    #: Когда заказ убран из сообщения (диспетчер удалил заявку): повторно не трогаем.
+    retracted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=False))

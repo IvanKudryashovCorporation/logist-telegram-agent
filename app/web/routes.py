@@ -383,7 +383,8 @@ async def order_detail(request: Request, order_id: int, back: str = ""):
             )
             attach_driver_cookie(gone, new_token)
             return gone
-        link = dispatcher_link(order)
+        group_name = await queries.group_username(session, order.source_chat_id)
+        link = dispatcher_link(order, group_username=group_name)
         # Телефон/имя клиента готовим здесь, а не в шаблоне: шаблон не должен
         # знать, кому разрешено видеть персональные данные.
         phone = client_phone_for(order, is_owner=is_mine)
@@ -400,6 +401,7 @@ async def order_detail(request: Request, order_id: int, back: str = ""):
             "is_mine": is_mine,
             "is_taken_by_someone_else": bool(order.taken_by_token) and not is_mine,
             "dispatcher_url": link,
+            "group_is_public": bool(group_name),
             "dispatcher_text": dispatcher_message(order),
             "phone_display": phone,
             "client_name_display": client_name,
@@ -448,6 +450,7 @@ async def contact_dispatcher(request: Request, order_id: int, back: str = ""):
 
     async with SessionLocal() as session:
         order = await session.get(Order, order_id)
+        group_name = await queries.group_username(session, order.source_chat_id) if order else None
     if order is None:
         return HTMLResponse("Заказ не найден", status_code=404)
 
@@ -463,7 +466,7 @@ async def contact_dispatcher(request: Request, order_id: int, back: str = ""):
             queries.ActionResult(False, "closed").message,
         )
 
-    link = dispatcher_link(order, text=dispatcher_message(order))
+    link = dispatcher_link(order, text=dispatcher_message(order), group_username=group_name)
     return _redirect(link or _order_url(order_id, back), new_token)
 
 

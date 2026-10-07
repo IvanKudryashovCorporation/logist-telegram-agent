@@ -77,6 +77,7 @@ async def dashboard(request: Request, days: int = 7):
     queue = await reporting.queue_summary()
     daily = await reporting.orders_per_day(days=days)
     routes = await reporting.popular_routes(days=days)
+    hidden = await reporting.hidden_breakdown(days=days)
 
     async with SessionLocal() as session:
         problems = list(
@@ -99,6 +100,7 @@ async def dashboard(request: Request, days: int = 7):
         queue=queue,
         daily=daily,
         routes=routes,
+        hidden=hidden,
         problems=problems,
         distance_issues=distance_issues,
         days=days,

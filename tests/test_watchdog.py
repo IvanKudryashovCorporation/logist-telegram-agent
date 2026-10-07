@@ -292,3 +292,106 @@ def test_httpx_request_log_cannot_leak_the_bot_token():
     import logging
 
     assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING
+
+
+# --- Аккаунты по отдельности и поток заявок -------------------------------------
+
+
+async def _group(session, chat_id, session_name, *, created_hours_ago=48, active=True):
+    from app.models import WorkGroup
+
+    session.add(
+        WorkGroup(
+            tg_chat_id=chat_id, title=f"g{chat_id}", session_name=session_name, is_active=active,
+            created_at=NOW - timedelta(hours=created_hours_ago),
+        )
+    )
+    await session.commit()
+
+
+async def _group_stat(session, chat_id, minutes_ago):
+    session.add(ParseStat(outcome=ParseOutcome.NOT_ORDER, chat_id=chat_id,
+                          created_at=NOW - timedelta(minutes=minutes_ago)))
+    await session.commit()
+
+
+async def test_dead_account_is_found_even_when_others_work(session):
+    """Общая проверка «агент жив» зелёная, пока читает хоть один аккаунт, — отдельная ловит второго."""
+    await _group(session, -1001, "acc_crimea")
+    await _group(session, -1002, "acc_4077")
+    await _group_stat(session, -1001, minutes_ago=10)
+    await _group_stat(session, -1002, minutes_ago=8 * 60)
+
+    checks = {c.name: c for c in await watchdog.check_account_activity(now=NOW)}
+
+    assert checks["аккаунт acc_crimea читает группы"].ok
+    assert not checks["аккаунт acc_4077 читает группы"].ok
+    assert "480 мин" in checks["аккаунт acc_4077 читает группы"].detail
+    assert (await watchdog.check_agent_alive(now=NOW)).ok  # так общая проверка ничего не замечала
+
+
+async def test_account_without_messages_is_a_problem_but_new_account_gets_grace(session):
+    await _group(session, -1001, "old_account", created_hours_ago=48)
+    await _group(session, -1002, "new_account", created_hours_ago=1)
+
+    checks = {c.name: c for c in await watchdog.check_account_activity(now=NOW)}
+
+    assert not checks["аккаунт old_account читает группы"].ok
+    assert checks["аккаунт new_account читает группы"].ok
+
+
+async def test_main_session_groups_are_counted_under_its_name(session, monkeypatch):
+    monkeypatch.setattr(settings, "tg_session_name", "logist")
+    await _group(session, -1001, None)
+    await _group_stat(session, -1001, minutes_ago=30)
+
+    (check,) = await watchdog.check_account_activity(now=NOW)
+
+    assert check.name == "аккаунт logist читает группы" and check.ok
+
+
+async def test_inactive_groups_are_not_watched(session):
+    await _group(session, -1001, "acc_old", active=False)
+
+    assert await watchdog.check_account_activity(now=NOW) == []
+
+
+async def test_no_new_orders_for_hours_is_a_problem(session, make_order):
+    order = await make_order()
+    order.created_at = NOW - timedelta(hours=7)
+    session.add(order)
+    await session.commit()
+
+    check = await watchdog.check_orders_flow(now=NOW)
+
+    assert not check.ok and "420 мин" in check.detail
+
+
+async def test_recent_order_means_flow_is_fine(session, make_order):
+    order = await make_order()
+    order.created_at = NOW - timedelta(minutes=40)
+    session.add(order)
+    await session.commit()
+
+    assert (await watchdog.check_orders_flow(now=NOW)).ok
+
+
+async def test_orders_flow_is_quiet_on_a_fresh_database(session):
+    assert (await watchdog.check_orders_flow(now=NOW)).ok
+
+
+async def test_run_checks_includes_the_new_checks(session, monkeypatch):
+    async def no_services():
+        return []
+
+    async def site_ok():
+        return Check("сайт", True)
+
+    monkeypatch.setattr(watchdog, "check_services", no_services)
+    monkeypatch.setattr(watchdog, "check_site", site_ok)
+    await _group(session, -1001, "acc_x")
+
+    names = [c.name for c in await watchdog.run_checks()]
+
+    assert "аккаунт acc_x читает группы" in names
+    assert any(name.startswith("новые заявки") for name in names)

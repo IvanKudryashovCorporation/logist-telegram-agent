@@ -14,11 +14,12 @@ import asyncio
 import logging
 from typing import Callable, Optional
 
+from sqlalchemy import select
 from telethon import TelegramClient
 
 from app.config import settings
 from app.db.base import SessionLocal
-from app.models import ParseOutcome, PendingMessage, PendingStatus
+from app.models import ParseOutcome, PendingMessage, PendingStatus, WorkGroup
 from app.parsing import stats as parse_stats
 from app.parsing.llm_parser import text_hash
 from app.services.notify import notifier
@@ -32,6 +33,22 @@ async def _load(session, pending_id: int) -> Optional[PendingMessage]:
     return await session.get(PendingMessage, pending_id)
 
 
+async def _fetch_message(client: TelegramClient, chat_id: int, message_id: int):
+    """Перечитывает сообщение. Группу «без вступления» клиент по номеру не знает (в его кэше
+    её нет, пока он не открывал её по имени) — тогда находим её по публичному username."""
+    try:
+        return await client.get_messages(chat_id, ids=message_id)
+    except ValueError:  # «Could not find the input entity»
+        async with SessionLocal() as session:
+            username = (
+                await session.execute(select(WorkGroup.username).where(WorkGroup.tg_chat_id == chat_id))
+            ).scalar_one_or_none()
+        if not username:
+            raise
+        entity = await client.get_entity(username)
+        return await client.get_messages(entity, ids=message_id)
+
+
 async def process_one(client: TelegramClient, pending_id: int) -> bool:
     """Обрабатывает одну запись очереди. True — разбор успешно завершён."""
     async with SessionLocal() as session:
@@ -43,7 +60,7 @@ async def process_one(client: TelegramClient, pending_id: int) -> bool:
         stored_text = pending.text
 
     try:
-        message = await client.get_messages(chat_id, ids=message_id)
+        message = await _fetch_message(client, chat_id, message_id)
     except Exception as exc:  # noqa: BLE001 — сеть/лимиты Telegram
         await _finish(pending_id, ok=False, error=f"get_messages: {type(exc).__name__}: {exc}")
         return False

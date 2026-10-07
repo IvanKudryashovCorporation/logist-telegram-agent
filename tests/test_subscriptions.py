@@ -349,3 +349,170 @@ async def test_unknown_subscription_action_is_404(client, telegram_login_on):
     await _login(client)
 
     assert (await client.post("/subscription/delete-everything")).status_code == 404
+
+
+# --- Заявку удалил диспетчер: уведомление исчезает и у водителя ---------------------------------------
+
+
+class Telegram:
+    """Подмена Bot API: отправка выдаёт номера сообщений, удаление и правка запоминаются."""
+
+    def __init__(self, delete_outcome=OK, edit_outcome=OK):
+        self.next_id = 500
+        self.deleted: list[tuple[int, int]] = []
+        self.edited: list[tuple[int, int, str]] = []
+        self.delete_outcome, self.edit_outcome = delete_outcome, edit_outcome
+
+    async def send(self, chat_id, text):
+        from app.services.subscriptions import SendOutcome
+
+        self.next_id += 1
+        return SendOutcome(OK, self.next_id)
+
+    async def delete(self, chat_id, message_id):
+        self.deleted.append((chat_id, message_id))
+        return self.delete_outcome
+
+    async def edit(self, chat_id, message_id, text):
+        self.edited.append((chat_id, message_id, text))
+        return self.edit_outcome
+
+
+async def _withdraw(session, order, *, action="cancelled_message_deleted"):
+    from app.models import ActionLog, ActorType, OrderStatus
+
+    order.status = OrderStatus.CANCELLED
+    session.add(order)
+    session.add(ActionLog(order_id=order.id, actor=ActorType.DISPATCHER, action=action))
+    await session.commit()
+
+
+async def _notified(session, make_order, tg, **order_kwargs):
+    await _subscribe(session, from_city="Симферополь")
+    order = await _fresh_order(make_order, **order_kwargs)
+    await notify_once(send=tg.send)
+    return order
+
+
+async def test_message_is_deleted_when_the_dispatcher_deletes_the_order(session, make_order):
+    from app.services.subscriptions import retract_withdrawn
+
+    tg = Telegram()
+    order = await _notified(session, make_order, tg)
+    assert await retract_withdrawn(delete=tg.delete, edit=tg.edit) == 0  # заказ жив — ничего не трогаем
+    await _withdraw(session, order)
+
+    assert await retract_withdrawn(delete=tg.delete, edit=tg.edit) == 1
+
+    assert tg.deleted == [(1001, 501)] and tg.edited == []
+    assert await retract_withdrawn(delete=tg.delete, edit=tg.edit) == 0  # повторно не удаляем
+    assert len(tg.deleted) == 1
+
+
+async def test_digest_is_rewritten_without_the_withdrawn_order(session, make_order):
+    from app.services.subscriptions import retract_withdrawn
+
+    tg = Telegram()
+    await _subscribe(session, from_city="Симферополь")
+    first = await _fresh_order(make_order, to_city="Ялта")
+    await _fresh_order(make_order, to_city="Керчь")
+    await notify_once(send=tg.send)  # оба в одном сообщении
+    await _withdraw(session, first)
+
+    await retract_withdrawn(delete=tg.delete, edit=tg.edit)
+
+    assert tg.deleted == []
+    (chat, message_id, text), = tg.edited
+    assert (chat, message_id) == (1001, 501)
+    assert "Керчь" in text and "Ялта" not in text  # осталась только живая заявка
+
+
+async def test_other_cancellations_do_not_remove_the_message(session, make_order):
+    """Дубль, скрытие вручную, правка: заказ мог остаться доступным в другой заявке — не трогаем."""
+    from app.services.subscriptions import retract_withdrawn
+
+    tg = Telegram()
+    order = await _notified(session, make_order, tg)
+    await _withdraw(session, order, action="duplicate_cancelled")
+
+    assert await retract_withdrawn(delete=tg.delete, edit=tg.edit) == 0
+    assert tg.deleted == []
+
+
+async def test_network_failure_is_retried_on_the_next_pass(session, make_order):
+    from app.services.subscriptions import RETRY, retract_withdrawn
+
+    tg = Telegram(delete_outcome=RETRY)
+    order = await _notified(session, make_order, tg)
+    await _withdraw(session, order)
+
+    assert await retract_withdrawn(delete=tg.delete, edit=tg.edit) == 0
+    tg.delete_outcome = OK
+    assert await retract_withdrawn(delete=tg.delete, edit=tg.edit) == 1
+    assert len(tg.deleted) == 2
+
+
+async def test_already_deleted_message_is_not_retried_forever(session, make_order):
+    from app.services.subscriptions import GONE, retract_withdrawn
+
+    tg = Telegram(delete_outcome=GONE)  # водитель сам удалил чат/сообщение
+    order = await _notified(session, make_order, tg)
+    await _withdraw(session, order)
+
+    assert await retract_withdrawn(delete=tg.delete, edit=tg.edit) == 1
+    assert await retract_withdrawn(delete=tg.delete, edit=tg.edit) == 0
+
+
+async def test_messages_older_than_telegram_allows_are_left_alone(session, make_order):
+    from app.services.subscriptions import retract_withdrawn
+
+    tg = Telegram()
+    order = await _notified(session, make_order, tg)
+    await _withdraw(session, order)
+
+    assert await retract_withdrawn(delete=tg.delete, edit=tg.edit, now=now_utc_naive() + timedelta(hours=48)) == 0
+    assert tg.deleted == []
+
+
+async def test_notifications_without_a_message_id_are_ignored(session, make_order):
+    """Отправленные до появления поля: номера сообщения нет, удалять нечего."""
+    from app.services.subscriptions import retract_withdrawn
+
+    order = await _fresh_order(make_order)
+    await _subscribe(session, from_city="Симферополь")
+    await notify_once(send=Outbox())  # обычная строка «ok», без номера
+    await _withdraw(session, order)
+    tg = Telegram()
+
+    assert await retract_withdrawn(delete=tg.delete, edit=tg.edit) == 0
+
+
+async def test_real_bot_api_calls_use_the_right_methods(monkeypatch):
+    from app.services import subscriptions
+
+    calls = []
+
+    class FakeClient:
+        def __init__(self, **kwargs): ...
+        async def __aenter__(self): return self
+        async def __aexit__(self, *exc): return False
+
+        async def post(self, url, json):
+            calls.append((url.rsplit("/", 1)[1], json))
+            import httpx
+
+            if json.get("text") == "same":
+                return httpx.Response(400, text='{"description":"Bad Request: message is not modified"}')
+            if json.get("message_id") == 404:
+                return httpx.Response(400, text='{"description":"Bad Request: message to delete not found"}')
+            return httpx.Response(200, json={"ok": True, "result": {"message_id": 77}})
+
+    monkeypatch.setattr(subscriptions.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(settings, "alert_bot_token", "123:abc")
+
+    sent = await subscriptions.send_message(5, "привет")
+    assert sent == OK and sent.message_id == 77
+    assert await subscriptions.delete_message(5, 77) == OK
+    assert await subscriptions.delete_message(5, 404) == subscriptions.GONE
+    assert await subscriptions.edit_message(5, 77, "same") == OK  # «не изменилось» — не ошибка
+    assert [name for name, _ in calls] == ["sendMessage", "deleteMessage", "deleteMessage", "editMessageText"]

@@ -162,9 +162,17 @@ async def main() -> None:
             f"Очередь разбора: {'вкл' if settings.queue_enabled else 'выкл'}"
         )
 
+    # Очередь перечитывает сообщение тем аккаунтом, который читает группу. Группы «без
+    # вступления» в chat_clients нет (там только события), а основной аккаунт их не знает.
+    queue_clients = dict(chat_clients)
+    for group in watching:
+        owner = clients.get(group.session_name)
+        if owner is not None:
+            queue_clients[group.tg_chat_id] = owner
+
     stop_event = asyncio.Event()
     background = _start_background(
-        client, stop_event, client_for=lambda chat_id: chat_clients.get(chat_id, client)
+        client, stop_event, client_for=lambda chat_id: queue_clients.get(chat_id, client)
     )
     if watching:
         background.append(asyncio.create_task(run_watch_worker(clients, stop_event), name="watcher"))

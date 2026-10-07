@@ -55,7 +55,9 @@ _NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 _COUNTRY_CODES = "ru,ua,by,kz,ge"
 #: Типы объектов Nominatim, которые считаем «населённым пунктом».
 _PLACE_KINDS = frozenset(
-    {"city", "town", "village", "hamlet", "suburb", "locality", "isolated_dwelling", "aeroway"}
+    {"city", "town", "village", "hamlet", "suburb", "locality", "isolated_dwelling", "aeroway",
+     # СНТ и «дачи»: диспетчеры возят именно туда, а в OpenStreetMap это отдельный тип места.
+     "allotments"}
 )
 _MAX_CANDIDATES = 5
 
@@ -256,19 +258,32 @@ class Candidate:
     lon: float
     name: str = ""
     kind: str = ""
+    #: Правильное написание, если название в заявке — опечатка («Острогоржск» -> «Острогожск»).
+    #: Пусто — название написано верно.
+    canonical: str = ""
+    #: ``False`` — найдено нечётким поиском без подтверждения регионом: можно доверять, только
+    #: если место недалеко от другого конца маршрута (см. :data:`UNVERIFIED_MAX_KM`).
+    verified: bool = True
 
     @property
     def coords(self) -> Coords:
         return (self.lat, self.lon)
 
     def as_json(self) -> dict:
-        return {"lat": self.lat, "lon": self.lon, "name": self.name, "kind": self.kind}
+        data = {"lat": self.lat, "lon": self.lon, "name": self.name, "kind": self.kind}
+        if self.canonical:
+            data["canonical"] = self.canonical
+        if not self.verified:
+            data["verified"] = False
+        return data
 
     @classmethod
     def from_json(cls, data: dict) -> "Candidate":
         return cls(
             lat=float(data["lat"]), lon=float(data["lon"]),
             name=str(data.get("name") or ""), kind=str(data.get("kind") or ""),
+            canonical=str(data.get("canonical") or ""),
+            verified=data.get("verified", True) is not False,
         )
 
 
@@ -289,7 +304,7 @@ def pick(candidates: list[Candidate], near: Optional[Coords] = None) -> Optional
 #: раньше, считаются устаревшими и ищутся заново — иначе улучшение не доходит до мест,
 #: которые уже один раз не нашлись (а «не найдено» живёт неделю), и заказы без координат
 #: остаются без них. Меняя поиск, обновляйте эту дату.
-GEO_LOGIC_DATE = datetime(2026, 10, 4, 15, 0)
+GEO_LOGIC_DATE = datetime(2026, 10, 5, 8, 32)
 
 #: Версия логики геокодирования. Подняли её — фоновый воркер сам перегеокодирует
 #: все заказы, обработанные старой версией: исправления не нужно «накатывать»
@@ -387,7 +402,9 @@ ADDRESS_OVERRIDE_KM = 100
 
 #: Типы «мелких» мест: только им адрес может возразить. Город из справочника
 #: или областной центр («Краснодар», адрес «Центральный») не трогаем.
-_SMALL_PLACE_KINDS = frozenset({"village", "hamlet", "locality", "isolated_dwelling", "suburb"})
+_SMALL_PLACE_KINDS = frozenset(
+    {"village", "hamlet", "locality", "isolated_dwelling", "suburb", "allotments"}
+)
 
 #: Адрес, который заведомо не название населённого пункта.
 _NOT_A_PLACE_ADDRESS_RE = re.compile(
@@ -441,8 +458,17 @@ async def refine_by_address(
             return chosen
         # Регион назван, но с ним ничего не нашлось. Найденное без региона годится,
         # только если оно и правда в этом регионе, иначе лучше без координат, чем
-        # однофамилец за тысячу километров.
-        if chosen is not None and _region_stem(region) not in chosen.name.lower():
+        # однофамилец за тысячу километров. Но если регион диспетчер написал прямо в
+        # названии («Донецк (ДНР)», «Писково (Московская обл.)»), место уже найдено именно
+        # с ним, и район из адреса его не опровергает: «Петровский р-н» — район Донецка,
+        # а «Истринский» не совпадает с «Истра» по буквам.
+        own_region = normalize_place(city)[1] if city else None
+        if (
+            chosen is not None
+            and own_region is None
+            and chosen.kind not in ("near", "region")  # привязка по району/области — уже по названию из заявки
+            and _region_stem(region) not in chosen.name.lower()
+        ):
             log.info("«%s» (%s): найденное место не в регионе «%s» — координаты не ставим",
                      city, chosen.name[:50], region)
             return None
@@ -495,7 +521,7 @@ _nominatim_lock = asyncio.Lock()
 _last_request_at = 0.0
 
 
-async def _nominatim_search(query: str) -> list[Candidate]:
+async def _nominatim_rows(query: str) -> list[dict]:
     """Один запрос к Nominatim с соблюдением лимита 1 запрос в секунду."""
     global _last_request_at
     async with _nominatim_lock:
@@ -521,9 +547,13 @@ async def _nominatim_search(query: str) -> list[Candidate]:
             raise GeocoderUnavailable(str(exc)) from exc
         finally:
             _last_request_at = time.monotonic()
+    return rows
 
+
+async def _nominatim_search(query: str) -> list[Candidate]:
+    """Населённые пункты по запросу (города, села, СНТ…)."""
     candidates = []
-    for row in rows:
+    for row in await _nominatim_rows(query):
         kind = row.get("addresstype") or row.get("type") or ""
         if kind not in _PLACE_KINDS and row.get("type") not in _PLACE_KINDS:
             continue
@@ -545,8 +575,21 @@ async def _cached(session: AsyncSession, key: str) -> Optional[GeoPlace]:
     ).scalar_one_or_none()
 
 
+def _is_guess(place: GeoPlace) -> bool:
+    """Результат — догадка (исправленная опечатка, привязка к району/области/соседу), а не точное
+    совпадение названия."""
+    return any(
+        item.get("canonical") or item.get("kind") in ("near", "region")
+        for item in (place.candidates or [])
+    )
+
+
 def _is_fresh(place: GeoPlace) -> bool:
     """Годна ли запись кэша без повторного запроса."""
+    if place.status == STATUS_OK and _is_guess(place):
+        # Догадки зависят от правил поиска: при смене правил (GEO_LOGIC_DATE) пересчитываем,
+        # иначе промахи старого правила («Монастыри» -> «Монастырище») жили бы в кэше вечно.
+        return place.checked_at is not None and place.checked_at >= GEO_LOGIC_DATE
     if place.status in (STATUS_OK, STATUS_MANUAL):
         return True
     if place.checked_at is None or place.checked_at < GEO_LOGIC_DATE:
@@ -561,7 +604,9 @@ APPROXIMATE_RADIUS_KM = 150
 
 def _is_region_hint(hint: str) -> bool:
     """Подсказка — регион или район, а не соседний населённый пункт."""
-    return bool(re.search(r"област|край|республик|район|р-н|округ", hint, re.IGNORECASE)) or (
+    return bool(
+        re.search(r"област|край|республик|район|р-н|округ|\bмо\b|\bго\b|\bао\b|муницип", hint, re.IGNORECASE)
+    ) or (
         canonical_region(hint) is not None
     )
 
@@ -581,6 +626,201 @@ async def _approximate_by_hint(session: AsyncSession, name: str, hint: str) -> l
         return [min(plain, key=lambda c: haversine_km(c.coords, anchor.coords))]
     neighbour = anchor.name.split(",")[0] or hint
     return [Candidate(lat=anchor.lat, lon=anchor.lon, name=f"{name} (рядом с {neighbour})", kind="near")]
+
+
+#: Слова подсказки региона, которые ничего не говорят о месте («район», «округ», «область»…).
+_HINT_STOP_WORDS = frozenset(
+    {"район", "округ", "область", "край", "республика", "муниципальный", "городской", "сельский",
+     "поселение", "обл"}
+)
+
+
+def _hint_stems(hint: str) -> list[str]:
+    """Первые 5 букв значимых слов подсказки: «Зарайский округ» -> [«зарай»]."""
+    words = re.findall(r"[а-я]+", hint.lower().replace("ё", "е"))
+    return [word[:5] for word in words if len(word) >= 5 and word not in _HINT_STOP_WORDS]
+
+
+async def _search_by_region_in_address(name: str, hint: str) -> list[Candidate]:
+    """«Пенкино (Зарайский округ)»: запрос «Пенкино, Зарайский округ» Nominatim не понимает
+    (у него район записан иначе), а просто «Пенкино» находит десяток деревень. Берём из них
+    только те, в адресе которых действительно есть названный район или область."""
+    stems = _hint_stems(hint)
+    if not stems:
+        return []
+    wide = await _nominatim_search(name)
+    return [c for c in wide if any(stem in c.name.lower().replace("ё", "е") for stem in stems)]
+
+
+# --- Опечатки: нечёткий поиск (Photon) ----------------------------------------
+
+_PHOTON_PLACES = frozenset(
+    {"city", "town", "village", "hamlet", "suburb", "locality", "isolated_dwelling", "allotments"}
+)
+_photon_lock = asyncio.Lock()
+_photon_last_at = 0.0
+#: Насколько название из заявки должно быть похоже на найденное, чтобы считать его опечаткой.
+#: Опечатка в одну букву у названия из семи букв («Левинка»/«Левенка») даёт 0,86 — это может
+#: быть и соседняя деревня, поэтому такое не исправляем: по опыту прода порог 0,8 переименовал
+#: «Левинку» и «Монастыри» в другие места. Без подтверждения регионом нужно ещё строже.
+_FUZZY_RATIO_WITH_REGION = 0.88
+_FUZZY_RATIO_WITHOUT_REGION = 0.9
+#: Найденное нечётким поиском без региона («Кировоград» -> «Кировград» на Урале) принимаем, только
+#: если оно недалеко от другого конца маршрута: так «Екатеринбург -> Кировоград» исправится,
+#: а настоящий украинский Кировоград — нет.
+UNVERIFIED_MAX_KM = 300
+_FUZZY_MIN_NAME_LENGTH = 6
+
+
+async def _photon_search(query: str) -> list[dict]:
+    """Нечёткий поиск мест по OpenStreetMap (Photon): понимает опечатки и падежи."""
+    global _photon_last_at
+    async with _photon_lock:
+        wait = 1.0 - (time.monotonic() - _photon_last_at)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.get(
+                    settings.photon_url,
+                    params={"q": query, "limit": 6, "osm_tag": "place"},
+                    headers={"User-Agent": settings.geocoder_user_agent},
+                )
+            response.raise_for_status()
+            data = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise GeocoderUnavailable(f"photon: {exc}") from exc
+        finally:
+            _photon_last_at = time.monotonic()
+    return list(data.get("features") or [])
+
+
+def _photon_candidate(feature: dict) -> Optional[Candidate]:
+    props = feature.get("properties") or {}
+    found = props.get("name") or ""
+    try:
+        lon, lat = feature["geometry"]["coordinates"][:2]
+        lat, lon = float(lat), float(lon)
+    except (KeyError, TypeError, ValueError):
+        return None
+    if props.get("osm_value") not in _PHOTON_PLACES or not found:
+        return None
+    parts = [found, props.get("county") or props.get("district"), props.get("state"), props.get("country")]
+    return Candidate(lat=lat, lon=lon, name=", ".join(str(p) for p in parts if p)[:160], kind=props["osm_value"])
+
+
+def _is_longer_name(first: str, second: str) -> bool:
+    """Одно название — начало другого с хвостом от двух букв: так отличаются разные места
+    (Монастыри/Монастырище), а в опечатке хвост не дописывают."""
+    short, long_ = sorted((first, second), key=len)
+    return len(long_) - len(short) >= 2 and long_.startswith(short)
+
+
+async def _search_with_typos(name: str, hint: Optional[str]) -> list[Candidate]:
+    """«Острогоржск (Воронежская обл.)»: Nominatim такого не знает, а нечёткий поиск находит
+    «Острогожск». Принимаем только очень похожее название; если регион известен — он обязан
+    совпасть. Найденному ставим ``canonical`` — правильное написание."""
+    if len(city_key(name)) < _FUZZY_MIN_NAME_LENGTH or not settings.geocoding_fuzzy_enabled:
+        return []
+    stems = _hint_stems(hint) if hint else []
+    features = await _photon_search(f"{name} {hint}" if hint else name)
+
+    base = city_key(name)
+    matches: list[tuple[float, str, Candidate]] = []
+    for feature in features:
+        props = feature.get("properties") or {}
+        title = props.get("name") or ""
+        found_key = city_key(title)
+        if _is_longer_name(base, found_key):
+            continue  # «Монастыри» и «Монастырище» — разные места, а не опечатка
+        ratio = difflib.SequenceMatcher(None, base, found_key).ratio()
+        area = " ".join(str(props.get(key) or "") for key in ("state", "county", "district", "city"))
+        in_region = bool(stems) and any(stem in area.lower().replace("ё", "е") for stem in stems)
+        if stems:
+            if not in_region or ratio < _FUZZY_RATIO_WITH_REGION:
+                continue
+        elif ratio < _FUZZY_RATIO_WITHOUT_REGION:
+            continue
+        candidate = _photon_candidate(feature)
+        if candidate is not None:
+            matches.append((ratio, title, candidate))
+    if not matches:
+        return []
+
+    # Среди похожих названий («Кондровка» и «Кондуровка» для «Кондоровка») верно одно —
+    # самое похожее; остальные не берём, иначе исправление превратится в угадывание.
+    best = max(ratio for ratio, _, _ in matches)
+    return [
+        Candidate(
+            cand.lat, cand.lon, cand.name, cand.kind,
+            canonical=title if city_key(title) != base else "",
+            verified=bool(stems),
+        )
+        for ratio, title, cand in matches
+        if ratio >= best - 0.02
+    ]
+
+
+# --- Деревни, которых нет в OSM: ближайший известный пункт ---------------------
+
+_AREA_KINDS = frozenset({"district", "county", "state_district", "municipality", "historic"})
+_REGION_ONLY_RE = re.compile(r"област|край|республик", re.IGNORECASE)
+_DISTRICT_WORD_RE = re.compile(r"район|р-н|округ|\bмо\b|\bго\b|\bао\b|муницип", re.IGNORECASE)
+_DISTRICT_SUFFIX_RE = re.compile(r"\b(?:мо|го|ао|округ)\b", re.IGNORECASE)
+#: Центр области — слишком грубая привязка: годится, только если другой конец маршрута далеко.
+REGION_GUESS_MIN_KM = 400
+
+
+async def _nominatim_area(query: str) -> list[dict]:
+    """Строки Nominatim как есть — для районов и областей (в них нет населённых пунктов)."""
+    return await _nominatim_rows(query)
+
+
+def _area_point(rows: list[dict], kinds: frozenset, stems: list[str]) -> Optional[tuple[float, float, str]]:
+    for row in rows:
+        kind = row.get("addresstype") or row.get("type") or ""
+        head = str(row.get("display_name") or "").split(",")[0]
+        if kind not in kinds:
+            continue
+        if stems and not any(stem in head.lower().replace("ё", "е") for stem in stems):
+            continue
+        try:
+            return float(row["lat"]), float(row["lon"]), head
+        except (KeyError, TypeError, ValueError):
+            continue
+    return None
+
+
+async def _approximate_by_area(name: str, hint: str) -> list[Candidate]:
+    """«Коробки (район Каховки)», «Пенкино (Зарайский округ)», «Вершины (Запорожская обл.)»:
+    деревни в картах нет, но район или область названы — считаем от их центра.
+
+    Район даёт погрешность в десятки километров, область — до сотни и больше, поэтому
+    центр области годится лишь для далёкого маршрута (см. :data:`REGION_GUESS_MIN_KM`)."""
+    stems = _hint_stems(hint)
+    if _REGION_ONLY_RE.search(hint) and not _DISTRICT_WORD_RE.search(hint):
+        point = _area_point(await _nominatim_area(hint), frozenset({"state"}), [])
+        if point is None:
+            return []
+        return [Candidate(point[0], point[1], f"{name} (область: {point[2]})", kind="region")]
+
+    if not stems:
+        return []
+    district = _DISTRICT_SUFFIX_RE.sub("район", hint)
+    point = _area_point(await _nominatim_area(district), _AREA_KINDS, stems)
+    if point is None and settings.geocoding_fuzzy_enabled:
+        # «Зарайский округ» -> Зарайск, «район Каховки» -> Каховка: административного района в
+        # картах нет, зато есть его центр, и нечёткий поиск находит его по основе названия.
+        skip = _HINT_STOP_WORDS | {"мо", "го", "ао"}
+        words = [w for w in re.findall(r"[А-Яа-яЁё\-]+", hint) if w.lower() not in skip]
+        for feature in await _photon_search(" ".join(words)):
+            candidate = _photon_candidate(feature)
+            if candidate and any(candidate.name.lower().replace("ё", "е").startswith(stem) for stem in stems):
+                point = (candidate.lat, candidate.lon, candidate.name.split(",")[0])
+                break
+    if point is None:
+        return []
+    return [Candidate(point[0], point[1], f"{name} (рядом с {point[2]})", kind="near")]
 
 
 async def resolve(session: AsyncSession, raw: Optional[str]) -> list[Candidate]:
@@ -607,8 +847,28 @@ async def resolve(session: AsyncSession, raw: Optional[str]) -> list[Candidate]:
 
     query = f"{name}, {hint}" if hint else name
     found = await _nominatim_search(query)
+    if not found and hint and _is_region_hint(hint):
+        found = await _search_by_region_in_address(name, hint)
     if not found and hint and not _is_region_hint(hint):
         found = await _approximate_by_hint(session, name, hint)
+
+    # Не нашли — возможно, опечатка; затем — привязка к ближайшему известному пункту.
+    # Сбой нечёткого поиска (сеть) не должен записать «не найдено» на неделю.
+    fuzzy_unavailable = False
+    if not found:
+        try:
+            found = await _search_with_typos(name, hint)
+        except GeocoderUnavailable as exc:
+            log.warning("Нечёткий поиск недоступен: %s", exc)
+            fuzzy_unavailable = True
+    if not found and hint and not fuzzy_unavailable:
+        try:
+            found = await _approximate_by_area(name, hint)
+        except GeocoderUnavailable as exc:
+            log.warning("Поиск района недоступен: %s", exc)
+            fuzzy_unavailable = True
+    if not found and fuzzy_unavailable:
+        return []
 
     if place is None:
         place = GeoPlace(key=key)

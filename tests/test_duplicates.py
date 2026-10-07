@@ -272,3 +272,70 @@ async def test_background_pass_leaves_taken_orders_alone(session, make_order):
     await make_order(price="1800", pickup_at=pickup, dispatcher_username="d", client_phone=None, passengers=None)
 
     assert await cancel_duplicate_orders() == 0
+
+
+# --- 5. Правка сообщения делает заявку повтором другой ---------------------------------------
+
+
+async def _edit(chat_id, message_id, text="заявка", **dispatcher):
+    return await work_group.upsert_order_text(
+        chat_id=chat_id, message_id=message_id, text=text, is_edit=True, **dispatcher
+    )
+
+
+async def _live_ids(session):
+    from app.models import OrderStatus
+
+    return {
+        order.id
+        for order in (await session.execute(select(Order).where(Order.status == OrderStatus.NEW))).scalars().all()
+    }
+
+
+async def test_edit_that_turns_an_order_into_a_repost_removes_the_twin_at_once(session, monkeypatch):
+    """Заявка B опубликована с другим маршрутом, потом отредактирована — и стала копией A."""
+    route = {"pickup_time": "18:00", "from_city": "Краснодар", "to_city": "Анапа", "client_price": 4000}
+    _parse(monkeypatch, **route)
+    first = (await _post(-100111, 1, **DISPATCHER))[0]
+    _parse(monkeypatch, **{**route, "to_city": "Геленджик"})
+    second = (await _post(-100111, 2, **DISPATCHER))[0]
+    assert await _live_ids(session) == {first, second}
+
+    _parse(monkeypatch, **route)  # диспетчер исправил маршрут во втором сообщении
+    await _edit(-100111, 2, **DISPATCHER)
+
+    assert await _live_ids(session) == {second}  # осталась отредактированная, двойник снят
+    action = (
+        await session.execute(select(ActionLog).where(ActionLog.action == "duplicate_cancelled_on_edit"))
+    ).scalar_one()
+    assert action.order_id == first
+
+
+async def test_edit_does_not_touch_a_taken_order(session, monkeypatch):
+    route = {"pickup_time": "18:00", "from_city": "Краснодар", "to_city": "Анапа", "client_price": 4000}
+    _parse(monkeypatch, **route)
+    first = (await _post(-100111, 1, **DISPATCHER))[0]
+    taken = (await session.execute(select(Order).where(Order.id == first))).scalar_one()
+    taken.taken_by_token = "tg:1"
+    session.add(taken)
+    await session.commit()
+    _parse(monkeypatch, **{**route, "to_city": "Геленджик"})
+    second = (await _post(-100111, 2, **DISPATCHER))[0]
+
+    _parse(monkeypatch, **route)
+    await _edit(-100111, 2, **DISPATCHER)
+
+    assert await _live_ids(session) == {first, second}
+
+
+async def test_edit_to_a_different_client_stays_a_separate_order(session, monkeypatch):
+    route = {"pickup_time": "18:00", "from_city": "Краснодар", "to_city": "Анапа", "client_price": 4000}
+    _parse(monkeypatch, **route, client_phone="+79990000001")
+    first = (await _post(-100111, 1, **DISPATCHER))[0]
+    _parse(monkeypatch, **{**route, "to_city": "Геленджик"}, client_phone="+79990000002")
+    second = (await _post(-100111, 2, **DISPATCHER))[0]
+
+    _parse(monkeypatch, **route, client_phone="+79990000002")
+    await _edit(-100111, 2, **DISPATCHER)
+
+    assert await _live_ids(session) == {first, second}

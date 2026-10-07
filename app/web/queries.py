@@ -321,6 +321,15 @@ async def fetch_feed(
     return FeedPage(items=items, total=total, page=current_page, page_size=size)
 
 
+async def group_username(session: AsyncSession, chat_id: Optional[int]) -> Optional[str]:
+    """Публичное имя группы заявки (``None`` — группа закрытая или неизвестна)."""
+    if chat_id is None:
+        return None
+    return (
+        await session.execute(select(WorkGroup.username).where(WorkGroup.tg_chat_id == chat_id))
+    ).scalar_one_or_none() or None
+
+
 async def header_counts(session: AsyncSession, token: str) -> dict:
     """Счётчики в шапке сайта. Все три — по индексированным полям."""
     lenta_count = (

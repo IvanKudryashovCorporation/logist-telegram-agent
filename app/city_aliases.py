@@ -8,6 +8,7 @@
 """
 
 import re
+from functools import lru_cache
 
 #: Префиксы-мусор перед названием: «г. Симферополь», «город Керчь», «с.Лев Толстое»,
 #: «посёлок Грицовский», «деревня Родионцева». Тип населённого пункта в ключ не входит:
@@ -83,6 +84,9 @@ CITY_ALIASES: dict[str, str] = {
     "санкт-петербург": "Санкт-Петербург",
     "казань": "Казань",
     "йошкар-ола": "Йошкар-Ола",
+
+    # Названия, которые в заявках пишут иначе, чем в картах (OpenStreetMap)
+    "станично-луганское": "Станица Луганская",
 }
 
 
@@ -122,6 +126,7 @@ def canonical_city_name(raw: str | None) -> str | None:
     return _ALIAS_INDEX.get(_compact(city_key(raw)))
 
 
+@lru_cache(maxsize=32768)
 def expand_city_term(raw: str) -> str:
     """Раскрывает сокращение в полное название города. Если сокращение
     неизвестно — возвращает исходный текст как есть (сравнение всё равно
@@ -167,6 +172,7 @@ def split_city_terms(raw: str) -> list[str]:
     return [t.strip() for t in raw.split(",") if t.strip()]
 
 
+@lru_cache(maxsize=32768)
 def city_key(value: str | None) -> str:
     """Нормализованная форма названия города — для сравнения прямо в SQL.
 

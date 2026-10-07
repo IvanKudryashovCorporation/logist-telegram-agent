@@ -145,6 +145,63 @@ async def _find_repost(session, new: LiveOrder) -> Optional[Order]:
     return None
 
 
+async def _cancel_reposts_of_edited(db, order: Order) -> int:
+    """Диспетчер отредактировал заявку, и она стала повтором другой живой заявки.
+
+    При приёме новых сообщений повторы отсекаются до записи, но правка обходила эту
+    проверку: заявка без города (или с другим временем) сохранялась как есть, а после
+    правки совпадала с уже существующей — и обе висели в ленте до фоновой уборки.
+    Правка — самая свежая информация, поэтому остаётся отредактированная заявка, а её
+    старые двойники снимаются. Взятые водителями заявки не трогаем.
+    """
+    if order.status in HIDDEN_STATUSES or order.taken_by_token or not (order.from_city and order.to_city):
+        return 0
+    if order.pickup_at is None:
+        when = (
+            Order.pickup_asap.is_(True),
+            Order.pickup_at.is_(None),
+            Order.created_at >= now_utc_naive() - ASAP_WINDOW,
+        )
+    else:
+        when = (
+            Order.pickup_at >= order.pickup_at - TIME_TOLERANCE,
+            Order.pickup_at <= order.pickup_at + TIME_TOLERANCE,
+        )
+    candidates = (
+        await db.execute(
+            select(Order)
+            .where(
+                Order.id != order.id,
+                Order.status.notin_(HIDDEN_STATUSES),
+                Order.taken_by_token.is_(None),
+                *when,
+            )
+            .order_by(Order.id.asc())
+            .limit(300)
+        )
+    ).scalars().all()
+
+    edited = _live_order(order)
+    cancelled = 0
+    for candidate in candidates:
+        other = _live_order(candidate)
+        older, newer = (other, edited) if other.id < edited.id else (edited, other)
+        if not is_repost(older, newer):
+            continue
+        candidate.status = OrderStatus.CANCELLED
+        db.add(
+            ActionLog(
+                order_id=candidate.id,
+                actor=ActorType.SYSTEM,
+                action="duplicate_cancelled_on_edit",
+                details=f"после правки заявка стала повтором #{order.id}",
+            )
+        )
+        cancelled += 1
+        log.info("Правка: заявка #%s стала повтором #%s — #%s снята", order.id, candidate.id, candidate.id)
+    return cancelled
+
+
 async def _find_duplicate(
     session,
     parsed: ParsedOrder,
@@ -495,6 +552,8 @@ async def _save_orders(
             )
         )
         result_ids.append(order.id)
+        if not is_new_order:
+            await _cancel_reposts_of_edited(db, order)
 
         log.info(
             "%s заказ #%s: %s -> %s, статус=%s",

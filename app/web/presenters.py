@@ -66,7 +66,9 @@ def dispatcher_message(order: Order) -> str:
     return f"Здравствуйте! Заказ {summary} — актуально?"
 
 
-def dispatcher_link(order: Order, text: Optional[str] = None) -> Optional[str]:
+def dispatcher_link(
+    order: Order, text: Optional[str] = None, group_username: Optional[str] = None
+) -> Optional[str]:
     """Ссылка на диалог с диспетчером в Telegram, если известен его аккаунт.
 
     ``contact_username`` — явное «писать @...» из текста заявки — приоритетнее
@@ -81,6 +83,9 @@ def dispatcher_link(order: Order, text: Optional[str] = None) -> Optional[str]:
 
     ``text`` подставляется в поле ввода чата (``?text=``). У ссылки по
     числовому id такого параметра нет — для неё текст не добавляется.
+
+    ``group_username`` — публичное имя группы заявки: ссылка на сообщение в ней открывается
+    у любого, а в закрытую группу (``t.me/c/…``) Telegram пускает только участников.
     """
     username = order.contact_username or order.dispatcher_username
     if username:
@@ -89,18 +94,21 @@ def dispatcher_link(order: Order, text: Optional[str] = None) -> Optional[str]:
     # Без @username: ссылка на само сообщение в группе — обычная https, она открывается
     # в приложении Telegram даже из мобильного браузера (в отличие от tg://, который
     # браузеры блокируют при перенаправлении с сайта). Из сообщения чат с автором в один тап.
-    return message_link(order) or direct_chat_link(order)
+    return message_link(order, group_username) or direct_chat_link(order)
 
 
-def message_link(order: Order) -> Optional[str]:
-    """Ссылка на исходное сообщение заявки в группе (``https://t.me/c/<чат>/<сообщение>``).
+def message_link(order: Order, group_username: Optional[str] = None) -> Optional[str]:
+    """Ссылка на исходное сообщение заявки в группе.
 
-    Работает для супергрупп (id вида ``-100…``); открывается у тех, кто состоит в группе —
-    а водители диспетчерских групп в них состоят.
+    Публичная группа: ``https://t.me/<имя группы>/<сообщение>`` — открывается без вступления.
+    Закрытая (``https://t.me/c/<чат>/<сообщение>``) — только у участников: остальные видят
+    «Вы не состоите в чате, где было опубликовано это сообщение».
     """
     chat_id, message_id = order.source_chat_id, order.source_message_id
     if chat_id is None or message_id is None:
         return None
+    if group_username:
+        return f"https://t.me/{group_username.lstrip('@')}/{int(message_id)}"
     digits = str(abs(int(chat_id)))
     if int(chat_id) < 0 and digits.startswith("100") and len(digits) > 3:
         return f"https://t.me/c/{digits[3:]}/{int(message_id)}"

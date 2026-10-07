@@ -7,6 +7,10 @@
 ``subscription_notifications``). Если за проход подходит много заказов — одно
 сообщение со списком, а не поток.
 
+Номер отправленного сообщения запоминается: если диспетчер потом удалил заявку в
+Telegram, сообщение у водителя удаляется (а в списке из нескольких заказов — переписывается
+без неё), см. :func:`retract_withdrawn`.
+
 Подписка с радиусом ждёт координат заказа (геокодер ставит их сам), но не
 дольше ``GEO_WAIT``: иначе заказ без координат для неё невидим. Обычная подписка
 (по названию города, цене и т.п.) ничего не ждёт.
@@ -19,12 +23,12 @@ from typing import Awaitable, Callable, Optional
 from urllib.parse import urlencode
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import exists, select
 
 from app import geo
 from app.config import settings
 from app.db.base import SessionLocal
-from app.models import Order, OrderSubscription, SubscriptionNotification
+from app.models import ActionLog, Order, OrderStatus, OrderSubscription, SubscriptionNotification
 from app.timeutil import now_msk_naive, now_utc_naive
 from app.web import queries
 from app.web.filters import VEHICLE_CHOICES, Filters
@@ -39,7 +43,25 @@ WINDOW = timedelta(minutes=30)
 GEO_WAIT = timedelta(seconds=90)
 
 OK, BLOCKED, RETRY = "ok", "blocked", "retry"
+#: Сообщение уже нечем убирать: его нет, прошло слишком много времени или бот заблокирован.
+GONE = "gone"
 Sender = Callable[[int, str], Awaitable[str]]
+#: Bot API разрешает удалять свои сообщения не позже чем через 48 часов; берём с запасом.
+RETRACT_WINDOW = timedelta(hours=47)
+#: Действия журнала, после которых заявка считается снятой самим диспетчером.
+WITHDRAWN_ACTIONS = ("cancelled_message_deleted",)
+
+
+class SendOutcome(str):
+    """Итог отправки: ведёт себя как обычная строка ``ok``/``blocked``/``retry``, но у успешной
+    отправки несёт ещё и номер сообщения бота."""
+
+    message_id: Optional[int] = None
+
+    def __new__(cls, value: str, message_id: Optional[int] = None):
+        obj = super().__new__(cls, value)
+        obj.message_id = message_id
+        return obj
 
 
 # --- Фильтр -> текст и ссылка -------------------------------------------------
@@ -179,12 +201,47 @@ async def send_message(chat_id: int, text: str) -> str:
         log.warning("Telegram недоступен: %s", type(exc).__name__)
         return RETRY
     if response.status_code == 200:
-        return OK
+        try:
+            message_id = int(response.json()["result"]["message_id"])
+        except (KeyError, TypeError, ValueError):
+            message_id = None
+        return SendOutcome(OK, message_id)
     if response.status_code in (400, 403):
         log.info("Бот не может писать tg:%s: %s", chat_id, response.text[:120])
         return BLOCKED
     log.warning("Telegram ответил %s: %s", response.status_code, response.text[:120])
     return RETRY
+
+
+async def _bot_call(method: str, payload: dict) -> str:
+    """Вызов Bot API без результата. ``ok`` / ``gone`` (повторять нет смысла) / ``retry``."""
+    token = bot_token()
+    if not token:
+        return RETRY
+    try:
+        async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
+            response = await client.post(f"https://api.telegram.org/bot{token}/{method}", json=payload)
+    except httpx.HTTPError as exc:
+        log.warning("Telegram недоступен (%s): %s", method, type(exc).__name__)
+        return RETRY
+    if response.status_code == 200:
+        return OK
+    if response.status_code in (400, 403):
+        # 400: сообщения уже нет или оно слишком старое; текст не изменился — тоже хорошо.
+        return OK if "not modified" in response.text else GONE
+    log.warning("Telegram ответил %s на %s: %s", response.status_code, method, response.text[:120])
+    return RETRY
+
+
+async def delete_message(chat_id: int, message_id: int) -> str:
+    return await _bot_call("deleteMessage", {"chat_id": chat_id, "message_id": message_id})
+
+
+async def edit_message(chat_id: int, message_id: int, text: str) -> str:
+    return await _bot_call(
+        "editMessageText",
+        {"chat_id": chat_id, "message_id": message_id, "text": text, "disable_web_page_preview": True},
+    )
 
 
 # --- Подбор заказов ------------------------------------------------------------------
@@ -269,8 +326,13 @@ async def notify_once(*, send: Sender = send_message, now: Optional[datetime] = 
 
             outcome = await send(sub.telegram_id, build_message(matched, sub.params or {}))
             if outcome == OK:
+                message_id = getattr(outcome, "message_id", None)
                 for order in matched:
-                    session.add(SubscriptionNotification(subscription_id=sub.id, order_id=order.id, sent_at=now))
+                    session.add(
+                        SubscriptionNotification(
+                            subscription_id=sub.id, order_id=order.id, sent_at=now, message_id=message_id
+                        )
+                    )
                 sub.last_notified_at = now
                 sent_messages += 1
             elif outcome == BLOCKED:
@@ -279,6 +341,102 @@ async def notify_once(*, send: Sender = send_message, now: Optional[datetime] = 
             await session.commit()
 
     return sent_messages
+
+
+Deleter = Callable[[int, int], Awaitable[str]]
+Editor = Callable[[int, int, str], Awaitable[str]]
+
+
+async def retract_withdrawn(
+    *,
+    delete: Deleter = delete_message,
+    edit: Editor = edit_message,
+    now: Optional[datetime] = None,
+) -> int:
+    """Убирает у водителей уведомления о заявках, которые диспетчер удалил в Telegram.
+
+    Сообщение целиком из таких заявок удаляется; если в нём были и другие (список из нескольких
+    заказов) — переписывается без снятых. Сетевой сбой оставляет всё как есть до следующего
+    прохода. Возвращает число обработанных сообщений.
+    """
+    now = now or now_utc_naive()
+    done = 0
+    async with SessionLocal() as session:
+        notes = list(
+            (
+                await session.execute(
+                    select(SubscriptionNotification).where(
+                        SubscriptionNotification.message_id.is_not(None),
+                        SubscriptionNotification.retracted_at.is_(None),
+                        SubscriptionNotification.sent_at > now - RETRACT_WINDOW,
+                    )
+                )
+            ).scalars().all()
+        )
+        if not notes:
+            return 0
+
+        order_ids = {note.order_id for note in notes}
+        withdrawn = set(
+            (
+                await session.execute(
+                    select(Order.id).where(
+                        Order.id.in_(order_ids),
+                        Order.status == OrderStatus.CANCELLED,
+                        exists().where(ActionLog.order_id == Order.id, ActionLog.action.in_(WITHDRAWN_ACTIONS)),
+                    )
+                )
+            ).scalars().all()
+        )
+        if not withdrawn:
+            return 0
+
+        orders = {
+            order.id: order
+            for order in (await session.execute(select(Order).where(Order.id.in_(order_ids)))).scalars().all()
+        }
+        subs = {
+            sub.id: sub
+            for sub in (
+                await session.execute(
+                    select(OrderSubscription).where(
+                        OrderSubscription.id.in_({note.subscription_id for note in notes})
+                    )
+                )
+            ).scalars().all()
+        }
+
+        messages: dict[tuple[int, int], list[SubscriptionNotification]] = {}
+        for note in notes:
+            messages.setdefault((note.subscription_id, note.message_id), []).append(note)
+
+        for (sub_id, message_id), group in messages.items():
+            gone = [note for note in group if note.order_id in withdrawn]
+            if not gone:
+                continue
+            sub = subs.get(sub_id)
+            if sub is None:
+                continue
+            remaining = [
+                orders[note.order_id]
+                for note in group
+                if note.order_id not in withdrawn and note.order_id in orders
+            ]
+            if remaining:
+                outcome = await edit(sub.telegram_id, message_id, build_message(remaining, sub.params or {}))
+            else:
+                outcome = await delete(sub.telegram_id, message_id)
+            if outcome == RETRY:
+                continue
+            for note in gone:
+                note.retracted_at = now
+            done += 1
+            log.info(
+                "Уведомление tg:%s msg=%s: заявка снята диспетчером — %s",
+                sub.telegram_id, message_id, "переписано" if remaining else "удалено",
+            )
+        await session.commit()
+    return done
 
 
 async def run_subscription_worker(stop_event: asyncio.Event) -> None:
@@ -295,6 +453,10 @@ async def run_subscription_worker(stop_event: asyncio.Event) -> None:
                 log.info("Отправлено уведомлений о заказах: %s", sent)
         except Exception:
             log.exception("Ошибка воркера уведомлений")
+        try:
+            await retract_withdrawn()
+        except Exception:
+            log.exception("Ошибка уборки снятых уведомлений")
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=interval)
         except asyncio.TimeoutError:

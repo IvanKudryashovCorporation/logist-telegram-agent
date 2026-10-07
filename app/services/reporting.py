@@ -17,6 +17,7 @@ from app.city_aliases import canonical_city_name
 from app.db.base import SessionLocal
 from app.models import (
     ORDER_STATUS_LABELS,
+    ActionLog,
     Order,
     OrderStatus,
     ParseOutcome,
@@ -165,6 +166,46 @@ async def popular_routes(days: int = 7, limit: int = 10) -> dict:
         ],
         "from_cities": [{"name": name(city), "count": count} for _key, count, city in city_rows["from"]],
         "to_cities": [{"name": name(city), "count": count} for _key, count, city in city_rows["to"]],
+    }
+
+
+#: Почему заявка не попала в ленту или была снята с неё: код действия в журнале → подпись.
+HIDDEN_REASONS = {
+    "duplicate_skipped": "Дубль остановлен при приёме — в базу не попал",
+    "duplicate_cancelled": "Дубль проскочил приём, снят фоновой уборкой позже",
+    "duplicate_cancelled_on_edit": "После правки сообщения заявка стала повтором — двойник снят сразу",
+    "cancelled_message_deleted": "Диспетчер удалил сообщение в Telegram",
+    "cancelled_edited_out": "Диспетчер отредактировал сообщение, заявки в нём не осталось",
+    "hidden_by_admin": "Скрыта вручную в админке",
+}
+
+
+async def hidden_breakdown(days: int = 7) -> dict:
+    """Сколько заявок скрыто или отсеяно за период и по каким причинам.
+
+    Каждое такое событие пишется в журнал один раз, поэтому счёт по журналу —
+    это и есть число случаев. Журнал чистится вместе с давно закрытыми заказами,
+    поэтому за очень большие периоды цифры занижены.
+    """
+    since = now_utc_naive() - timedelta(days=max(1, days))
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(ActionLog.action, func.count(ActionLog.id))
+                .where(
+                    ActionLog.created_at >= since,
+                    ActionLog.action.in_([*HIDDEN_REASONS, "order_created"]),
+                )
+                .group_by(ActionLog.action)
+            )
+        ).all()
+    counts = {action: count for action, count in rows}
+    return {
+        "days": days,
+        "created": counts.get("order_created", 0),
+        "reasons": [
+            {"label": label, "count": counts.get(action, 0)} for action, label in HIDDEN_REASONS.items()
+        ],
     }
 
 

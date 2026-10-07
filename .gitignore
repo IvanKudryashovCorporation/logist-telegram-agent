@@ -12,3 +12,7 @@ venv/
 .idea/
 .vscode/
 .claude/
+
+# Пароль шифрования внешних копий базы и список ссылок на закрытые группы — только у владельца
+.offsite_backup_passphrase
+closed_groups_links.txt

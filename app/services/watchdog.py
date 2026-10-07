@@ -10,9 +10,13 @@
 * сайт отвечает 200;
 * агент жив: за последние ``WATCHDOG_AGENT_SILENCE_HOURS`` часов обработано
   хотя бы одно сообщение из групп (иначе сессия слетела или агент завис);
+* каждый Telegram-аккаунт отдельно: из его групп за ``WATCHDOG_ACCOUNT_SILENCE_HOURS``
+  часов пришло хоть что-то (иначе у него слетела сессия, а остальные это маскируют);
+* новые заявки поступают: за ``WATCHDOG_ORDERS_SILENCE_HOURS`` часов создана хотя бы одна;
 * LLM не падает: мало ошибок разбора за час;
 * очередь повторного разбора без «застрявших» сообщений;
 * бэкап базы свежий (младше 26 часов);
+* копия базы вне сервера отправлена за последние 26 часов (если настроена);
 * на диске есть место.
 
 Чтобы не спамить, о неполадке сообщается после двух проверок подряд (деплой с
@@ -35,7 +39,7 @@ from sqlalchemy import func, select
 
 from app.config import settings
 from app.db.base import SessionLocal
-from app.models import ParseOutcome, ParseStat, PendingMessage, PendingStatus
+from app.models import Order, ParseOutcome, ParseStat, PendingMessage, PendingStatus, WorkGroup
 from app.timeutil import now_utc_naive
 
 log = logging.getLogger("app.watchdog")
@@ -108,6 +112,67 @@ async def check_agent_alive(*, now: Optional[datetime] = None) -> Check:
     )
 
 
+async def check_account_activity(*, now: Optional[datetime] = None) -> list[Check]:
+    """Каждый Telegram-аккаунт отдельно: за последние часы из его групп пришло хоть что-то.
+
+    Общая проверка «агент жив» зелёная, пока читает хотя бы один аккаунт. Если у другого
+    слетела сессия (вышли из Telegram, аккаунт заморозили), его группы молча перестают
+    попадать в ленту — это видно только по аккаунту.
+    """
+    now = now or now_utc_naive()
+    hours = settings.watchdog_account_silence_hours
+    async with SessionLocal() as session:
+        groups = (
+            await session.execute(
+                select(WorkGroup.tg_chat_id, WorkGroup.session_name, WorkGroup.created_at).where(
+                    WorkGroup.is_active.is_(True)
+                )
+            )
+        ).all()
+        by_session: dict[str, list] = {}
+        for chat_id, session_name, created_at in groups:
+            by_session.setdefault(session_name or settings.tg_session_name, []).append((chat_id, created_at))
+
+        checks = []
+        for name in sorted(by_session):
+            chat_ids = [chat_id for chat_id, _ in by_session[name]]
+            newest_group = max(created_at for _, created_at in by_session[name])
+            last = (
+                await session.execute(
+                    select(func.max(ParseStat.created_at)).where(ParseStat.chat_id.in_(chat_ids))
+                )
+            ).scalar_one()
+            title = f"аккаунт {name} читает группы"
+            if last is None:
+                # Только что подключённому аккаунту дадим время, чтобы в группах хоть что-то написали.
+                fresh = now - newest_group < timedelta(hours=hours)
+                checks.append(Check(title, fresh, f"из {len(chat_ids)} групп не пришло ни одного сообщения"))
+                continue
+            minutes = int((now - last).total_seconds() // 60)
+            checks.append(
+                Check(
+                    title, now - last < timedelta(hours=hours),
+                    f"последнее сообщение {minutes} мин назад, групп {len(chat_ids)} (порог {hours} ч)",
+                )
+            )
+    return checks
+
+
+async def check_orders_flow(*, now: Optional[datetime] = None) -> Check:
+    """Новые заявки появляются: сообщения идут, а заявок нет — значит, ломается разбор."""
+    now = now or now_utc_naive()
+    hours = settings.watchdog_orders_silence_hours
+    async with SessionLocal() as session:
+        last = (await session.execute(select(func.max(Order.created_at)))).scalar_one()
+    if last is None:
+        return Check("новые заявки", True, "заявок ещё не было")
+    minutes = int((now - last).total_seconds() // 60)
+    return Check(
+        "новые заявки поступают", now - last < timedelta(hours=hours),
+        f"последняя заявка {minutes} мин назад (порог {hours} ч)",
+    )
+
+
 async def check_llm_errors(*, now: Optional[datetime] = None) -> Check:
     now = now or now_utc_naive()
     async with SessionLocal() as session:
@@ -161,13 +226,17 @@ async def run_checks() -> list[Check]:
     checks: list[Check] = []
     checks += await check_services()
     checks.append(await check_site())
-    for factory in (check_agent_alive, check_llm_errors, check_queue):
+    for factory in (check_agent_alive, check_account_activity, check_orders_flow, check_llm_errors, check_queue):
         try:
-            checks.append(await factory())
+            result = await factory()
         except Exception as exc:  # noqa: BLE001 — если база недоступна, это сама по себе тревога
             checks.append(Check("база данных", False, f"запрос не удался: {type(exc).__name__}: {exc}"[:200]))
             break
+        checks += result if isinstance(result, list) else [result]
     checks.append(check_backup())
+    from app.services.offsite_backup import check_offsite_backup  # здесь, иначе круговой импорт
+
+    checks.append(check_offsite_backup())
     checks.append(check_disk())
     return checks
 

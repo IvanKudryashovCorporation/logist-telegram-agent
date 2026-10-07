@@ -88,3 +88,41 @@ def test_tg_id_fallback_has_no_text():
 
 def test_no_account_gives_no_link():
     assert dispatcher_link(_order(dispatcher_username=None, dispatcher_tg_id=None), text="x") is None
+
+
+# --- Диспетчер без @username: ссылка на сообщение в группе ----------------------------------------
+
+
+def test_message_link_of_a_public_group_works_without_membership():
+    order = _order(dispatcher_username=None, source_chat_id=-1001234567890, source_message_id=77)
+
+    assert dispatcher_link(order, group_username="VipTAXIVIKARS") == "https://t.me/VipTAXIVIKARS/77"
+
+
+def test_message_link_of_a_private_group_is_the_member_only_form():
+    order = _order(dispatcher_username=None, source_chat_id=-1001234567890, source_message_id=77)
+
+    assert dispatcher_link(order) == "https://t.me/c/1234567890/77"
+
+
+def test_username_beats_group_link_even_for_public_groups():
+    order = _order(source_chat_id=-1001234567890, source_message_id=77)
+
+    assert dispatcher_link(order, group_username="VipTAXIVIKARS") == "https://t.me/disp"
+
+
+async def test_contact_button_uses_the_public_group_message(client, make_order, session, monkeypatch):
+    from app.models import WorkGroup
+
+    session.add(WorkGroup(tg_chat_id=-1001234567890, title="Публичная", username="VipTAXIVIKARS", watch_only=True))
+    order = await make_order(dispatcher_username=None)
+    order.dispatcher_tg_id = None
+    session.add(order)
+    await session.commit()
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "telegram_login_bot_token", "")  # вход выключен — сайт открыт без регистрации
+
+    response = await client.post(f"/orders/{order.id}/contact")
+
+    assert response.headers["location"] == f"https://t.me/VipTAXIVIKARS/{order.source_message_id}"

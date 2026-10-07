@@ -113,6 +113,21 @@
   {% endif %}
 </div>
 
+<div class="card" id="hidden-reasons">
+  <h2>Скрытые заявки и дубли: почему · {{ hidden.days }} дн.</h2>
+  <p class="muted">
+    Принято заявок: {{ hidden.created }}. Дубли отсеиваются при приёме, ещё до записи в базу;
+    «снят уборкой позже» — только те, что приём не узнал (например, после правки сообщения).
+  </p>
+  <table>
+    <tbody>
+      {% for reason in hidden.reasons %}
+        <tr><td>{{ reason.label }}</td><td class="num">{{ reason.count }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
 <div class="card">
   <h2>Заказы по статусам</h2>
   <table>

@@ -10,14 +10,17 @@
 
 import asyncio
 import logging
+import re
 from typing import Optional
 
 from sqlalchemy import and_, or_, select, update
+from sqlalchemy.orm.attributes import flag_modified
 
 from app import geo
 from app.config import settings
 from app.db.base import SessionLocal
-from app.models import HIDDEN_STATUSES, Order
+from app.models import HIDDEN_STATUSES, ActionLog, ActorType, Order
+from app.search import refresh_derived
 from app.timeutil import now_utc_naive
 
 log = logging.getLogger("app.geocode")
@@ -66,6 +69,45 @@ async def geocode_pending(*, limit: Optional[int] = None) -> int:
     return processed
 
 
+def _corrected_city(raw_city: Optional[str], candidate: Optional[geo.Candidate]) -> Optional[str]:
+    """Город с исправленной опечаткой («Острогоржск (Воронежская обл.)» -> «Острогожск (…)»).
+
+    Меняется только название, всё остальное написанное диспетчером (регион в скобках,
+    приставки «с.», «п.») остаётся как есть. ``None`` — менять нечего."""
+    if not raw_city or candidate is None or not candidate.canonical:
+        return None
+    name, _ = geo.normalize_place(raw_city)
+    pattern = re.compile(re.escape(name), re.IGNORECASE) if name else None
+    if pattern is None or not pattern.search(raw_city):
+        return None
+    fixed = pattern.sub(candidate.canonical, raw_city, count=1)
+    return fixed if fixed != raw_city else None
+
+
+def _drop_unverified_guess(
+    chosen: Optional[geo.Candidate], other: Optional[geo.Candidate]
+) -> Optional[geo.Candidate]:
+    """Название без региона, найденное нечётким поиском, проверяем по другому концу маршрута."""
+    if chosen is None or chosen.verified:
+        return chosen
+    if other is None or geo.haversine_km(chosen.coords, other.coords) > geo.UNVERIFIED_MAX_KM:
+        return None
+    return chosen
+
+
+def _drop_rough_guess(chosen: Optional[geo.Candidate], other: Optional[geo.Candidate]) -> Optional[geo.Candidate]:
+    """Центр области вместо деревни — грубая привязка (до сотни километров и больше).
+
+    Для далёкого маршрута это незаметная погрешность, а для поездки внутри области —
+    ложь: от Москвы до «центра Московской области» нет ни километра. Поэтому такой
+    привязке верим, только когда другой конец маршрута далеко."""
+    if chosen is None or chosen.kind != "region":
+        return chosen
+    if other is None or geo.haversine_km(chosen.coords, other.coords) < geo.REGION_GUESS_MIN_KM:
+        return None
+    return chosen
+
+
 async def _geocode_order(session, order: Order) -> None:
     from_candidates = await geo.resolve(session, order.from_city)
     to_candidates = await geo.resolve(session, order.to_city)
@@ -88,6 +130,37 @@ async def _geocode_order(session, order: Order) -> None:
         near=origin.coords if origin else None, city=order.to_city,
         raw_text=order.raw_text,
     )
+
+    origin, destination = _drop_rough_guess(origin, destination), _drop_rough_guess(destination, origin)
+    origin, destination = (
+        _drop_unverified_guess(origin, destination),
+        _drop_unverified_guess(destination, origin),
+    )
+
+    # Опечатка в названии: пишем город правильно, чтобы он правильно показывался, искался
+    # и склеивался с повторами. refresh_derived заодно пересчитает ключи поиска.
+    fixes = {
+        field: fixed
+        for field, fixed in (
+            ("from_city", _corrected_city(order.from_city, origin)),
+            ("to_city", _corrected_city(order.to_city, destination)),
+        )
+        if fixed
+    }
+    for field, fixed in fixes.items():
+        session.add(
+            ActionLog(
+                order_id=order.id, actor=ActorType.SYSTEM, action="city_corrected",
+                details=f"{getattr(order, field)} -> {fixed}",
+            )
+        )
+        log.info("Заказ #%s: «%s» -> «%s»", order.id, getattr(order, field), fixed)
+        setattr(order, field, fixed)
+    if fixes:
+        refresh_derived(order)
+        # Исправление названия не «освежает» заказ в админке, как и само геокодирование.
+        flag_modified(order, "updated_at")
+        await session.flush()
 
     await session.execute(
         update(Order)

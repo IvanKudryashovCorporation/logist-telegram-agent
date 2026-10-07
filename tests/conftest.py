@@ -57,6 +57,21 @@ from app.timeutil import now_msk_naive, now_utc_naive  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
+def no_extra_geocoders(monkeypatch):
+    """Нечёткий поиск (Photon) и поиск районов/областей по умолчанию ничего не находят.
+
+    Иначе любой тест, где место не нашлось в подменённом Nominatim, пошёл бы в настоящую
+    сеть. Тесты этих шагов подменяют функции сами."""
+    from app import geo
+
+    async def nothing(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(geo, "_photon_search", nothing)
+    monkeypatch.setattr(geo, "_nominatim_area", nothing)
+
+
+@pytest.fixture(autouse=True)
 def reset_in_memory_state():
     """Сброс всего, что живёт в памяти процесса между тестами."""
     from app.parsing.llm_parser import clear_parse_cache

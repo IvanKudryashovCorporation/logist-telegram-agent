@@ -433,3 +433,33 @@ async def test_admin_gives_no_privileges_on_public_pages(client, make_order):
 
     assert page.status_code == 200
     assert "+79990000000" not in page.text
+
+
+async def test_hidden_breakdown_counts_reasons(session):
+    from app.models import ActionLog, ActorType
+    from app.services import reporting
+
+    for action, times in (("duplicate_skipped", 3), ("duplicate_cancelled", 1), ("cancelled_message_deleted", 2),
+                          ("order_created", 5)):
+        for _ in range(times):
+            session.add(ActionLog(actor=ActorType.SYSTEM, action=action))
+    await session.commit()
+
+    stats = await reporting.hidden_breakdown(days=7)
+
+    by_label = {row["label"]: row["count"] for row in stats["reasons"]}
+    assert stats["created"] == 5
+    assert by_label[reporting.HIDDEN_REASONS["duplicate_skipped"]] == 3
+    assert by_label[reporting.HIDDEN_REASONS["duplicate_cancelled"]] == 1
+    assert by_label[reporting.HIDDEN_REASONS["cancelled_message_deleted"]] == 2
+    assert by_label[reporting.HIDDEN_REASONS["hidden_by_admin"]] == 0
+
+
+async def test_dashboard_shows_hidden_reasons(client):
+    await _login(client)
+
+    response = await client.get("/admin")
+
+    assert response.status_code == 200
+    assert "Скрытые заявки и дубли" in response.text
+    assert "Дубль остановлен при приёме" in response.text

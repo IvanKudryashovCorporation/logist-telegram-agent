@@ -369,3 +369,51 @@ async def test_worker_skips_records_that_are_not_pending(session, monkeypatch):
     monkeypatch.setattr(queue_worker, "upsert_order_text", forbidden_upsert)
 
     assert await queue_worker.process_one(FakeClient(), pending.id) is True
+
+
+# --- Группы «без вступления»: клиент не знает группу по номеру ---------------------------------
+
+
+class EntityLessClient:
+    """Клиент, у которого группы нет в кэше: по номеру не находит, по username — да."""
+
+    def __init__(self, message) -> None:
+        self.message = message
+        self.resolved: list[str] = []
+
+    async def get_messages(self, target, ids=None):
+        if isinstance(target, int):
+            raise ValueError("Could not find the input entity for PeerChannel(channel_id=123)")
+        return self.message
+
+    async def get_entity(self, username):
+        self.resolved.append(username)
+        return SimpleNamespace(id=123, username=username)
+
+
+async def test_watch_only_group_is_found_by_username_when_the_client_does_not_know_it(session, monkeypatch):
+    from app.models import WorkGroup
+
+    session.add(WorkGroup(tg_chat_id=CHAT_ID, title="Публичная", username="public_dispatch", watch_only=True))
+    await session.commit()
+    pending = await _ready(session, 9100, "Симферополь — Сочи 14000")
+
+    async def fake_upsert(**kwargs):
+        return [7]
+
+    monkeypatch.setattr(queue_worker, "upsert_order_text", fake_upsert)
+    client = EntityLessClient(FakeMessage("Симферополь — Сочи 14000"))
+
+    assert await queue_worker.process_one(client, pending.id) is True
+
+    assert client.resolved == ["public_dispatch"]
+    assert (await _reload_pending(pending.id)).status == PendingStatus.DONE
+
+
+async def test_unknown_group_without_username_still_fails_with_the_real_reason(session):
+    pending = await _ready(session, 9101, "заявка")
+    client = EntityLessClient(FakeMessage("заявка"))
+
+    assert await queue_worker.process_one(client, pending.id) is False
+
+    assert "Could not find the input entity" in (await _reload_pending(pending.id)).last_error
