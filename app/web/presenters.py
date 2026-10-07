@@ -325,35 +325,3 @@ def _phone_pattern(phone: str) -> Optional[re.Pattern[str]]:
         return None
     body = _PHONE_SEPARATORS.join(re.escape(digit) for digit in digits)
     return re.compile(r"\+?" + body)
-
-
-def raw_text_for(order: Order, *, is_owner: bool) -> str:
-    """Исходное сообщение диспетчера с вымаранными контактами клиента.
-
-    Карточка показывает оригинал заявки — по нему водитель понимает контекст
-    (что именно написал диспетчер). Но вместе с телефоном и именем это сводило
-    на нет маскирование: любой посетитель сайта видел полные персональные
-    данные прямо в тексте. Поэтому посторонним оригинал отдаётся с заменой
-    номера на маску и имени — на инициал.
-    """
-    text = order.raw_text or ""
-    if is_owner or not settings.mask_client_contacts:
-        return text
-
-    if order.client_phone:
-        pattern = _phone_pattern(order.client_phone)
-        if pattern is not None:
-            text = pattern.sub(mask_phone(order.client_phone), text)
-
-    if order.client_name:
-        initial = client_name_for(order, is_owner=False).rstrip(".")
-        if initial:
-            name = order.client_name.strip()
-            # Сначала полное имя, затем первое слово: иначе после замены
-            # «Иван Петров» → «И.» в тексте остался бы «Петров».
-            for variant in dict.fromkeys([name, name.split()[0]]):
-                if len(variant) >= 2:
-                    text = re.sub(
-                        rf"\b{re.escape(variant)}\b", initial, text, flags=re.IGNORECASE
-                    )
-    return text

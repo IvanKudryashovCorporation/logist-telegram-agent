@@ -105,10 +105,6 @@ class Notifier:
         """Успешный разбор сбрасывает счётчик подряд идущих ошибок."""
         self._consecutive_errors = 0
 
-    @property
-    def consecutive_errors(self) -> int:
-        return self._consecutive_errors
-
     def stats(self) -> dict[str, int]:
         return {
             "sent": self._sent_total,

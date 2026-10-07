@@ -43,9 +43,5 @@ class ParseStat(Base, TimestampMixin):
     attempts: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     error: Mapped[Optional[str]] = mapped_column(Text)
 
-    @property
-    def total_tokens(self) -> int:
-        return (self.prompt_tokens or 0) + (self.completion_tokens or 0)
-
     def __repr__(self) -> str:
         return f"<ParseStat {self.outcome.value} orders={self.orders_found}>"

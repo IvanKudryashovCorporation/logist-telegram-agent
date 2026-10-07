@@ -80,15 +80,6 @@ class Filters:
     # --- разбор сырых query-параметров --------------------------------------
 
     @staticmethod
-    def _parse_int(value) -> Optional[int]:
-        try:
-            parsed = int(str(value).strip())
-        except (TypeError, ValueError):
-            return None
-        # Отрицательное/нулевое число пассажиров смысла не имеет.
-        return parsed if parsed > 0 else None
-
-    @staticmethod
     def _parse_date(value) -> Optional[date]:
         raw = str(value).strip()
         try:

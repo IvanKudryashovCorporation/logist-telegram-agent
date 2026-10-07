@@ -16,7 +16,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.models import Driver
-from app.web.telegram_login import parse_telegram_id, verify_telegram_login
+from app.web.telegram_login import verify_telegram_login
 
 BOT_TOKEN = "123456:test-bot-token"
 
@@ -54,7 +54,6 @@ async def test_login_page_explains_how_to_use_another_account(client, monkeypatc
 def test_valid_signature_is_accepted():
     params = _signed_params()
     assert verify_telegram_login(params, BOT_TOKEN) is True
-    assert parse_telegram_id(params) == 555000111
 
 
 def test_tampered_field_is_rejected():

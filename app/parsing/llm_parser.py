@@ -6,8 +6,8 @@
 структурой без дополнительного парсинга ответа.
 
 Одно сообщение может содержать несколько заявок сразу — LLM возвращает
-МАССИВ, поэтому parse_order_texts всегда отдаёт list[ParsedOrder] (пустой
-список — сообщение не заявка).
+МАССИВ, поэтому parse_orders всегда отдаёт ParseResult со списком заявок
+(пустой список — сообщение не заявка).
 
 Надёжность. Раньше один таймаут или 429 от провайдера означали, что заявка
 терялась НАВСЕГДА: Telethon не переигрывает уже доставленное событие, а
@@ -127,10 +127,6 @@ class ParseResult:
     attempts: int = 1
     from_cache: bool = False
     text_hash: str = ""
-
-    @property
-    def total_tokens(self) -> int:
-        return (self.prompt_tokens or 0) + (self.completion_tokens or 0)
 
 
 def text_hash(text: str) -> str:
@@ -302,15 +298,3 @@ async def parse_orders(text: str) -> ParseResult:
     log.error("LLM недоступна после %s попыток: %s", max_attempts, detail)
     raise ParseUnavailable(detail)
 
-
-async def parse_order_texts(text: str) -> list[ParsedOrder]:
-    """Совместимая обёртка: только список заявок.
-
-    Бросает ParseUnavailable, если разбор не удался. Молча вернуть пустой
-    список здесь нельзя: сбой провайдера выглядел бы как «сообщение не заявка»
-    и заявка потерялась бы навсегда.
-    """
-    return (await parse_orders(text)).orders
-
-    """Сброс кэша (нужен в тестах и после смены модели/промпта)."""
-    _cache.clear()

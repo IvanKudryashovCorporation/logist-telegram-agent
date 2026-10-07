@@ -135,7 +135,3 @@ def prefilter(text: str | None) -> PrefilterDecision:
 
     return PrefilterDecision(False, "no_signal")
 
-
-def should_parse(text: str | None) -> bool:
-    """Короткая форма :func:`prefilter` для вызывающего кода."""
-    return prefilter(text).send_to_llm

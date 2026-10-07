@@ -14,7 +14,6 @@ from app.parsing.prefilter import (
     mentions_known_city,
     normalize,
     prefilter,
-    should_parse,
 )
 
 CHATTER = [
@@ -106,11 +105,6 @@ def test_pure_number_is_rejected():
 
     assert decision.send_to_llm is False
     assert decision.reason == "no_letters"
-
-
-def test_should_parse_mirrors_prefilter():
-    for text in CHATTER + ORDERS:
-        assert should_parse(text) == prefilter(text).send_to_llm
 
 
 def test_decision_is_truthy_when_sending():

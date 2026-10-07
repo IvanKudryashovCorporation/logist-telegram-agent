@@ -49,10 +49,3 @@ def verify_telegram_login(params: Mapping[str, str], bot_token: str, *, now: Opt
     current = now if now is not None else int(time.time())
     return current - auth_date <= MAX_AUTH_AGE_SECONDS
 
-
-def parse_telegram_id(params: Mapping[str, str]) -> Optional[int]:
-    """id пользователя из уже ПРОВЕРЕННЫХ данных виджета."""
-    try:
-        return int(params["id"])
-    except (KeyError, ValueError):
-        return None

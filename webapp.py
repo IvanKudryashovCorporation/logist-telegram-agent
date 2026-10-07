@@ -27,14 +27,14 @@ def run() -> None:
     log.info("Веб-панель: http://%s:%s", settings.web_host, settings.web_port)
     log.info(
         "Админка /admin: %s · rate limit: %s · маскирование контактов: %s",
-        "включена" if settings.admin_enabled else "ВЫКЛЮЧЕНА (ADMIN_PASSWORD пуст)",
+        "включена" if settings.admin_enabled else "ВЫКЛЮЧЕНА (нет ADMIN_TELEGRAM_IDS или входа через Telegram)",
         "включён" if settings.rate_limit_enabled else "выключен",
         "включено" if settings.mask_client_contacts else "ВЫКЛЮЧЕНО",
     )
     if settings.web_host == "0.0.0.0" and not settings.admin_enabled:
         # Типичная ошибка при выкладке на VPS: сайт торчит наружу, а админка
         # отключена — владелец даже не может посмотреть статистику разбора.
-        log.warning("WEB_HOST=0.0.0.0: сайт доступен из интернета. Проверьте файрвол и ADMIN_PASSWORD.")
+        log.warning("WEB_HOST=0.0.0.0: сайт доступен из интернета. Проверьте файрвол и ADMIN_TELEGRAM_IDS.")
 
     uvicorn.run(
         "app.web.server:app",

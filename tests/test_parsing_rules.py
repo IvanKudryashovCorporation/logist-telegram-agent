@@ -446,11 +446,10 @@ def test_absurd_price_that_cannot_be_fixed_becomes_unknown():
     assert ParsedOrder(client_price="4500500.5").client_price is None
 
 
-def test_fixed_price_is_used_for_completeness():
+def test_fixed_price_is_normalized():
     order = ParsedOrder(from_city="Москва", to_city="Тула", client_price="4000000")
 
     assert order.client_price == Decimal(4000)
-    assert order.is_complete
 
 
 def test_migration_rule_matches_the_parser_rule():

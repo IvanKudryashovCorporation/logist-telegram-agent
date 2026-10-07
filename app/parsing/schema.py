@@ -168,8 +168,3 @@ class ParsedOrder(BaseModel):
     def _price_in_thousands(cls, value: Optional[Decimal]) -> Optional[Decimal]:
         """Страховка поверх промпта: «25+платка» -> 25000, «4000 тыс» -> 4000."""
         return normalize_price(value)
-
-    @property
-    def is_complete(self) -> bool:
-        core = (self.from_city, self.to_city, self.client_price)
-        return all(core) and not self.missing_fields
