@@ -9,6 +9,7 @@
 """
 
 from collections import Counter
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
 from sqlalchemy import func, select
@@ -18,8 +19,11 @@ from app.db.base import SessionLocal
 from app.models import (
     ORDER_STATUS_LABELS,
     ActionLog,
+    ActorType,
+    Driver,
     Order,
     OrderStatus,
+    OrderSubscription,
     ParseOutcome,
     ParseStat,
     PendingMessage,
@@ -206,6 +210,162 @@ async def hidden_breakdown(days: int = 7) -> dict:
         "reasons": [
             {"label": label, "count": counts.get(action, 0)} for action, label in HIDDEN_REASONS.items()
         ],
+    }
+
+
+# --- Пользователи ------------------------------------------------------------------------
+
+
+def _msk(moment: datetime | None) -> datetime | None:
+    """UTC из базы -> время по Москве для показа в админке."""
+    return moment + MSK_OFFSET if moment else None
+
+
+@dataclass
+class UserStats:
+    taken: int = 0
+    active: int = 0
+    completed: int = 0
+    earned: float = 0.0
+    complaints: int = 0
+
+
+def _stats_by_token(rows) -> dict[str, UserStats]:
+    """Считает по взятым заказам; в Python, а не в SQL: ``case()`` с enum даёт в разных базах разное."""
+    result: dict[str, UserStats] = {}
+    for token, status, price, has_problem in rows:
+        stats = result.setdefault(token, UserStats())
+        stats.taken += 1
+        if status in (OrderStatus.AGREED, OrderStatus.IN_PROGRESS):
+            stats.active += 1
+        if status == OrderStatus.COMPLETED:
+            stats.completed += 1
+            stats.earned += float(price or 0)
+        if has_problem:
+            stats.complaints += 1
+    return result
+
+
+USER_SORTS = {
+    "login": "по последнему входу",
+    "registered": "по дате регистрации",
+    "taken": "по числу взятых заказов",
+    "earned": "по сумме выполненных",
+}
+
+
+async def users_overview(*, q: str = "", sort: str = "login", limit: int = 200) -> dict:
+    """Все зарегистрированные пользователи (вошедшие через Telegram) с короткой статистикой."""
+    now = now_utc_naive()
+    week = now - timedelta(days=7)
+    async with SessionLocal() as session:
+        drivers = list((await session.execute(select(Driver))).scalars().all())
+        rows = (
+            await session.execute(
+                select(Order.taken_by_token, Order.status, Order.client_price, Order.has_problem).where(
+                    Order.taken_by_token.like("tg:%")
+                )
+            )
+        ).all()
+        subs = {
+            sub.telegram_id: sub
+            for sub in (await session.execute(select(OrderSubscription))).scalars().all()
+        }
+
+    stats = _stats_by_token(rows)
+    needle = q.strip().lower().lstrip("@")
+    users = []
+    for driver in drivers:
+        name = " ".join(part for part in (driver.first_name, driver.last_name) if part)
+        if needle and needle not in f"{name} {driver.username or ''} {driver.telegram_id}".lower():
+            continue
+        sub = subs.get(driver.telegram_id)
+        users.append(
+            {
+                "driver": driver,
+                "name": name or "—",
+                "stats": stats.get(driver.token, UserStats()),
+                "subscription": sub,
+                "registered": _msk(driver.created_at),
+                "last_login": _msk(driver.last_login_at),
+                "is_new": driver.created_at >= week,
+            }
+        )
+
+    sorters = {
+        "login": lambda u: u["driver"].last_login_at or datetime.min,
+        "registered": lambda u: u["driver"].created_at,
+        "taken": lambda u: u["stats"].taken,
+        "earned": lambda u: u["stats"].earned,
+    }
+    users.sort(key=sorters.get(sort, sorters["login"]), reverse=True)
+
+    return {
+        "users": users[:limit],
+        "shown": min(len(users), limit),
+        "found": len(users),
+        "summary": {
+            "total": len(drivers),
+            "new_week": sum(1 for d in drivers if d.created_at >= week),
+            "active_week": sum(1 for d in drivers if d.last_login_at and d.last_login_at >= week),
+            "took_orders": sum(1 for d in drivers if stats.get(d.token, UserStats()).taken),
+            "with_notifications": sum(1 for s in subs.values() if s.is_active),
+        },
+    }
+
+
+async def user_detail(telegram_id: int, *, orders_limit: int = 50, actions_limit: int = 30) -> dict | None:
+    """Всё о пользователе: профиль, статистика, подписка, его заказы и история действий."""
+    async with SessionLocal() as session:
+        driver = (
+            await session.execute(select(Driver).where(Driver.telegram_id == telegram_id))
+        ).scalar_one_or_none()
+        if driver is None:
+            return None
+        token = driver.token
+        orders = list(
+            (
+                await session.execute(
+                    select(Order)
+                    .where(Order.taken_by_token == token)
+                    .order_by(Order.taken_at.desc().nullslast(), Order.id.desc())
+                )
+            ).scalars().all()
+        )
+        sub = (
+            await session.execute(select(OrderSubscription).where(OrderSubscription.telegram_id == telegram_id))
+        ).scalar_one_or_none()
+        actions = []
+        if orders:
+            actions = list(
+                (
+                    await session.execute(
+                        select(ActionLog)
+                        .where(
+                            ActionLog.order_id.in_([o.id for o in orders]),
+                            ActionLog.actor == ActorType.DRIVER,
+                        )
+                        .order_by(ActionLog.id.desc())
+                        .limit(actions_limit)
+                    )
+                ).scalars().all()
+            )
+
+    stats = _stats_by_token(
+        [(token, o.status, o.client_price, o.has_problem) for o in orders]
+    ).get(token, UserStats())
+    return {
+        "driver": driver,
+        "name": " ".join(part for part in (driver.first_name, driver.last_name) if part) or "—",
+        "stats": stats,
+        "subscription": sub,
+        "registered": _msk(driver.created_at),
+        "last_login": _msk(driver.last_login_at),
+        "orders": orders[:orders_limit],
+        "orders_total": len(orders),
+        "taken_at": {o.id: _msk(o.taken_at) for o in orders[:orders_limit]},
+        "actions": [(_msk(a.created_at), a.order_id, a.action, a.details or "") for a in actions],
+        "active_orders": [o for o in orders if o.status in (OrderStatus.AGREED, OrderStatus.IN_PROGRESS)],
     }
 
 

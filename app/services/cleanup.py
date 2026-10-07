@@ -34,6 +34,7 @@ from app.models import (
     ParseStat,
     SubscriptionNotification,
 )
+from app.parsing.order_builder import FAR_FUTURE, correct_far_year
 from app.services.dedupe import cancel_duplicate_orders
 from app.timeutil import now_msk_naive, now_utc_naive
 
@@ -99,6 +100,26 @@ async def expire_stale_orders(
                 )
             ).scalars().all()
         )
+        # Страховка: дата подачи может быть разобрана неверно (год, день/месяц) и уехать в
+        # будущее — такая заявка иначе висела бы в ленте до этой самой даты.
+        max_days = settings.order_max_live_days
+        if max_days and max_days > 0:
+            age_cutoff = now_utc_naive() - timedelta(days=max_days)
+            stale_ids += list(
+                (
+                    await session.execute(
+                        select(Order.id)
+                        .where(
+                            Order.status.in_(OPEN_STATUSES),
+                            Order.created_at < age_cutoff,
+                            Order.taken_by_token.is_(None),
+                            Order.id.notin_(stale_ids or [0]),
+                        )
+                        .order_by(Order.id.asc())
+                        .limit(_EXPIRE_BATCH)
+                    )
+                ).scalars().all()
+            )
         if not stale_ids:
             return 0
 
@@ -121,6 +142,43 @@ async def expire_stale_orders(
 
     log.info("Протухших заявок переведено в EXPIRED: %s", len(stale_ids))
     return len(stale_ids)
+
+
+async def fix_far_future_dates(*, now: Optional[object] = None) -> int:
+    """Возвращает на место даты подачи, у которых модель сдвинула год вперёд («28.09.2027»).
+
+    Для живых заявок, подача которых дальше :data:`FAR_FUTURE`: если тот же день в этом году
+    рядом с моментом публикации заявки, она получает эту дату и дальше протухает обычным
+    порядком. Сравниваем именно с публикацией, а не с «сейчас»: заявка могла висеть днями."""
+    reference = now if now is not None else now_msk_naive()
+    fixed = 0
+    async with SessionLocal() as session:
+        orders = (
+            await session.execute(
+                select(Order).where(
+                    Order.status.in_(OPEN_STATUSES),
+                    Order.taken_by_token.is_(None),
+                    Order.pickup_at > reference + FAR_FUTURE,
+                )
+            )
+        ).scalars().all()
+        for order in orders:
+            published_msk = order.created_at + timedelta(hours=3)  # created_at — UTC, подача — по МСК
+            corrected = correct_far_year(order.pickup_at, now=published_msk)
+            if corrected == order.pickup_at:
+                continue
+            session.add(
+                ActionLog(
+                    order_id=order.id, actor=ActorType.SYSTEM, action="pickup_year_corrected",
+                    details=f"{order.pickup_at:%Y-%m-%d %H:%M} -> {corrected:%Y-%m-%d %H:%M}",
+                )
+            )
+            order.pickup_at = corrected
+            fixed += 1
+        if fixed:
+            await session.commit()
+            log.info("Исправлен год подачи у заявок: %s", fixed)
+    return fixed
 
 
 async def advance_agreed_orders(
@@ -279,6 +337,7 @@ async def prune_old_stats(*, retention_days: Optional[int] = None) -> int:
 
 async def cleanup_once() -> dict[str, int]:
     """Один проход обслуживания — его же вызывает scripts/cleanup_orders.py."""
+    corrected = await fix_far_future_dates()
     expired = await expire_stale_orders()
     started, completed = await advance_agreed_orders()
     purged = await purge_old_orders()
@@ -286,6 +345,7 @@ async def cleanup_once() -> dict[str, int]:
     pruned = await prune_old_stats()
     duplicates = await cancel_duplicate_orders()
     return {
+        "dates_corrected": corrected,
         "expired": expired,
         "work_started": started,
         "auto_completed": completed,

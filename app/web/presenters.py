@@ -85,7 +85,8 @@ def dispatcher_link(
     числовому id такого параметра нет — для неё текст не добавляется.
 
     ``group_username`` — публичное имя группы заявки: ссылка на сообщение в ней открывается
-    у любого, а в закрытую группу (``t.me/c/…``) Telegram пускает только участников.
+    у любого, а в закрытую группу (``t.me/c/…``) Telegram пускает только участников — поэтому
+    для закрытой группы с известным автором главной служит ссылка по номеру его аккаунта.
     """
     username = order.contact_username or order.dispatcher_username
     if username:
@@ -94,7 +95,12 @@ def dispatcher_link(
     # Без @username: ссылка на само сообщение в группе — обычная https, она открывается
     # в приложении Telegram даже из мобильного браузера (в отличие от tg://, который
     # браузеры блокируют при перенаправлении с сайта). Из сообщения чат с автором в один тап.
-    return message_link(order, group_username) or direct_chat_link(order)
+    if group_username:
+        # Публичная группа: сообщение открывается у любого, а оттуда — чат с автором.
+        return message_link(order, group_username) or direct_chat_link(order)
+    # Закрытая: ссылка на сообщение пускает только участников группы, а водитель в ней, как
+    # правило, не состоит — ссылка по номеру аккаунта хотя бы иногда открывает чат.
+    return direct_chat_link(order) or message_link(order)
 
 
 def message_link(order: Order, group_username: Optional[str] = None) -> Optional[str]:

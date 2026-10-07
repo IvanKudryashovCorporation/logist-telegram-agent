@@ -171,14 +171,14 @@ async def test_cleanup_once_reports_both_counters(session, make_order):
     result = await cleanup_once()
 
     assert result == {
-        "expired": 1, "work_started": 0, "auto_completed": 0, "orders_purged": 0,
+        "dates_corrected": 0, "expired": 1, "work_started": 0, "auto_completed": 0, "orders_purged": 0,
         "notifications_pruned": 0, "stats_pruned": 1, "duplicates_cancelled": 0,
     }
 
 
 async def test_cleanup_on_empty_database_is_quiet(session):
     assert await cleanup_once() == {
-        "expired": 0, "work_started": 0, "auto_completed": 0, "orders_purged": 0,
+        "dates_corrected": 0, "expired": 0, "work_started": 0, "auto_completed": 0, "orders_purged": 0,
         "notifications_pruned": 0, "stats_pruned": 0, "duplicates_cancelled": 0,
     }
 
@@ -451,3 +451,111 @@ async def test_feed_hides_an_asap_order_as_soon_as_its_12_hours_pass(session, ma
 
     assert [o.id for o in page.items] == [fresh.id]
     assert old.id not in [o.id for o in page.items]
+
+
+# --- Дата подачи уехала в будущее: заказ №392 («28.09.2027» вместо 2026) --------------------------------
+
+
+def test_next_year_for_a_date_without_year_is_corrected():
+    from datetime import datetime
+
+    from app.parsing.order_builder import correct_far_year
+
+    now = datetime(2026, 9, 28, 15, 22)
+
+    assert correct_far_year(datetime(2027, 9, 28, 16, 0), now=now) == datetime(2026, 9, 28, 16, 0)
+
+
+def test_far_dates_that_cannot_be_a_year_slip_are_left_alone():
+    from datetime import datetime
+
+    from app.parsing.order_builder import correct_far_year
+
+    now = datetime(2026, 10, 7, 12, 0)
+
+    assert correct_far_year(datetime(2027, 1, 9, 5, 0), now=now) == datetime(2027, 1, 9, 5, 0)  # праздники
+    assert correct_far_year(datetime(2026, 10, 20, 5, 0), now=now) == datetime(2026, 10, 20, 5, 0)  # близко
+    assert correct_far_year(None, now=now) is None
+
+
+def test_parser_applies_the_year_guard(monkeypatch):
+    from datetime import datetime
+
+    from app.parsing.order_builder import resolve_pickup_at
+
+    now = datetime(2026, 9, 28, 15, 22)
+
+    assert resolve_pickup_at("2027-09-28", "16:00", now=now) == datetime(2026, 9, 28, 16, 0)
+    assert resolve_pickup_at("2026-09-29", "16:00", now=now) == datetime(2026, 9, 29, 16, 0)
+
+
+async def test_cleanup_repairs_an_order_stuck_in_the_future_and_then_expires_it(session, make_order):
+    from app.services.cleanup import fix_far_future_dates
+
+    now = now_msk_naive()
+    # Как заказ №392: опубликован 9 дней назад, подача в тот же день, но модель поставила следующий год.
+    published = now_utc_naive() - timedelta(days=9)
+    stuck = await make_order(pickup_at=(published + timedelta(hours=4)).replace(year=published.year + 1))
+    stuck.created_at = published
+    session.add(stuck)
+    await session.commit()
+
+    assert await fix_far_future_dates(now=now) == 1
+    assert (await _reload(session, stuck.id)).pickup_at < now  # год возвращён
+    assert await expire_stale_orders() == 1
+    assert (await _reload(session, stuck.id)).status == OrderStatus.EXPIRED
+    log = (await session.execute(select(ActionLog).where(ActionLog.action == "pickup_year_corrected"))).scalar_one()
+    assert str(now.year + 1) in log.details
+
+
+async def test_cleanup_leaves_a_taken_order_and_a_normal_future_order_alone(session, make_order):
+    from app.services.cleanup import fix_far_future_dates
+
+    now = now_msk_naive()
+    far_taken = await make_order(pickup_at=now + timedelta(days=60), taken_by_token="driver-1")
+    normal = await make_order(pickup_at=now + timedelta(days=2))
+
+    assert await fix_far_future_dates(now=now) == 0
+    assert (await _reload(session, far_taken.id)).pickup_at == far_taken.pickup_at
+    assert (await _reload(session, normal.id)).pickup_at == normal.pickup_at
+
+
+async def test_age_cap_expires_an_open_order_whatever_its_pickup_date(session, make_order):
+    """Страховка: дата подачи разобрана неверно и далеко в будущем — заявка всё равно не вечна."""
+    far = await make_order(pickup_at=now_msk_naive() + timedelta(days=200))
+    far.created_at = now_utc_naive() - timedelta(days=15)
+    taken = await make_order(pickup_at=now_msk_naive() + timedelta(days=200), taken_by_token="driver-1")
+    taken.created_at = now_utc_naive() - timedelta(days=15)
+    young = await make_order(pickup_at=now_msk_naive() + timedelta(days=200))
+    young.created_at = now_utc_naive() - timedelta(days=3)
+    for order in (far, taken, young):
+        session.add(order)
+    await session.commit()
+
+    assert await expire_stale_orders() == 1
+
+    assert (await _reload(session, far.id)).status == OrderStatus.EXPIRED
+    assert (await _reload(session, taken.id)).status == OrderStatus.NEW  # взятые не трогаем
+    assert (await _reload(session, young.id)).status == OrderStatus.NEW
+
+
+async def test_age_cap_can_be_switched_off(session, make_order, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "order_max_live_days", 0)
+    old = await make_order(pickup_at=now_msk_naive() + timedelta(days=200))
+    old.created_at = now_utc_naive() - timedelta(days=40)
+    session.add(old)
+    await session.commit()
+
+    assert await expire_stale_orders() == 0
+
+
+def test_llm_gets_todays_date_in_moscow_not_in_utc():
+    """С 00:00 до 03:00 МСК в UTC ещё вчера: «сегодня» для модели считается по Москве."""
+    import inspect
+
+    from app.parsing import llm_parser
+
+    source = inspect.getsource(llm_parser)
+    assert "date.today()" not in source and "now_msk_naive().date()" in source

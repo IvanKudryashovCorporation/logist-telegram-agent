@@ -1,0 +1,132 @@
+{% extends "admin_base.html" %}
+{% block title %}{{ u.name }} — пользователи — админка{% endblock %}
+
+{% block content %}
+{% set d = u.driver %}
+{% set st = u.stats %}
+{% set sub = u.subscription %}
+
+<p><a href="/admin/users">← ко всем пользователям</a></p>
+
+<div class="card">
+  <h2>
+    {{ u.name }}
+    {% if d.username %}<span class="muted">@{{ d.username }}</span>{% endif %}
+    {% if is_admin_user %}<span class="tag info">админ</span>{% endif %}
+  </h2>
+  <table>
+    <tbody>
+      <tr><th>Telegram id</th><td class="mono">{{ d.telegram_id }}</td></tr>
+      <tr><th>Зарегистрирован</th><td>{{ u.registered.strftime('%d.%m.%Y %H:%M') if u.registered else '—' }} <span class="muted">(МСК)</span></td></tr>
+      <tr><th>Последний вход</th><td>{{ u.last_login.strftime('%d.%m.%Y %H:%M') if u.last_login else '—' }} <span class="muted">(МСК)</span></td></tr>
+      <tr>
+        <th>Уведомления</th>
+        <td>
+          {% if not sub %}не подписан{% elif sub.is_active %}<span class="tag ok">включены</span>{% else %}<span class="tag warn">выключены</span>{% endif %}
+          {% if sub and sub.error %}<span class="error-text">{{ sub.error }}</span>{% endif %}
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="btn-row">
+    {% if d.username %}
+      <a class="btn" href="https://t.me/{{ d.username }}" target="_blank" rel="noopener">Написать в Telegram</a>
+    {% else %}
+      <a class="btn" href="tg://user?id={{ d.telegram_id }}" title="Откроется, только если этот человек есть у вас в Telegram">Открыть чат по id</a>
+    {% endif %}
+    {% if sub %}
+      <form method="post" action="/admin/users/{{ d.telegram_id }}/subscription/{{ 'off' if sub.is_active else 'on' }}" style="display:inline">
+        <button type="submit" class="btn {{ 'danger' if sub.is_active else '' }}">
+          {{ 'Выключить уведомления' if sub.is_active else 'Включить уведомления' }}
+        </button>
+      </form>
+    {% endif %}
+  </div>
+</div>
+
+<div class="metrics">
+  <div class="metric"><div class="metric-value">{{ st.taken }}</div><div class="metric-label">взял заказов</div></div>
+  <div class="metric {{ 'warn' if st.active else '' }}"><div class="metric-value">{{ st.active }}</div><div class="metric-label">сейчас в работе</div></div>
+  <div class="metric ok"><div class="metric-value">{{ st.completed }}</div><div class="metric-label">выполнено</div></div>
+  <div class="metric"><div class="metric-value">{{ '{:,.0f}'.format(st.earned).replace(',', ' ') }} ₽</div><div class="metric-label">сумма выполненных</div></div>
+  <div class="metric {{ 'bad' if st.complaints else '' }}"><div class="metric-value">{{ st.complaints }}</div><div class="metric-label">жалоб на его заказы</div></div>
+</div>
+
+{% if sub %}
+  <div class="card">
+    <h2>Фильтр уведомлений</h2>
+    {% if subscription_lines %}
+      <ul>{% for line in subscription_lines %}<li>{{ line }}</li>{% endfor %}</ul>
+    {% else %}
+      <p class="muted">Параметры не заданы.</p>
+    {% endif %}
+    <p class="muted">
+      Подписка создана {{ sub.created_at.strftime('%d.%m.%Y') }}{% if sub.last_notified_at %},
+      последнее уведомление {{ sub.last_notified_at.strftime('%d.%m %H:%M') }} UTC{% else %}, уведомлений ещё не было{% endif %}.
+    </p>
+  </div>
+{% endif %}
+
+<div class="card">
+  <h2>Заказы пользователя{% if u.orders_total %} ({{ u.orders_total }}){% endif %}</h2>
+  {% if u.orders %}
+    <table>
+      <thead>
+        <tr><th>Заказ</th><th>Маршрут</th><th>Подача</th><th class="num">Цена</th><th>Статус</th><th>Взят</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for order in u.orders %}
+          <tr>
+            <td class="num mono"><a href="/orders/{{ order.id }}" target="_blank" rel="noopener">#{{ order.id }}</a></td>
+            <td>{{ order.from_city or '?' }} → {{ order.to_city or '?' }}</td>
+            <td class="nowrap">{{ order.pickup_at.strftime('%d.%m %H:%M') if order.pickup_at else 'ближайшее' }}</td>
+            <td class="num">{{ "%.0f"|format(order.client_price) ~ ' ₽' if order.client_price else '—' }}</td>
+            <td class="nowrap">
+              <span class="tag {{ 'ok' if order.status.value in ('agreed', 'completed') else ('bad' if order.status.value == 'cancelled' else '') }}">{{ status_labels[order.status] }}</span>
+              {% if order.has_problem %}<span class="tag bad" title="{{ order.problem_note or '' }}">жалоба</span>{% endif %}
+            </td>
+            <td class="nowrap muted">{% set t = u.taken_at[order.id] %}{{ t.strftime('%d.%m %H:%M') if t else '—' }}</td>
+            <td class="nowrap">
+              {% if order.status.value in ('agreed', 'in_progress') %}
+                <form method="post" action="/admin/users/{{ d.telegram_id }}/release/{{ order.id }}" style="display:inline"
+                      onsubmit="return confirm('Снять заказ #{{ order.id }} с водителя? Он вернётся в ленту.')">
+                  <button type="submit" class="btn danger">Снять с водителя</button>
+                </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% if order.has_problem and order.problem_note %}
+            <tr><td></td><td colspan="6" class="error-text pre-wrap">Жалоба: {{ order.problem_note }}</td></tr>
+          {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if u.orders_total > u.orders | length %}
+      <p class="muted">Показаны последние {{ u.orders | length }} из {{ u.orders_total }}.</p>
+    {% endif %}
+  {% else %}
+    <div class="empty">Заказов не брал.</div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>История действий</h2>
+  {% if u.actions %}
+    <table>
+      <thead><tr><th>Когда (МСК)</th><th>Заказ</th><th>Действие</th></tr></thead>
+      <tbody>
+        {% for when, order_id, action, details in u.actions %}
+          <tr>
+            <td class="nowrap">{{ when.strftime('%d.%m %H:%M') if when else '—' }}</td>
+            <td class="num mono"><a href="/orders/{{ order_id }}" target="_blank" rel="noopener">#{{ order_id }}</a></td>
+            <td>{{ action }}{% if details %} <span class="muted">{{ details }}</span>{% endif %}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">Действий нет.</div>
+  {% endif %}
+</div>
+{% endblock %}

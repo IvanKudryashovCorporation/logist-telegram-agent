@@ -45,6 +45,32 @@ _PAST_TOLERANCE = timedelta(hours=2)
 _TIME_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})")
 
 
+#: Дальше этого срока вперёд подача выглядит подозрительно: диспетчеры публикуют заявки на
+#: ближайшие дни, а модель иногда ставит «следующий год» дате без года («28.09» в день 28.09).
+FAR_FUTURE = timedelta(days=45)
+#: Насколько в прошлое может уйти исправленная дата (заявка о вчерашнем рейсе всё равно протухнет).
+_YEAR_FIX_PAST = timedelta(days=3)
+
+
+def correct_far_year(moment: Optional[datetime], *, now: Optional[datetime] = None) -> Optional[datetime]:
+    """Дата подачи, уехавшая вперёд больше чем на :data:`FAR_FUTURE`: возможно, модель поставила
+    следующий год. Если тот же день и месяц в этом году — рядом с «сейчас», берём его.
+
+    Иначе возвращаем как есть: реальная заявка на новогодние праздники законна, и угадывать нечего."""
+    if moment is None:
+        return None
+    reference = now or now_msk_naive()
+    if moment <= reference + FAR_FUTURE:
+        return moment
+    try:
+        candidate = moment.replace(year=moment.year - 1)
+    except ValueError:  # 29 февраля
+        return moment
+    if reference - _YEAR_FIX_PAST <= candidate <= reference + FAR_FUTURE:
+        return candidate
+    return moment
+
+
 def resolve_pickup_at(
     pickup_date: Optional[str],
     pickup_time: Optional[str],
@@ -57,7 +83,7 @@ def resolve_pickup_at(
     сдвигать день), у нового — ближайшее такое время: сегодня или завтра."""
     explicit = combine_pickup_at(pickup_date, pickup_time)
     if explicit is not None:
-        return explicit
+        return correct_far_year(explicit, now=now)
 
     match = _TIME_RE.match(pickup_time or "")
     if match is None:

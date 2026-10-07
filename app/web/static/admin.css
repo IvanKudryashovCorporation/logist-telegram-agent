@@ -109,6 +109,11 @@ tbody tr:hover { background: #f8fafc; }
 .bar-cell { width: 55%; }
 .bar { height: 12px; min-width: 1px; border-radius: 6px; background: var(--accent); }
 
+table.clickable tbody tr { cursor: pointer; }
+table.clickable tbody tr:hover { background: #eef2ff; }
+
+.btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+
 .two-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 
 .tag {

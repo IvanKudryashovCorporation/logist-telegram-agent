@@ -100,9 +100,18 @@ def test_message_link_of_a_public_group_works_without_membership():
 
 
 def test_message_link_of_a_private_group_is_the_member_only_form():
-    order = _order(dispatcher_username=None, source_chat_id=-1001234567890, source_message_id=77)
+    """Автор скрыт (нет номера аккаунта): остаётся только ссылка на сообщение, для участников."""
+    order = _order(
+        dispatcher_username=None, dispatcher_tg_id=None, source_chat_id=-1001234567890, source_message_id=77
+    )
 
     assert dispatcher_link(order) == "https://t.me/c/1234567890/77"
+
+
+def test_private_group_with_a_known_author_opens_the_chat_by_id():
+    order = _order(dispatcher_username=None, source_chat_id=-1001234567890, source_message_id=77)
+
+    assert dispatcher_link(order) == "tg://user?id=111"
 
 
 def test_username_beats_group_link_even_for_public_groups():

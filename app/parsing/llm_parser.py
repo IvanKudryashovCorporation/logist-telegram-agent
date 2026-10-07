@@ -35,7 +35,6 @@ import random
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from datetime import date
 from typing import Optional
 
 import httpx
@@ -43,6 +42,7 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpe
 
 from app.config import settings
 from app.parsing.schema import PARSE_ORDERS_TOOL_OPENAI, ParsedOrder
+from app.timeutil import now_msk_naive
 
 log = logging.getLogger("agent.parse")
 
@@ -153,7 +153,7 @@ class _ParseCache:
 
     @staticmethod
     def _key(text: str) -> str:
-        return f"{date.today().isoformat()}::{text_hash(text)}"
+        return f"{now_msk_naive().date().isoformat()}::{text_hash(text)}"
 
     def get(self, text: str) -> Optional[ParseResult]:
         if not self._maxsize:
@@ -260,7 +260,8 @@ async def parse_orders(text: str) -> ParseResult:
             text_hash=cached.text_hash,
         )
 
-    today = date.today().isoformat()
+    # Диспетчеры пишут «сегодня» по Москве; с 00:00 до 03:00 МСК на сервере (UTC) ещё вчера.
+    today = now_msk_naive().date().isoformat()
     max_attempts = max(1, settings.llm_max_retries)
     last_error: Optional[BaseException] = None
 

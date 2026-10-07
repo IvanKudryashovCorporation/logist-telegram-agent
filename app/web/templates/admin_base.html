@@ -18,6 +18,11 @@
     <nav class="admin-nav">
       <a href="/admin" class="{{ 'current' if section == 'dashboard' else '' }}">Сводка</a>
       <a href="/admin/orders" class="{{ 'current' if section == 'orders' else '' }}">Заказы</a>
+      <a href="/admin/users" class="{{ 'current' if section == 'users' else '' }}">Пользователи</a>
+      <a href="/admin/clarify" class="{{ 'current' if section == 'clarify' else '' }}">
+        Нужно уточнить
+        {% if clarify_count %}<span class="count">{{ clarify_count }}</span>{% endif %}
+      </a>
       <a href="/admin/queue?status=failed" class="{{ 'current' if section == 'queue' else '' }}">
         Очередь разбора
         {% if counts is defined and counts.failed %}<span class="count">{{ counts.failed }}</span>{% endif %}

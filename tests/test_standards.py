@@ -191,11 +191,22 @@ def test_no_message_link_for_other_chats(chat_id):
     assert presenters.message_link(_order(source_chat_id=chat_id)) is None
 
 
-def test_without_username_the_button_opens_the_message_in_the_group():
-    link = presenters.dispatcher_link(_order(), text="Здравствуйте")
+def test_without_username_in_a_public_group_the_button_opens_the_message():
+    link = presenters.dispatcher_link(_order(), text="Здравствуйте", group_username="pubgroup")
+
+    assert link == "https://t.me/pubgroup/77"
+    assert link.startswith("https://")  # а не tg://, который мобильные браузеры блокируют
+
+
+def test_without_username_in_a_private_group_the_button_opens_the_chat_by_id():
+    """Ссылка на сообщение закрытой группы пускает только участников, а водитель в ней не состоит."""
+    assert presenters.dispatcher_link(_order()) == "tg://user?id=555"
+
+
+def test_hidden_author_in_a_private_group_still_gets_the_message_link():
+    link = presenters.dispatcher_link(_order(dispatcher_tg_id=None))
 
     assert link == "https://t.me/c/1234567890/77"
-    assert link.startswith("https://")  # а не tg://, который мобильные браузеры блокируют
 
 
 def test_username_still_wins_over_the_message_link():
@@ -208,15 +219,34 @@ def test_direct_link_is_the_last_resort():
     assert presenters.dispatcher_link(_order(source_chat_id=None, dispatcher_tg_id=None)) is None
 
 
-async def test_order_page_offers_a_direct_chat_link_without_username(client, make_order, session):
+async def _author_without_username(make_order, session, *, public_group):
+    from app.models import WorkGroup
+
     order = await make_order(dispatcher_username="")
     order.dispatcher_username = None
     order.dispatcher_tg_id = 555
     order.source_chat_id = -1001234567890
+    if public_group:
+        session.add(WorkGroup(tg_chat_id=-1001234567890, title="Публичная", username="pubgroup", watch_only=True))
     await session.commit()
+    return order
+
+
+async def test_public_group_page_offers_the_message_and_a_direct_chat_as_backup(client, make_order, session):
+    order = await _author_without_username(make_order, session, public_group=True)
 
     page = await client.get(f"/orders/{order.id}")
 
     assert "нет публичного @username" in page.text
-    assert 'href="tg://user?id=555"' in page.text
     assert "откроет его сообщение в группе" in page.text
+    assert 'href="tg://user?id=555"' in page.text  # запасной вариант рядом
+    assert "Открыть чат напрямую" in page.text
+
+
+async def test_private_group_page_says_the_button_opens_a_personal_chat(client, make_order, session):
+    order = await _author_without_username(make_order, session, public_group=False)
+
+    page = await client.get(f"/orders/{order.id}")
+
+    assert "откроет личный чат" in page.text
+    assert "Открыть чат напрямую" not in page.text  # он и так главная кнопка

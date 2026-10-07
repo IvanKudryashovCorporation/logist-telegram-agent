@@ -1,0 +1,94 @@
+{% extends "admin_base.html" %}
+{% block title %}Пользователи — админка «Лента заказов»{% endblock %}
+
+{% block content %}
+{% set s = overview.summary %}
+<div class="metrics">
+  <div class="metric">
+    <div class="metric-value">{{ s.total }}</div>
+    <div class="metric-label">зарегистрировано</div>
+  </div>
+  <div class="metric {{ 'ok' if s.new_week else '' }}">
+    <div class="metric-value">{{ s.new_week }}</div>
+    <div class="metric-label">новых за 7 дней</div>
+  </div>
+  <div class="metric">
+    <div class="metric-value">{{ s.active_week }}</div>
+    <div class="metric-label">заходили за 7 дней</div>
+  </div>
+  <div class="metric">
+    <div class="metric-value">{{ s.took_orders }}</div>
+    <div class="metric-label">брали заказы</div>
+  </div>
+  <div class="metric">
+    <div class="metric-value">{{ s.with_notifications }}</div>
+    <div class="metric-label">с уведомлениями</div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Пользователи</h2>
+
+  <form method="get" action="/admin/users" class="filters-inline">
+    <input type="search" name="q" value="{{ q or '' }}" placeholder="Имя, @username или Telegram id">
+    <select name="sort">
+      {% for value, label in sorts.items() %}
+        <option value="{{ value }}" {{ 'selected' if sort == value else '' }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="btn primary">Показать</button>
+    {% if q %}<a class="btn" href="/admin/users">Сбросить</a>{% endif %}
+  </form>
+
+  <p class="muted">
+    Показано {{ overview.shown }}{% if overview.found > overview.shown %} из {{ overview.found }}{% endif %}.
+    Это люди, которые входили на сайт через Telegram. Время — по Москве. Нажмите на строку, чтобы открыть карточку.
+  </p>
+
+  {% if overview.users %}
+    <table class="clickable">
+      <thead>
+        <tr>
+          <th>Пользователь</th>
+          <th>Регистрация</th>
+          <th>Последний вход</th>
+          <th class="num">Взял</th>
+          <th class="num">В работе</th>
+          <th class="num">Выполнено</th>
+          <th class="num">Сумма</th>
+          <th class="num">Жалоб</th>
+          <th>Уведомления</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in overview.users %}
+          {% set d = u.driver %}
+          <tr onclick="location.href='/admin/users/{{ d.telegram_id }}'">
+            <td>
+              <a href="/admin/users/{{ d.telegram_id }}">{{ u.name }}</a>
+              {% if d.username %}<span class="muted">@{{ d.username }}</span>{% endif %}
+              {% if d.telegram_id in admin_ids %}<span class="tag info">админ</span>{% endif %}
+              {% if u.is_new %}<span class="tag ok">новый</span>{% endif %}
+              <br><span class="muted mono">id {{ d.telegram_id }}</span>
+            </td>
+            <td class="nowrap">{{ u.registered.strftime('%d.%m.%Y %H:%M') if u.registered else '—' }}</td>
+            <td class="nowrap">{{ u.last_login.strftime('%d.%m.%Y %H:%M') if u.last_login else '—' }}</td>
+            <td class="num">{{ u.stats.taken }}</td>
+            <td class="num">{{ u.stats.active or '—' }}</td>
+            <td class="num">{{ u.stats.completed }}</td>
+            <td class="num">{{ ('{:,.0f}'.format(u.stats.earned).replace(',', ' ') ~ ' ₽') if u.stats.earned else '—' }}</td>
+            <td class="num {{ 'error-text' if u.stats.complaints else '' }}">{{ u.stats.complaints or '—' }}</td>
+            <td class="nowrap">
+              {% if not u.subscription %}<span class="muted">нет</span>
+              {% elif u.subscription.is_active %}<span class="tag ok">включены</span>
+              {% else %}<span class="tag warn" title="{{ u.subscription.error or '' }}">выключены</span>{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">Никого не найдено.</div>
+  {% endif %}
+</div>
+{% endblock %}

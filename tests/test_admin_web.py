@@ -55,7 +55,7 @@ async def _reload_order(session, order_id: int) -> Order:
 
 # --- Доступ ------------------------------------------------------------------
 
-ADMIN_PATHS = ("/admin", "/admin/", "/admin/orders", "/admin/queue", "/admin/login")
+ADMIN_PATHS = ("/admin", "/admin/", "/admin/orders", "/admin/queue", "/admin/clarify", "/admin/users", "/admin/login")
 
 
 async def test_guest_gets_404_everywhere(client):
@@ -77,7 +77,7 @@ async def test_logged_in_stranger_gets_404(client):
 async def test_owner_gets_dashboard(client):
     await _login(client)
 
-    for path in ("/admin", "/admin/orders", "/admin/queue"):
+    for path in ("/admin", "/admin/orders", "/admin/queue", "/admin/clarify", "/admin/users"):
         assert (await client.get(path)).status_code == 200, path
 
 
@@ -463,3 +463,244 @@ async def test_dashboard_shows_hidden_reasons(client):
     assert response.status_code == 200
     assert "Скрытые заявки и дубли" in response.text
     assert "Дубль остановлен при приёме" in response.text
+
+
+# --- Раздел «Нужно уточнить» -------------------------------------------------------------------------------
+
+
+async def _unclear(session, make_order, *, details=None, **fields):
+    from app.models import ActionLog, ActorType
+
+    order = await make_order(**fields)
+    order.status = OrderStatus.NEEDS_CLARIFICATION
+    session.add(order)
+    if details is not None:
+        session.add(ActionLog(order_id=order.id, actor=ActorType.DISPATCHER, action="order_created", details=details))
+    await session.commit()
+    return order
+
+
+async def test_clarify_page_lists_only_orders_to_clarify_with_the_reason(client, make_order, session):
+    await _login(client)
+    unclear = await _unclear(session, make_order, details="missing_fields=['не указана точная стоимость']")
+    fine = await make_order()
+
+    response = await client.get("/admin/clarify")
+
+    assert response.status_code == 200
+    assert f"/orders/{unclear.id}" in response.text
+    assert f"/orders/{fine.id}" not in response.text
+    assert "не указана точная стоимость" in response.text  # причина, записанная моделью
+    assert "Подтвердить" in response.text and "Скрыть" in response.text
+
+
+async def test_clarify_reason_falls_back_to_the_missing_fields_of_the_order(client, make_order, session):
+    await _login(client)
+    order = await _unclear(session, make_order, price="")
+    order.client_price = None
+    session.add(order)
+    await session.commit()
+
+    response = await client.get("/admin/clarify")
+
+    assert "не указана цена" in response.text
+
+
+async def test_clarify_nav_shows_the_count_on_every_admin_page(client, make_order, session):
+    await _login(client)
+    await _unclear(session, make_order)
+    await _unclear(session, make_order)
+
+    for path in ("/admin", "/admin/orders", "/admin/queue", "/admin/clarify", "/admin/users"):
+        page = await client.get(path)
+        assert 'href="/admin/clarify"' in page.text and '<span class="count">2</span>' in page.text, path
+
+
+async def test_clarify_empty_state(client):
+    await _login(client)
+
+    assert "Заявок, которые нужно уточнить, нет" in (await client.get("/admin/clarify")).text
+
+
+async def test_confirm_removes_the_mark_and_keeps_the_order_in_the_feed(client, make_order, session):
+    await _login(client)
+    order = await _unclear(session, make_order)
+
+    response = await client.post(f"/admin/orders/{order.id}/confirm")
+
+    assert response.status_code == 303
+    assert (await _reload_order(session, order.id)).status == OrderStatus.NEW
+    assert f"/orders/{order.id}" in (await client.get("/")).text
+    assert "Заявок, которые нужно уточнить, нет" in (await client.get("/admin/clarify")).text
+
+
+async def test_confirm_touches_only_orders_that_need_clarification(client, make_order, session):
+    await _login(client)
+    cancelled = await make_order(status=OrderStatus.CANCELLED, pickup_at=now_utc_naive() + timedelta(days=1))
+
+    await client.post(f"/admin/orders/{cancelled.id}/confirm")
+
+    assert (await _reload_order(session, cancelled.id)).status == OrderStatus.CANCELLED
+
+
+async def test_clarify_actions_require_admin(client, make_order, session):
+    order = await _unclear(session, make_order)
+
+    assert (await client.get("/admin/clarify")).status_code == 404
+    assert (await client.post(f"/admin/orders/{order.id}/confirm")).status_code == 404
+    assert (await _reload_order(session, order.id)).status == OrderStatus.NEEDS_CLARIFICATION
+
+
+# --- Раздел «Пользователи» ------------------------------------------------------------------------------------
+
+
+async def _driver(session, telegram_id=900001, **fields):
+    from app.models import Driver
+
+    driver = Driver(
+        telegram_id=telegram_id, username=fields.pop("username", "ivan_driver"),
+        first_name=fields.pop("first_name", "Иван"), last_name=fields.pop("last_name", "Петров"),
+        last_login_at=now_utc_naive() - timedelta(hours=2), **fields,
+    )
+    session.add(driver)
+    await session.commit()
+    return driver
+
+
+async def test_users_page_lists_everyone_with_short_stats(client, make_order, session):
+    await _login(client)
+    driver = await _driver(session)
+    await make_order(status=OrderStatus.COMPLETED, price="10000", taken_by_token=driver.token,
+                     pickup_at=now_utc_naive() - timedelta(days=1))
+    await make_order(status=OrderStatus.AGREED, price="5000", taken_by_token=driver.token)
+    await _driver(session, telegram_id=900002, username=None, first_name="Мария", last_name=None)
+
+    response = await client.get("/admin/users")
+
+    assert response.status_code == 200
+    assert "Иван Петров" in response.text and "@ivan_driver" in response.text and "Мария" in response.text
+    assert "10 000 ₽" in response.text  # сумма выполненных, не «в работе»
+    assert f"/admin/users/{driver.telegram_id}" in response.text
+    assert "зарегистрировано" in response.text
+
+
+async def test_users_summary_counts(client, session):
+    from app.models import Driver
+
+    await _login(client)
+    await _driver(session)
+    old = Driver(telegram_id=900003, first_name="Старый")
+    session.add(old)
+    await session.commit()
+    old.created_at = now_utc_naive() - timedelta(days=60)
+    session.add(old)
+    await session.commit()
+
+    from app.services import reporting
+
+    summary = (await reporting.users_overview())["summary"]
+
+    # Вошедший владелец — тоже пользователь: он + новый водитель + «старый» без входов.
+    assert summary["total"] == 3 and summary["new_week"] == 2 and summary["active_week"] == 2
+
+
+async def test_users_search_and_sort(client, session):
+    await _login(client)
+    await _driver(session, telegram_id=900010, username="alpha", first_name="Анна")
+    await _driver(session, telegram_id=900011, username="beta", first_name="Борис")
+
+    only_beta = await client.get("/admin/users?q=@beta")
+    assert "Борис" in only_beta.text and "Анна" not in only_beta.text
+    by_id = await client.get("/admin/users?q=900010")
+    assert "Анна" in by_id.text and "Борис" not in by_id.text
+    assert (await client.get("/admin/users?sort=мусор")).status_code == 200
+
+
+async def test_user_card_shows_profile_stats_orders_and_history(client, make_order, session):
+    await _login(client)
+    driver = await _driver(session)
+    order = await make_order(status=OrderStatus.AGREED, price="7000", taken_by_token=driver.token)
+    order.has_problem, order.problem_note = True, "диспетчер не отвечает"
+    session.add(order)
+    from app.models import ActionLog, ActorType
+
+    session.add(ActionLog(order_id=order.id, actor=ActorType.DRIVER, action="order_agreed"))
+    await session.commit()
+
+    response = await client.get(f"/admin/users/{driver.telegram_id}")
+
+    assert response.status_code == 200
+    assert "Иван Петров" in response.text and str(driver.telegram_id) in response.text
+    assert f"/orders/{order.id}" in response.text
+    assert "диспетчер не отвечает" in response.text  # жалоба
+    assert "order_agreed" in response.text  # история действий
+    assert "https://t.me/ivan_driver" in response.text  # кнопка «Написать в Telegram»
+    assert "Снять с водителя" in response.text
+
+
+async def test_user_card_without_username_offers_chat_by_id(client, session):
+    await _login(client)
+    driver = await _driver(session, username=None)
+
+    response = await client.get(f"/admin/users/{driver.telegram_id}")
+
+    assert f"tg://user?id={driver.telegram_id}" in response.text
+
+
+async def test_unknown_user_is_404(client):
+    await _login(client)
+
+    assert (await client.get("/admin/users/123456789")).status_code == 404
+
+
+async def test_admin_can_switch_a_users_notifications_off_and_on(client, session):
+    from app.models import OrderSubscription
+
+    await _login(client)
+    driver = await _driver(session)
+    session.add(OrderSubscription(telegram_id=driver.telegram_id, params={"from_city": "Сочи"}, is_active=True,
+                                  since=now_utc_naive()))
+    await session.commit()
+
+    assert (await client.post(f"/admin/users/{driver.telegram_id}/subscription/off")).status_code == 303
+    async with SessionLocal() as fresh:
+        sub = (await fresh.execute(select(OrderSubscription))).scalar_one()
+        assert sub.is_active is False
+    page = await client.get(f"/admin/users/{driver.telegram_id}")
+    assert "Включить уведомления" in page.text and "Откуда: Сочи" in page.text
+
+    await client.post(f"/admin/users/{driver.telegram_id}/subscription/on")
+    async with SessionLocal() as fresh:
+        assert (await fresh.execute(select(OrderSubscription))).scalar_one().is_active is True
+
+    assert (await client.post(f"/admin/users/{driver.telegram_id}/subscription/мусор")).status_code == 404
+
+
+async def test_admin_can_release_an_order_from_a_driver(client, make_order, session):
+    await _login(client)
+    driver = await _driver(session)
+    order = await make_order(status=OrderStatus.AGREED, taken_by_token=driver.token)
+
+    response = await client.post(f"/admin/users/{driver.telegram_id}/release/{order.id}")
+
+    assert response.status_code == 303
+    freed = await _reload_order(session, order.id)
+    assert freed.taken_by_token is None and freed.status == OrderStatus.NEW
+
+
+async def test_release_works_only_for_that_users_order(client, make_order, session):
+    await _login(client)
+    driver = await _driver(session)
+    other = await make_order(status=OrderStatus.AGREED, taken_by_token="tg:555")
+
+    await client.post(f"/admin/users/{driver.telegram_id}/release/{other.id}")
+
+    assert (await _reload_order(session, other.id)).taken_by_token == "tg:555"
+
+
+@pytest.mark.parametrize("method,path", [
+    ("get", "/admin/users"), ("get", "/admin/users/1"),
+    ("post", "/admin/users/1/subscription/off"), ("post", "/admin/users/1/release/1"),
+])
+async def test_users_section_requires_admin(client, method, path):
+    assert (await getattr(client, method)(path)).status_code == 404
