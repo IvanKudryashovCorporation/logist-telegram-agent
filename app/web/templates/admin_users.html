@@ -79,9 +79,9 @@
             <td class="num">{{ ('{:,.0f}'.format(u.stats.earned).replace(',', ' ') ~ ' ₽') if u.stats.earned else '—' }}</td>
             <td class="num {{ 'error-text' if u.stats.complaints else '' }}">{{ u.stats.complaints or '—' }}</td>
             <td class="nowrap">
-              {% if not u.subscription %}<span class="muted">нет</span>
-              {% elif u.subscription.is_active %}<span class="tag ok">включены</span>
-              {% else %}<span class="tag warn" title="{{ u.subscription.error or '' }}">выключены</span>{% endif %}
+              {% if not u.filters_total %}<span class="muted">нет фильтров</span>
+              {% elif u.filters_active %}<span class="tag ok">{{ u.filters_active }} из {{ u.filters_total }} вкл.</span>
+              {% else %}<span class="tag warn" title="{{ u.filters_error or '' }}">все выключены ({{ u.filters_total }})</span>{% endif %}
             </td>
           </tr>
         {% endfor %}

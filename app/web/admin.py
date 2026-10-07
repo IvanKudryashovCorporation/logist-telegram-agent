@@ -254,21 +254,20 @@ async def user_card(request: Request, telegram_id: int):
     detail = await reporting.user_detail(telegram_id)
     if detail is None:
         return _disabled()
-    sub = detail["subscription"]
     return await _render(
         request,
         "admin_user.html",
         u=detail,
-        subscription_lines=describe_filters(sub.params) if sub else [],
+        filter_lines={sub.id: describe_filters(sub.params) for sub in detail["subscriptions"]},
         status_labels=ORDER_STATUS_LABELS,
         is_admin_user=telegram_id in settings.admin_ids,
         section="users",
     )
 
 
-@router.post("/users/{telegram_id}/subscription/{action}")
-async def user_subscription(request: Request, telegram_id: int, action: str):
-    """Включить или выключить уведомления пользователя (например, если жалуется на спам)."""
+@router.post("/users/{telegram_id}/filters/{sub_id}/{action}")
+async def user_filter(request: Request, telegram_id: int, sub_id: int, action: str):
+    """Включить или выключить уведомления по фильтру пользователя (например, если он жалуется на спам)."""
     denied = _guard(request)
     if denied is not None:
         return denied
@@ -276,9 +275,12 @@ async def user_subscription(request: Request, telegram_id: int, action: str):
         return _disabled()
 
     async with SessionLocal() as session:
-        sub = await set_subscription_active(session, telegram_id, action == "on")
+        sub = await set_subscription_active(session, telegram_id, sub_id, action == "on")
     if sub is not None:
-        log.info("Админ %s уведомления tg:%s", "включил" if action == "on" else "выключил", telegram_id)
+        log.info(
+            "Админ %s уведомления по фильтру #%s у tg:%s",
+            "включил" if action == "on" else "выключил", sub_id, telegram_id,
+        )
     return RedirectResponse(url=f"/admin/users/{telegram_id}", status_code=303)
 
 

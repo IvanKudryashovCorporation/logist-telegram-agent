@@ -3,9 +3,10 @@
 Фоновый воркер раз в ``SUBSCRIPTION_POLL_SECONDS`` секунд берёт свежие свободные
 заказы, проверяет каждый по фильтру каждой активной подписки (тем же
 ``Filters.matches``, что и лента сайта, включая радиус) и пишет водителю через
-бота со ссылкой на заказ. Повторно по одному заказу не пишем (таблица
-``subscription_notifications``). Если за проход подходит много заказов — одно
-сообщение со списком, а не поток.
+бота. Каждый заказ — отдельное сообщение с кнопками «Написать диспетчеру» (сразу чат с ним) и
+«Взять заказ» (обработка нажатия — :mod:`app.web.bot_orders`). Повторно по одному заказу не пишем
+(таблица ``subscription_notifications``). Если за проход подходит очень много заказов, первые
+``SUBSCRIPTION_MAX_LINES`` приходят отдельными сообщениями, а про остальные — одно «и ещё N».
 
 Номер отправленного сообщения запоминается: если диспетчер потом удалил заявку в
 Telegram, сообщение у водителя удаляется (а в списке из нескольких заказов — переписывается
@@ -28,11 +29,18 @@ from sqlalchemy import exists, select
 from app import geo
 from app.config import settings
 from app.db.base import SessionLocal
-from app.models import ActionLog, Order, OrderStatus, OrderSubscription, SubscriptionNotification
+from app.models import (
+    ActionLog,
+    Order,
+    OrderStatus,
+    OrderSubscription,
+    SubscriptionNotification,
+    WorkGroup,
+)
 from app.timeutil import now_msk_naive, now_utc_naive
 from app.web import queries
 from app.web.filters import VEHICLE_CHOICES, Filters
-from app.web.presenters import pickup_label
+from app.web.presenters import dispatcher_link, dispatcher_message, pickup_label
 
 log = logging.getLogger("app.subscriptions")
 logging.getLogger("httpx").setLevel(logging.WARNING)  # в адресе Bot API лежит токен
@@ -45,7 +53,7 @@ GEO_WAIT = timedelta(seconds=90)
 OK, BLOCKED, RETRY = "ok", "blocked", "retry"
 #: Сообщение уже нечем убирать: его нет, прошло слишком много времени или бот заблокирован.
 GONE = "gone"
-Sender = Callable[[int, str], Awaitable[str]]
+Sender = Callable[..., Awaitable[str]]
 #: Bot API разрешает удалять свои сообщения не позже чем через 48 часов; берём с запасом.
 RETRACT_WINDOW = timedelta(hours=47)
 #: Действия журнала, после которых заявка считается снятой самим диспетчером.
@@ -88,9 +96,18 @@ def describe_filters(params: dict) -> list[str]:
     return lines
 
 
-def has_route(params: dict) -> bool:
-    """Подписка без города прислала бы весь поток группы — такую не заводим."""
-    return bool(params.get("from_city") or params.get("to_city"))
+#: Параметры, по которым заказ отсеивается. Радиус сам по себе ничего не фильтрует (он расширяет город).
+CRITERIA = (
+    "from_city", "to_city", "vehicle", "date_from", "date_to", "time_from", "time_to", "price_min", "price_max",
+)
+
+
+def has_criteria(params: dict) -> bool:
+    """Фильтр хоть что-то отсеивает: город, тип авто, дата, время или цена.
+
+    Полностью пустой фильтр прислал бы весь поток заявок, такой не сохраняем. Фильтр без города
+    (только цена или тип авто) разрешён: водитель сам выбирает, чем он ловит заказы."""
+    return any(params.get(key) for key in CRITERIA)
 
 
 def feed_path(params: dict) -> str:
@@ -104,35 +121,64 @@ def feed_link(params: dict) -> str:
     return f"{settings.public_base_url.rstrip('/')}{feed_path(params)}"
 
 
-async def get_subscription(session, telegram_id: int) -> Optional[OrderSubscription]:
+ADDED, EXISTS, LIMIT = "added", "exists", "limit"
+
+
+async def list_subscriptions(session, telegram_id: int) -> list[OrderSubscription]:
+    """Все сохранённые фильтры водителя, старые первыми."""
+    return list(
+        (
+            await session.execute(
+                select(OrderSubscription)
+                .where(OrderSubscription.telegram_id == telegram_id)
+                .order_by(OrderSubscription.id)
+            )
+        ).scalars().all()
+    )
+
+
+async def get_subscription(session, telegram_id: int, sub_id: int) -> Optional[OrderSubscription]:
+    """Фильтр по номеру — только если он принадлежит этому водителю."""
     return (
         await session.execute(
-            select(OrderSubscription).where(OrderSubscription.telegram_id == telegram_id)
+            select(OrderSubscription).where(
+                OrderSubscription.id == sub_id, OrderSubscription.telegram_id == telegram_id
+            )
         )
     ).scalar_one_or_none()
 
 
-async def save_subscription(session, telegram_id: int, params: dict) -> OrderSubscription:
-    """Создаёт или обновляет подписку водителя и включает её.
+async def add_subscription(
+    session, telegram_id: int, params: dict
+) -> tuple[Optional[OrderSubscription], str]:
+    """Сохраняет фильтр водителя и включает по нему уведомления.
 
-    ``since`` сдвигается на «сейчас»: после смены фильтра присылаем только то, что
-    появится дальше, а не то, что водитель уже видит в ленте.
+    Такой же фильтр уже есть — не плодим копию, а включаем существующий (``exists``). Больше
+    :data:`app.config.Settings.max_filters_per_driver` фильтров не бывает (``limit``).
+    ``since`` ставится на «сейчас»: присылаем только то, что появится дальше, а не то, что
+    водитель уже видит в ленте.
     """
     now = now_utc_naive()
-    sub = await get_subscription(session, telegram_id)
-    if sub is None:
-        sub = OrderSubscription(telegram_id=telegram_id, params=params, since=now)
-        session.add(sub)
-    sub.params = params
-    sub.is_active = True
-    sub.since = now
-    sub.error = None
+    existing = await list_subscriptions(session, telegram_id)
+    for sub in existing:
+        if sub.params == params:
+            sub.is_active = True
+            sub.since = now
+            sub.error = None
+            await session.commit()
+            return sub, EXISTS
+    if len(existing) >= max(1, settings.max_filters_per_driver):
+        return None, LIMIT
+    sub = OrderSubscription(telegram_id=telegram_id, params=params, since=now)
+    session.add(sub)
     await session.commit()
-    return sub
+    return sub, ADDED
 
 
-async def set_subscription_active(session, telegram_id: int, active: bool) -> Optional[OrderSubscription]:
-    sub = await get_subscription(session, telegram_id)
+async def set_subscription_active(
+    session, telegram_id: int, sub_id: int, active: bool
+) -> Optional[OrderSubscription]:
+    sub = await get_subscription(session, telegram_id, sub_id)
     if sub is None:
         return None
     if active and not sub.is_active:
@@ -141,6 +187,15 @@ async def set_subscription_active(session, telegram_id: int, active: bool) -> Op
     sub.is_active = active
     await session.commit()
     return sub
+
+
+async def delete_subscription(session, telegram_id: int, sub_id: int) -> bool:
+    sub = await get_subscription(session, telegram_id, sub_id)
+    if sub is None:
+        return False
+    await session.delete(sub)
+    await session.commit()
+    return True
 
 
 # --- Сообщения -------------------------------------------------------------------
@@ -161,17 +216,66 @@ def order_url(order: Order) -> str:
 
 
 def build_message(orders: list[Order], params: dict) -> str:
+    """Текст уведомления. Ссылок на заказы в нём нет: действовать водителю помогают кнопки."""
     if len(orders) == 1:
-        order = orders[0]
-        return f"🔔 Новый заказ по вашему фильтру\n\n{order_line(order)}\n\n{order_url(order)}"
+        return f"🔔 Новый заказ по вашему фильтру\n\n{order_line(orders[0])}"
 
     limit = settings.subscription_max_lines
     lines = [f"🔔 Новых заказов по вашему фильтру: {len(orders)}", ""]
-    for order in orders[:limit]:
-        lines.append(f"• {order_line(order)}\n  {order_url(order)}")
+    for number, order in enumerate(orders[:limit], 1):
+        lines.append(f"{number}. {order_line(order)}")
     if len(orders) > limit:
         lines.append(f"\n…и ещё {len(orders) - limit}. Все в ленте: {feed_link(params)}")
     return "\n".join(lines)
+
+
+def build_overflow_message(count: int, params: dict) -> str:
+    """Один заказ за другим — слишком много: хвост одним сообщением со ссылкой на ленту."""
+    return f"🔔 И ещё подходящих заказов по вашему фильтру: {count}. Все в ленте: {feed_link(params)}"
+
+
+def chat_url(order: Order, group_username: Optional[str]) -> Optional[str]:
+    """Ссылка «сразу в чат к диспетчеру» для кнопки уведомления, или ``None``.
+
+    Только обычные ``https``-ссылки: ``tg://user?id=`` Telegram в кнопке не примет, если у
+    диспетчера закрыта приватность (отправка сообщения упадёт целиком), а ссылка на сообщение
+    закрытой группы пускает лишь участников — такая кнопка водителю только мешала бы.
+    """
+    url = dispatcher_link(order, text=dispatcher_message(order), group_username=group_username)
+    if not url or url.startswith("tg://") or url.startswith("https://t.me/c/"):
+        return None
+    return url
+
+
+def build_keyboard(orders: list[Order], group_names: dict[int, Optional[str]]) -> dict:
+    """Кнопки под уведомлением: у одного заказа — «Написать диспетчеру» и «Взять заказ»;
+    у списка — по паре кнопок на строку с номером заказа."""
+    shown = orders[: settings.subscription_max_lines]
+    rows: list[list[dict]] = []
+    for number, order in enumerate(shown, 1):
+        single = len(shown) == 1
+        row: list[dict] = []
+        url = chat_url(order, group_names.get(order.source_chat_id))
+        if url:
+            row.append({"text": "✉️ Написать диспетчеру" if single else f"✉️ {number}", "url": url})
+        row.append({"text": "✅ Взять заказ" if single else f"✅ Взять {number}", "callback_data": f"take:{order.id}"})
+        rows.append(row)
+        if single:
+            rows.append([{"text": "Подробнее на сайте", "url": order_url(order)}])
+    return {"inline_keyboard": rows}
+
+
+async def group_usernames(session, orders: list[Order]) -> dict[int, Optional[str]]:
+    """Публичные имена групп заказов — по ним строится ссылка на сообщение в группе."""
+    chat_ids = {order.source_chat_id for order in orders}
+    if not chat_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(WorkGroup.tg_chat_id, WorkGroup.username).where(WorkGroup.tg_chat_id.in_(chat_ids))
+        )
+    ).all()
+    return {chat_id: username or None for chat_id, username in rows}
 
 
 # --- Отправка ---------------------------------------------------------------------
@@ -181,22 +285,42 @@ def bot_token() -> str:
     return settings.alert_bot_token.strip() or settings.telegram_login_bot_token.strip()
 
 
-async def send_message(chat_id: int, text: str) -> str:
+def _without_url_buttons(markup: Optional[dict]) -> Optional[dict]:
+    """Клавиатура только с кнопками-действиями (без ссылок): запасной вариант, если Telegram
+    отверг ссылку в кнопке."""
+    if not markup:
+        return None
+    rows = [[b for b in row if "callback_data" in b] for row in markup.get("inline_keyboard", [])]
+    rows = [row for row in rows if row]
+    return {"inline_keyboard": rows} if rows else None
+
+
+async def send_message(chat_id: int, text: str, reply_markup: Optional[dict] = None) -> str:
     """Отправляет сообщение через Bot API. Возвращает ``ok`` / ``blocked`` / ``retry``.
 
     ``blocked`` — бот не может писать этому человеку (не нажал «Старт», заблокировал
     бота): подписку выключаем. ``retry`` — временный сбой, попробуем в следующий проход.
+    Если Telegram отверг кнопку (``BUTTON_…``), сообщение уходит ещё раз без кнопок-ссылок:
+    иначе из-за одной плохой ссылки водитель остался бы без уведомления, а подписка
+    отключилась бы как «бот заблокирован».
     """
     token = bot_token()
     if not token:
         log.error("Нет токена бота для уведомлений")
         return RETRY
+    payload: dict = {"chat_id": chat_id, "text": text, "disable_web_page_preview": True}
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
     try:
         async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
-            response = await client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
-            )
+            response = await client.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload)
+            if response.status_code == 400 and "BUTTON" in response.text.upper() and reply_markup:
+                log.warning("Telegram отверг кнопку для tg:%s: %s", chat_id, response.text[:120])
+                fallback = _without_url_buttons(reply_markup)
+                payload.pop("reply_markup", None)
+                if fallback:
+                    payload["reply_markup"] = fallback
+                response = await client.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload)
     except httpx.HTTPError as exc:
         log.warning("Telegram недоступен: %s", type(exc).__name__)
         return RETRY
@@ -237,11 +361,11 @@ async def delete_message(chat_id: int, message_id: int) -> str:
     return await _bot_call("deleteMessage", {"chat_id": chat_id, "message_id": message_id})
 
 
-async def edit_message(chat_id: int, message_id: int, text: str) -> str:
-    return await _bot_call(
-        "editMessageText",
-        {"chat_id": chat_id, "message_id": message_id, "text": text, "disable_web_page_preview": True},
-    )
+async def edit_message(chat_id: int, message_id: int, text: str, reply_markup: Optional[dict] = None) -> str:
+    payload: dict = {"chat_id": chat_id, "message_id": message_id, "text": text, "disable_web_page_preview": True}
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    return await _bot_call("editMessageText", payload)
 
 
 # --- Подбор заказов ------------------------------------------------------------------
@@ -296,15 +420,20 @@ async def notify_once(*, send: Sender = send_message, now: Optional[datetime] = 
         if not orders:
             return 0
 
+        # Уже отправленное — по ЧЕЛОВЕКУ, а не по фильтру: заказ, подходящий двум фильтрам
+        # водителя, присылается один раз.
         already = {
-            (row.subscription_id, row.order_id)
-            for row in (
+            (telegram_id, order_id)
+            for order_id, telegram_id in (
                 await session.execute(
-                    select(SubscriptionNotification).where(
-                        SubscriptionNotification.order_id.in_([o.id for o in orders])
+                    select(SubscriptionNotification.order_id, OrderSubscription.telegram_id)
+                    .join(
+                        OrderSubscription,
+                        OrderSubscription.id == SubscriptionNotification.subscription_id,
                     )
+                    .where(SubscriptionNotification.order_id.in_([o.id for o in orders]))
                 )
-            ).scalars().all()
+            ).all()
         }
 
         centers_cache: dict = {}
@@ -317,34 +446,59 @@ async def notify_once(*, send: Sender = send_message, now: Optional[datetime] = 
             matched = [
                 order for order in orders
                 if order.created_at > sub.since
-                and (sub.id, order.id) not in already
+                and (sub.telegram_id, order.id) not in already
                 and _ready(order, needs_geo, now)
                 and filters.matches(order)
             ]
             if not matched:
                 continue
 
-            outcome = await send(sub.telegram_id, build_message(matched, sub.params or {}))
-            if outcome == OK:
-                message_id = getattr(outcome, "message_id", None)
-                for order in matched:
+            names = await group_usernames(session, matched)
+            limit = max(1, settings.subscription_max_lines)
+            stopped = False
+            for position, order in enumerate(matched[:limit]):
+                if position:
+                    await asyncio.sleep(settings.subscription_send_gap_seconds)
+                outcome = await send(
+                    sub.telegram_id,
+                    build_message([order], sub.params or {}),
+                    reply_markup=build_keyboard([order], names),
+                )
+                if outcome == OK:
+                    already.add((sub.telegram_id, order.id))
                     session.add(
                         SubscriptionNotification(
-                            subscription_id=sub.id, order_id=order.id, sent_at=now, message_id=message_id
+                            subscription_id=sub.id, order_id=order.id, sent_at=now,
+                            message_id=getattr(outcome, "message_id", None),
                         )
                     )
-                sub.last_notified_at = now
-                sent_messages += 1
-            elif outcome == BLOCKED:
-                sub.is_active = False
-                sub.error = "Бот не может написать вам: откройте бота и нажмите «Старт»"
+                    sub.last_notified_at = now
+                    sent_messages += 1
+                else:
+                    if outcome == BLOCKED:
+                        sub.is_active = False
+                        sub.error = "Бот не может написать вам: откройте бота и нажмите «Старт»"
+                    stopped = True  # сбой или блок: остальное — на следующем проходе (или никогда)
+                    break
+
+            rest = matched[limit:]
+            if rest and not stopped:
+                # Много заказов сразу: про остальные одно сообщение. Они считаются отправленными —
+                # иначе при каждом проходе водитель получал бы новый кусок того же хвоста.
+                await asyncio.sleep(settings.subscription_send_gap_seconds)
+                summary = await send(sub.telegram_id, build_overflow_message(len(rest), sub.params or {}))
+                if summary == OK:
+                    for order in rest:
+                        already.add((sub.telegram_id, order.id))
+                        session.add(SubscriptionNotification(subscription_id=sub.id, order_id=order.id, sent_at=now))
+                    sent_messages += 1
             await session.commit()
 
     return sent_messages
 
 
 Deleter = Callable[[int, int], Awaitable[str]]
-Editor = Callable[[int, int, str], Awaitable[str]]
+Editor = Callable[..., Awaitable[str]]
 
 
 async def retract_withdrawn(
@@ -423,7 +577,12 @@ async def retract_withdrawn(
                 if note.order_id not in withdrawn and note.order_id in orders
             ]
             if remaining:
-                outcome = await edit(sub.telegram_id, message_id, build_message(remaining, sub.params or {}))
+                outcome = await edit(
+                    sub.telegram_id,
+                    message_id,
+                    build_message(remaining, sub.params or {}),
+                    reply_markup=build_keyboard(remaining, await group_usernames(session, remaining)),
+                )
             else:
                 outcome = await delete(sub.telegram_id, message_id)
             if outcome == RETRY:

@@ -31,6 +31,7 @@ from typing import Awaitable, Callable, Optional
 import httpx
 
 from app.config import settings
+from app.web import bot_orders
 
 log = logging.getLogger("web.bot_login")
 
@@ -167,6 +168,9 @@ async def handle_update(update: dict, api: BotApi, login_store: LoginStore = sto
         return
     callback = update.get("callback_query")
     if callback and callback.get("from") and not callback["from"].get("is_bot"):
+        if str(callback.get("data", "")).startswith(bot_orders.TAKE_PREFIX):
+            await bot_orders.handle_take(callback, api)  # «Взять заказ» под уведомлением
+            return
         await _handle_callback(callback, api, login_store)
 
 

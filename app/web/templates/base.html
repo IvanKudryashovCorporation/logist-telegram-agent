@@ -177,11 +177,12 @@
               </div>
             </div>
             {% if is_logged_in %}
+              <a href="/filters" class="btn btn-secondary my-filters-btn">Мои фильтры ({{ filters_count or 0 }})</a>
               <label class="notify-toggle">
                 <input type="checkbox" name="notify" {{ 'checked' if notify_checked else '' }}>
-                <span>Присылать новые подходящие заказы в Telegram</span>
+                <span>Сохранить в «Мои фильтры» и присылать новые подходящие заказы в Telegram</span>
               </label>
-              {% if subscription_error %}<div class="hint notify-error">{{ subscription_error }}</div>{% endif %}
+              {% if filters_error %}<div class="hint notify-error">{{ filters_error }}</div>{% endif %}
             {% elif telegram_login_enabled %}
               <div class="hint notify-toggle">Войдите, чтобы получать новые заказы по фильтру в Telegram.</div>
             {% endif %}

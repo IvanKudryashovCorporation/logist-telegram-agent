@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Мои фильтры — Лента заказов{% endblock %}
+{% block content %}
+
+<div class="section-title today"><span class="section-dot"></span>Мои фильтры{% if filters_items %} ({{ filters_items | length }}){% endif %}</div>
+
+<div class="hint" style="margin-bottom: 14px;">
+  Сохранённые фильтры: по каждому новые подходящие заказы приходят вам в Telegram от бота. Каждый фильтр
+  включается и выключается отдельно. Чтобы добавить фильтр, задайте его в ленте, отметьте «Сохранить в
+  «Мои фильтры»» и нажмите «Применить». Можно сохранить до {{ max_filters }} фильтров.
+</div>
+
+{% if filters_items %}
+  <div class="filters-list">
+    {% for item in filters_items %}
+      {% set sub = item.sub %}
+      <div class="detail-card profile-card subscription-card">
+        <div class="subscription-head">
+          <span class="badge {{ 'badge-ok' if sub.is_active else 'badge-muted' }}">
+            {{ "Уведомления включены" if sub.is_active else "Уведомления выключены" }}
+          </span>
+          <a href="{{ item.link }}" class="profile-all">Открыть в ленте &rarr;</a>
+        </div>
+        <ul class="subscription-filter">
+          {% for line in item.lines %}<li>{{ line }}</li>{% endfor %}
+        </ul>
+        {% if sub.error %}<div class="hint notify-error">{{ sub.error }}</div>{% endif %}
+        <div class="filter-actions">
+          <form method="post" action="/filters/{{ sub.id }}/{{ 'off' if sub.is_active else 'on' }}">
+            <button type="submit" class="btn btn-secondary">{{ "Выключить уведомления" if sub.is_active else "Включить уведомления" }}</button>
+          </form>
+          <form method="post" action="/filters/{{ sub.id }}/delete" onsubmit="return confirm('Удалить этот фильтр?')">
+            <button type="submit" class="btn btn-secondary btn-danger-text">Удалить</button>
+          </form>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+  <div class="hint" style="margin-top: 14px;">
+    Уведомления приходят от бота <a href="{{ bot_url }}" target="_blank" rel="noopener">{{ bot_url.replace('https://t.me/', '@') }}</a>.
+    Если сообщений нет, откройте бота и нажмите «Старт».
+  </div>
+{% else %}
+  <div class="detail-card profile-card">
+    <div class="hint">
+      Пока нет ни одного фильтра. Задайте фильтр в ленте (например, «Откуда: Краснодар»), отметьте
+      «Сохранить в «Мои фильтры»» и нажмите «Применить» — он появится здесь.
+    </div>
+    <a href="/" class="btn btn-secondary" style="margin-top: 12px;">К ленте</a>
+  </div>
+{% endif %}
+
+{% endblock %}

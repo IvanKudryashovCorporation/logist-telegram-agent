@@ -267,10 +267,9 @@ async def users_overview(*, q: str = "", sort: str = "login", limit: int = 200) 
                 )
             )
         ).all()
-        subs = {
-            sub.telegram_id: sub
-            for sub in (await session.execute(select(OrderSubscription))).scalars().all()
-        }
+        subs: dict[int, list] = {}
+        for sub in (await session.execute(select(OrderSubscription))).scalars().all():
+            subs.setdefault(sub.telegram_id, []).append(sub)
 
     stats = _stats_by_token(rows)
     needle = q.strip().lower().lstrip("@")
@@ -279,13 +278,15 @@ async def users_overview(*, q: str = "", sort: str = "login", limit: int = 200) 
         name = " ".join(part for part in (driver.first_name, driver.last_name) if part)
         if needle and needle not in f"{name} {driver.username or ''} {driver.telegram_id}".lower():
             continue
-        sub = subs.get(driver.telegram_id)
+        user_subs = subs.get(driver.telegram_id, [])
         users.append(
             {
                 "driver": driver,
                 "name": name or "—",
                 "stats": stats.get(driver.token, UserStats()),
-                "subscription": sub,
+                "filters_total": len(user_subs),
+                "filters_active": sum(1 for s in user_subs if s.is_active),
+                "filters_error": next((s.error for s in user_subs if s.error), None),
                 "registered": _msk(driver.created_at),
                 "last_login": _msk(driver.last_login_at),
                 "is_new": driver.created_at >= week,
@@ -309,7 +310,7 @@ async def users_overview(*, q: str = "", sort: str = "login", limit: int = 200) 
             "new_week": sum(1 for d in drivers if d.created_at >= week),
             "active_week": sum(1 for d in drivers if d.last_login_at and d.last_login_at >= week),
             "took_orders": sum(1 for d in drivers if stats.get(d.token, UserStats()).taken),
-            "with_notifications": sum(1 for s in subs.values() if s.is_active),
+            "with_notifications": sum(1 for group in subs.values() if any(s.is_active for s in group)),
         },
     }
 
@@ -332,9 +333,15 @@ async def user_detail(telegram_id: int, *, orders_limit: int = 50, actions_limit
                 )
             ).scalars().all()
         )
-        sub = (
-            await session.execute(select(OrderSubscription).where(OrderSubscription.telegram_id == telegram_id))
-        ).scalar_one_or_none()
+        subs = list(
+            (
+                await session.execute(
+                    select(OrderSubscription)
+                    .where(OrderSubscription.telegram_id == telegram_id)
+                    .order_by(OrderSubscription.id)
+                )
+            ).scalars().all()
+        )
         actions = []
         if orders:
             actions = list(
@@ -358,7 +365,7 @@ async def user_detail(telegram_id: int, *, orders_limit: int = 50, actions_limit
         "driver": driver,
         "name": " ".join(part for part in (driver.first_name, driver.last_name) if part) or "—",
         "stats": stats,
-        "subscription": sub,
+        "subscriptions": subs,
         "registered": _msk(driver.created_at),
         "last_login": _msk(driver.last_login_at),
         "orders": orders[:orders_limit],

@@ -1,9 +1,9 @@
-"""Подписка водителя на новые заказы по его фильтру (уведомления в Telegram).
+"""Сохранённые фильтры водителя («Мои фильтры») и уведомления по ним в Telegram.
 
-Одна подписка на водителя: когда он применяет фильтр с включённой галочкой
-«присылать в Telegram», в ``params`` сохраняются нормализованные параметры
-ленты (те же, что в адресе страницы), а фоновый воркер присылает ему через бота
-каждый новый подходящий заказ ссылкой.
+Когда водитель применяет фильтр с галочкой «присылать в Telegram», в ``params`` сохраняются
+нормализованные параметры ленты (те же, что в адресе страницы), а фоновый воркер присылает ему
+через бота каждый новый подходящий заказ ссылкой. Фильтров у водителя несколько, у каждого своё
+включение уведомлений.
 """
 
 from datetime import datetime
@@ -19,8 +19,8 @@ class OrderSubscription(Base, TimestampMixin):
     __tablename__ = "order_subscriptions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    #: Telegram id водителя — он же chat_id для бота (один человек — одна подписка).
-    telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True, nullable=False)
+    #: Telegram id водителя — он же chat_id для бота. Фильтров у одного человека несколько.
+    telegram_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     #: Параметры фильтра строками: ``Filters.as_dict()`` (from_city, to_city, ...).
     params: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

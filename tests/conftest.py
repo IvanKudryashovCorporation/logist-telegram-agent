@@ -57,6 +57,14 @@ from app.timeutil import now_msk_naive, now_utc_naive  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
+def no_send_pause(monkeypatch):
+    """Пауза между сообщениями бота нужна Telegram, а не тестам."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "subscription_send_gap_seconds", 0.0)
+
+
+@pytest.fixture(autouse=True)
 def no_extra_geocoders(monkeypatch):
     """Нечёткий поиск (Photon) и поиск районов/областей по умолчанию ничего не находят.
 

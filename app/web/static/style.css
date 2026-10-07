@@ -873,6 +873,11 @@ input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), select, t
 .notify-toggle input { width: 16px; height: 16px; flex-shrink: 0; }
 .notify-error { grid-column: 1 / -1; color: var(--warn-text); }
 .subscription-card { margin-bottom: 22px; }
+.filters-list .subscription-card { margin-bottom: 12px; }
+.filter-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.filter-actions form { margin: 0; }
+.btn-danger-text { color: #dc2626; }
+.my-filters-btn { grid-column: 1 / -1; text-align: center; text-decoration: none; }
 .subscription-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .subscription-filter { margin: 12px 0 14px; padding-left: 18px; font-size: 14px; line-height: 1.6; }
 .subscription-filter li::marker { color: var(--accent); }

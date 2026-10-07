@@ -32,6 +32,7 @@ from app.models import (
     Driver,
     Order,
     OrderStatus,
+    OrderSubscription,
     WorkGroup,
 )
 from app.timeutil import now_msk_naive, now_utc_naive
@@ -330,8 +331,11 @@ async def group_username(session: AsyncSession, chat_id: Optional[int]) -> Optio
     ).scalar_one_or_none() or None
 
 
-async def header_counts(session: AsyncSession, token: str) -> dict:
-    """Счётчики в шапке сайта. Все три — по индексированным полям."""
+async def header_counts(session: AsyncSession, token: str, telegram_id: Optional[int] = None) -> dict:
+    """Счётчики в шапке сайта — по индексированным полям, плюс число сохранённых фильтров.
+
+    ``telegram_id`` — кто вошёл через Telegram. Без него берётся из токена ``tg:…``; на ленте токен
+    анонимный (cookie), поэтому вошедшего водителя она передаёт явно."""
     lenta_count = (
         await session.execute(
             select(func.count()).select_from(Order).where(*feed_conditions())
@@ -349,7 +353,24 @@ async def header_counts(session: AsyncSession, token: str) -> dict:
             select(func.count()).select_from(WorkGroup).where(WorkGroup.is_active.is_(True))
         )
     ).scalar_one()
-    return {"lenta_count": lenta_count, "my_count": my_count, "groups_count": groups_count}
+    filters_count, filters_error = 0, None
+    if telegram_id is None and token.startswith("tg:") and token[3:].isdigit():
+        telegram_id = int(token[3:])
+    if telegram_id is not None:
+        errors = (
+            await session.execute(
+                select(OrderSubscription.error).where(OrderSubscription.telegram_id == telegram_id)
+            )
+        ).scalars().all()
+        filters_count = len(errors)
+        filters_error = next((error for error in errors if error), None)
+    return {
+        "lenta_count": lenta_count,
+        "my_count": my_count,
+        "groups_count": groups_count,
+        "filters_count": filters_count,
+        "filters_error": filters_error,
+    }
 
 
 # --- Действия водителя ------------------------------------------------------

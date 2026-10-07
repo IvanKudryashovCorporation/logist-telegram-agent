@@ -4,7 +4,7 @@
 {% block content %}
 {% set d = u.driver %}
 {% set st = u.stats %}
-{% set sub = u.subscription %}
+{% set subs = u.subscriptions %}
 
 <p><a href="/admin/users">← ко всем пользователям</a></p>
 
@@ -20,10 +20,10 @@
       <tr><th>Зарегистрирован</th><td>{{ u.registered.strftime('%d.%m.%Y %H:%M') if u.registered else '—' }} <span class="muted">(МСК)</span></td></tr>
       <tr><th>Последний вход</th><td>{{ u.last_login.strftime('%d.%m.%Y %H:%M') if u.last_login else '—' }} <span class="muted">(МСК)</span></td></tr>
       <tr>
-        <th>Уведомления</th>
+        <th>Фильтры</th>
         <td>
-          {% if not sub %}не подписан{% elif sub.is_active %}<span class="tag ok">включены</span>{% else %}<span class="tag warn">выключены</span>{% endif %}
-          {% if sub and sub.error %}<span class="error-text">{{ sub.error }}</span>{% endif %}
+          {% if not subs %}нет сохранённых фильтров
+          {% else %}{{ subs | selectattr('is_active') | list | length }} из {{ subs | length }} с уведомлениями{% endif %}
         </td>
       </tr>
     </tbody>
@@ -34,13 +34,6 @@
       <a class="btn" href="https://t.me/{{ d.username }}" target="_blank" rel="noopener">Написать в Telegram</a>
     {% else %}
       <a class="btn" href="tg://user?id={{ d.telegram_id }}" title="Откроется, только если этот человек есть у вас в Telegram">Открыть чат по id</a>
-    {% endif %}
-    {% if sub %}
-      <form method="post" action="/admin/users/{{ d.telegram_id }}/subscription/{{ 'off' if sub.is_active else 'on' }}" style="display:inline">
-        <button type="submit" class="btn {{ 'danger' if sub.is_active else '' }}">
-          {{ 'Выключить уведомления' if sub.is_active else 'Включить уведомления' }}
-        </button>
-      </form>
     {% endif %}
   </div>
 </div>
@@ -53,18 +46,34 @@
   <div class="metric {{ 'bad' if st.complaints else '' }}"><div class="metric-value">{{ st.complaints }}</div><div class="metric-label">жалоб на его заказы</div></div>
 </div>
 
-{% if sub %}
+{% if subs %}
   <div class="card">
-    <h2>Фильтр уведомлений</h2>
-    {% if subscription_lines %}
-      <ul>{% for line in subscription_lines %}<li>{{ line }}</li>{% endfor %}</ul>
-    {% else %}
-      <p class="muted">Параметры не заданы.</p>
-    {% endif %}
-    <p class="muted">
-      Подписка создана {{ sub.created_at.strftime('%d.%m.%Y') }}{% if sub.last_notified_at %},
-      последнее уведомление {{ sub.last_notified_at.strftime('%d.%m %H:%M') }} UTC{% else %}, уведомлений ещё не было{% endif %}.
-    </p>
+    <h2>Мои фильтры пользователя ({{ subs | length }})</h2>
+    <table>
+      <thead><tr><th>Фильтр</th><th>Уведомления</th><th>Последнее</th><th></th></tr></thead>
+      <tbody>
+        {% for sub in subs %}
+          <tr>
+            <td>
+              {% set lines = filter_lines[sub.id] %}
+              {% if lines %}{{ lines | join(' · ') }}{% else %}<span class="muted">параметры не заданы</span>{% endif %}
+              {% if sub.error %}<br><span class="error-text">{{ sub.error }}</span>{% endif %}
+            </td>
+            <td class="nowrap">
+              {% if sub.is_active %}<span class="tag ok">включены</span>{% else %}<span class="tag warn">выключены</span>{% endif %}
+            </td>
+            <td class="nowrap muted">{{ sub.last_notified_at.strftime('%d.%m %H:%M') ~ ' UTC' if sub.last_notified_at else 'не было' }}</td>
+            <td class="nowrap">
+              <form method="post" action="/admin/users/{{ d.telegram_id }}/filters/{{ sub.id }}/{{ 'off' if sub.is_active else 'on' }}" style="display:inline">
+                <button type="submit" class="btn {{ 'danger' if sub.is_active else '' }}">
+                  {{ 'Выключить' if sub.is_active else 'Включить' }}
+                </button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
 {% endif %}
 

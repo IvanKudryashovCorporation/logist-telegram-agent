@@ -653,29 +653,6 @@ async def test_unknown_user_is_404(client):
     assert (await client.get("/admin/users/123456789")).status_code == 404
 
 
-async def test_admin_can_switch_a_users_notifications_off_and_on(client, session):
-    from app.models import OrderSubscription
-
-    await _login(client)
-    driver = await _driver(session)
-    session.add(OrderSubscription(telegram_id=driver.telegram_id, params={"from_city": "Сочи"}, is_active=True,
-                                  since=now_utc_naive()))
-    await session.commit()
-
-    assert (await client.post(f"/admin/users/{driver.telegram_id}/subscription/off")).status_code == 303
-    async with SessionLocal() as fresh:
-        sub = (await fresh.execute(select(OrderSubscription))).scalar_one()
-        assert sub.is_active is False
-    page = await client.get(f"/admin/users/{driver.telegram_id}")
-    assert "Включить уведомления" in page.text and "Откуда: Сочи" in page.text
-
-    await client.post(f"/admin/users/{driver.telegram_id}/subscription/on")
-    async with SessionLocal() as fresh:
-        assert (await fresh.execute(select(OrderSubscription))).scalar_one().is_active is True
-
-    assert (await client.post(f"/admin/users/{driver.telegram_id}/subscription/мусор")).status_code == 404
-
-
 async def test_admin_can_release_an_order_from_a_driver(client, make_order, session):
     await _login(client)
     driver = await _driver(session)
@@ -700,7 +677,63 @@ async def test_release_works_only_for_that_users_order(client, make_order, sessi
 
 @pytest.mark.parametrize("method,path", [
     ("get", "/admin/users"), ("get", "/admin/users/1"),
-    ("post", "/admin/users/1/subscription/off"), ("post", "/admin/users/1/release/1"),
+    ("post", "/admin/users/1/filters/1/off"), ("post", "/admin/users/1/release/1"),
 ])
 async def test_users_section_requires_admin(client, method, path):
     assert (await getattr(client, method)(path)).status_code == 404
+
+
+async def test_admin_sees_all_users_filters_and_can_switch_them_one_by_one(client, session):
+    from app.models import OrderSubscription
+
+    await _login(client)
+    driver = await _driver(session)
+    for city in ("Сочи", "Керчь"):
+        session.add(
+            OrderSubscription(
+                telegram_id=driver.telegram_id, params={"from_city": city}, is_active=True, since=now_utc_naive()
+            )
+        )
+    await session.commit()
+    async with SessionLocal() as fresh:
+        first, _second = (
+            await fresh.execute(select(OrderSubscription).order_by(OrderSubscription.id))
+        ).scalars().all()
+
+    listing = await client.get("/admin/users")
+    assert "2 из 2 вкл." in listing.text
+    card = (await client.get(f"/admin/users/{driver.telegram_id}")).text
+    assert "Откуда: Сочи" in card and "Откуда: Керчь" in card and "2 из 2 с уведомлениями" in card
+
+    response = await client.post(f"/admin/users/{driver.telegram_id}/filters/{first.id}/off")
+
+    assert response.status_code == 303
+    async with SessionLocal() as fresh:
+        rows = (await fresh.execute(select(OrderSubscription).order_by(OrderSubscription.id))).scalars().all()
+        assert [r.is_active for r in rows] == [False, True]
+    assert "1 из 2 вкл." in (await client.get("/admin/users")).text
+    await client.post(f"/admin/users/{driver.telegram_id}/filters/{first.id}/on")
+    async with SessionLocal() as fresh:
+        assert all(r.is_active for r in (await fresh.execute(select(OrderSubscription))).scalars().all())
+    assert (await client.post(f"/admin/users/{driver.telegram_id}/filters/{first.id}/мусор")).status_code == 404
+
+
+async def test_admin_cannot_switch_a_filter_through_another_users_page(client, session):
+    from app.models import OrderSubscription
+
+    await _login(client)
+    owner = await _driver(session, telegram_id=900021)
+    other = await _driver(session, telegram_id=900022, username="other")
+    session.add(
+        OrderSubscription(
+            telegram_id=owner.telegram_id, params={"from_city": "Сочи"}, is_active=True, since=now_utc_naive()
+        )
+    )
+    await session.commit()
+    async with SessionLocal() as fresh:
+        sub = (await fresh.execute(select(OrderSubscription))).scalar_one()
+
+    await client.post(f"/admin/users/{other.telegram_id}/filters/{sub.id}/off")
+
+    async with SessionLocal() as fresh:
+        assert (await fresh.execute(select(OrderSubscription))).scalar_one().is_active is True
