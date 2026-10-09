@@ -108,6 +108,32 @@ def _drop_rough_guess(chosen: Optional[geo.Candidate], other: Optional[geo.Candi
     return chosen
 
 
+async def _geocode_via(
+    session, order: Order, origin: Optional[geo.Candidate], destination: Optional[geo.Candidate]
+) -> Optional[list]:
+    """Координаты остановок по порядку: каждая ищется ближе к предыдущей точке пути.
+
+    Остановка, которую не нашли, остаётся в списке без координат: водитель её видит, а расстояние
+    считается по остальным точкам. Центр области вместо города для остановки не берём — это не
+    привязка, а догадка на сотни километров."""
+    points = order.via_points or []
+    if not points:
+        return None
+    anchor = origin or destination
+    result = []
+    for point in points:
+        candidates = await geo.resolve(session, point["name"])
+        chosen = geo.pick(candidates, anchor.coords if anchor else None)
+        if chosen is not None and chosen.kind == "region":
+            chosen = None
+        result.append(
+            {"name": point["name"], "lat": chosen.lat if chosen else None, "lon": chosen.lon if chosen else None}
+        )
+        if chosen is not None:
+            anchor = chosen
+    return result
+
+
 async def _geocode_order(session, order: Order) -> None:
     from_candidates = await geo.resolve(session, order.from_city)
     to_candidates = await geo.resolve(session, order.to_city)
@@ -162,10 +188,13 @@ async def _geocode_order(session, order: Order) -> None:
         flag_modified(order, "updated_at")
         await session.flush()
 
+    via_points = await _geocode_via(session, order, origin, destination)
+
     await session.execute(
         update(Order)
         .where(Order.id == order.id)
         .values(
+            **({"via_points": via_points} if via_points is not None else {}),
             from_lat=origin.lat if origin else None,
             from_lon=origin.lon if origin else None,
             to_lat=destination.lat if destination else None,

@@ -291,6 +291,7 @@
     .route-marker { flex-shrink: 0; margin-top: 5px; width: 8px; height: 8px; }
     .route-marker.from { border: 1.5px solid var(--text); border-radius: 50%; }
     .route-marker.to { background: var(--text); border-radius: 2px; }
+    .route-marker.via { width: 6px; height: 6px; margin-left: 1px; margin-right: 1px; background: var(--muted, #8b95a5); border-radius: 50%; }
     .route-point-city { font-weight: 600; font-size: 14.5px; }
     .route-point-address { font-size: 12.5px; color: var(--muted); margin-top: 1px; }
     .route-distance { font-size: 12.5px; color: var(--muted); padding-left: 16px; }

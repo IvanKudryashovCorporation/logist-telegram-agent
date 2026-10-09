@@ -46,6 +46,7 @@ def build_search_text(order_id: Any, values: Iterable[Optional[Any]]) -> str:
 def order_search_text(order: Any) -> str:
     """Пересчитывает ``search_text`` для модели заказа."""
     values = [getattr(order, field, None) for field in SEARCH_FIELDS]
+    values += [point.get("name") for point in (getattr(order, "via_points", None) or [])]
     return build_search_text(order.id, values)
 
 

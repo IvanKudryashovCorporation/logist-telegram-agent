@@ -34,7 +34,7 @@ from app.models import (
     ParseStat,
     SubscriptionNotification,
 )
-from app.parsing.order_builder import FAR_FUTURE, correct_far_year
+from app.parsing.order_builder import FAR_FUTURE, correct_far_year, has_critical_gaps
 from app.services.dedupe import cancel_duplicate_orders
 from app.timeutil import now_msk_naive, now_utc_naive
 
@@ -179,6 +179,31 @@ async def fix_far_future_dates(*, now: Optional[object] = None) -> int:
             await session.commit()
             log.info("Исправлен год подачи у заявок: %s", fixed)
     return fixed
+
+
+async def resolve_clarifications() -> int:
+    """«Уточняется» остаётся только у заказа без города или цены.
+
+    Заказы, получившие плашку по прежнему правилу («пассажиров 1-2», «28000+ платка», нет адреса),
+    снова становятся обычными: по ним уже можно договориться с диспетчером. Возвращает число снятых."""
+    async with SessionLocal() as session:
+        orders = (
+            await session.execute(
+                select(Order).where(
+                    Order.status == OrderStatus.NEEDS_CLARIFICATION, Order.taken_by_token.is_(None)
+                )
+            )
+        ).scalars().all()
+        resolved = [order for order in orders if not has_critical_gaps(order)]
+        for order in resolved:
+            order.status = OrderStatus.NEW
+            session.add(
+                ActionLog(order_id=order.id, actor=ActorType.SYSTEM, action="clarification_resolved")
+            )
+        if resolved:
+            await session.commit()
+            log.info("Снята плашка «Уточняется» у заказов: %s", len(resolved))
+    return len(resolved)
 
 
 async def advance_agreed_orders(
@@ -338,6 +363,7 @@ async def prune_old_stats(*, retention_days: Optional[int] = None) -> int:
 async def cleanup_once() -> dict[str, int]:
     """Один проход обслуживания — его же вызывает scripts/cleanup_orders.py."""
     corrected = await fix_far_future_dates()
+    clarified = await resolve_clarifications()
     expired = await expire_stale_orders()
     started, completed = await advance_agreed_orders()
     purged = await purge_old_orders()
@@ -346,6 +372,7 @@ async def cleanup_once() -> dict[str, int]:
     duplicates = await cancel_duplicate_orders()
     return {
         "dates_corrected": corrected,
+        "clarifications_resolved": clarified,
         "expired": expired,
         "work_started": started,
         "auto_completed": completed,

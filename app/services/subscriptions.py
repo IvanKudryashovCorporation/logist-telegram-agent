@@ -57,7 +57,7 @@ Sender = Callable[..., Awaitable[str]]
 #: Bot API разрешает удалять свои сообщения не позже чем через 48 часов; берём с запасом.
 RETRACT_WINDOW = timedelta(hours=47)
 #: Действия журнала, после которых заявка считается снятой самим диспетчером.
-WITHDRAWN_ACTIONS = ("cancelled_message_deleted",)
+WITHDRAWN_ACTIONS = ("cancelled_message_deleted", "cancelled_closed_lock")
 
 
 class SendOutcome(str):
@@ -202,7 +202,8 @@ async def delete_subscription(session, telegram_id: int, sub_id: int) -> bool:
 
 
 def order_line(order: Order) -> str:
-    route = f"{order.from_city or '?'} → {order.to_city or '?'}"
+    stops = [point["name"] for point in (order.via_points or []) if point.get("name")]
+    route = " → ".join([order.from_city or "?", *stops, order.to_city or "?"])
     extras = [pickup_label(order)]
     if order.client_price:
         extras.append(f"{order.client_price:.0f} ₽")

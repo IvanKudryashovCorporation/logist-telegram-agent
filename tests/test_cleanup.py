@@ -171,14 +171,14 @@ async def test_cleanup_once_reports_both_counters(session, make_order):
     result = await cleanup_once()
 
     assert result == {
-        "dates_corrected": 0, "expired": 1, "work_started": 0, "auto_completed": 0, "orders_purged": 0,
+        "dates_corrected": 0, "clarifications_resolved": 0, "expired": 1, "work_started": 0, "auto_completed": 0, "orders_purged": 0,
         "notifications_pruned": 0, "stats_pruned": 1, "duplicates_cancelled": 0,
     }
 
 
 async def test_cleanup_on_empty_database_is_quiet(session):
     assert await cleanup_once() == {
-        "dates_corrected": 0, "expired": 0, "work_started": 0, "auto_completed": 0, "orders_purged": 0,
+        "dates_corrected": 0, "clarifications_resolved": 0, "expired": 0, "work_started": 0, "auto_completed": 0, "orders_purged": 0,
         "notifications_pruned": 0, "stats_pruned": 0, "duplicates_cancelled": 0,
     }
 

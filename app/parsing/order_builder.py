@@ -101,6 +101,42 @@ def resolve_pickup_at(
     return candidate
 
 
+#: Остановок на заявку не больше: дальше это уже не такси-заявка, а перечень адресов.
+MAX_VIA_POINTS = 5
+
+
+def normalized_via_names(parsed: ParsedOrder) -> list[str]:
+    """Названия остановок: полные имена городов, без пустых и без подряд идущих повторов."""
+    names: list[str] = []
+    for raw in parsed.via_points or []:
+        name = (expand_city_term(raw.strip()) if raw and raw.strip() else "").strip()
+        if name and (not names or names[-1].lower() != name.lower()):
+            names.append(name)
+    return names[:MAX_VIA_POINTS]
+
+
+def _apply_via_points(order: Order, parsed: ParsedOrder) -> None:
+    """Сохраняет остановки. Те же названия — координаты остаются; изменились — геокодер и маршрут
+    пересчитают заказ."""
+    names = normalized_via_names(parsed)
+    current = order.via_points or []
+    if [point.get("name") for point in current] == names:
+        return
+    order.via_points = [{"name": name, "lat": None, "lon": None} for name in names] or None
+    order.geo_checked_at = None
+    order.distance_km = None
+    order.route_checked_at = None
+
+
+def has_critical_gaps(order: Order) -> bool:
+    """Водителю не хватает главного: города отправления/назначения или цены.
+
+    Остальное, что модель помечает «неоднозначным» («пассажиров 1-2», «28000+ платка», нет
+    адреса), заявку не портит: по ней уже можно связаться с диспетчером. Раньше любая такая
+    пометка давала плашку «Уточняется», хотя заказ был вполне пригоден."""
+    return not (order.from_city and order.to_city) or order.client_price is None
+
+
 def apply_parsed_fields(order: Order, parsed: ParsedOrder) -> None:
     """Переносит поля из ParsedOrder в Order и выставляет статус по полноте данных."""
     order.contact_username = extract_contact_username(order.raw_text) or order.contact_username
@@ -116,6 +152,7 @@ def apply_parsed_fields(order: Order, parsed: ParsedOrder) -> None:
     order.from_address = parsed.from_address or order.from_address
     order.to_city = (expand_city_term(parsed.to_city) if parsed.to_city else None) or order.to_city
     order.to_address = parsed.to_address or order.to_address
+    _apply_via_points(order, parsed)
     order.flight_or_train = parsed.flight_or_train or order.flight_or_train
     order.car_class = parsed.car_class or order.car_class
     order.passengers = parsed.passengers or order.passengers
@@ -131,12 +168,9 @@ def apply_parsed_fields(order: Order, parsed: ParsedOrder) -> None:
         # водителей, а не посредник.
         order.client_price = parsed.client_price
 
-    missing = parsed.missing_fields
-    if order.pickup_asap:
-        # «Нет времени подачи» — не недостающие данные: такой заказ «в ближайшее время».
-        missing = [field for field in missing if "врем" not in field.lower()]
-    if order.status in (OrderStatus.NEW, OrderStatus.NEEDS_CLARIFICATION):
-        order.status = OrderStatus.NEEDS_CLARIFICATION if missing else OrderStatus.NEW
+    # Только что созданный заказ ещё без статуса (его проставляет база при записи) — он тоже оценивается.
+    if order.status is None or order.status in (OrderStatus.NEW, OrderStatus.NEEDS_CLARIFICATION):
+        order.status = OrderStatus.NEEDS_CLARIFICATION if has_critical_gaps(order) else OrderStatus.NEW
 
     # search_text / from_city_key / to_city_key обязаны соответствовать
     # только что записанным полям, иначе поиск и фильтры на сайте «слепнут».

@@ -42,6 +42,14 @@ def order_bucket(order: Order, today: Optional[date] = None) -> str:
     return "later"
 
 
+def route_text(order: Order) -> str:
+    """«Пермь → Соликамск → Пермь Аэропорт»: города заказа по порядку, остановки между концами."""
+    origin = order.from_city or order.from_address
+    destination = order.to_city or order.to_address
+    stops = [point.get("name") for point in (order.via_points or []) if point.get("name")]
+    return " → ".join(part for part in (origin, *stops, destination) if part)
+
+
 def dispatcher_message(order: Order) -> str:
     """Готовое первое сообщение диспетчеру: «Здравствуйте! Заказ A → B, 05.10 в
     14:00, 3000 ₽ — актуально?». Отсутствующие части просто пропускаются.
@@ -52,7 +60,7 @@ def dispatcher_message(order: Order) -> str:
     origin = order.from_city or order.from_address
     destination = order.to_city or order.to_address
     fallback = origin or destination or f"№{order.id}"
-    route = f"{origin} → {destination}" if origin and destination else fallback
+    route = route_text(order) if origin and destination else fallback
 
     details: list[str] = []
     if order.pickup_at is not None:

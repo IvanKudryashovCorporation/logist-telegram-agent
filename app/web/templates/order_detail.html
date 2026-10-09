@@ -46,6 +46,15 @@
         {% if order.from_address %}<div class="route-point-address">{{ order.from_address }}</div>{% endif %}
       </div>
     </div>
+    {% for stop in order.via_points or [] %}
+      <div class="route-point">
+        <span class="route-marker via"></span>
+        <div>
+          <div class="kv-label">Остановка {{ loop.index }}</div>
+          <div class="route-point-city">{{ stop.name }}</div>
+        </div>
+      </div>
+    {% endfor %}
     <div class="route-point">
       <span class="route-marker to"></span>
       <div>

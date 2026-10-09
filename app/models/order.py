@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     DateTime,
@@ -76,6 +77,10 @@ class Order(Base, TimestampMixin):
     from_city: Mapped[Optional[str]] = mapped_column(String(128))
     to_city: Mapped[Optional[str]] = mapped_column(String(128))
     flight_or_train: Mapped[Optional[str]] = mapped_column(String(128))
+    #: Промежуточные пункты между «откуда» и «куда» по порядку: «Пермь — Соликамск — Пермь Аэропорт».
+    #: ``[{"name": "Соликамск", "lat": 59.6, "lon": 56.8}]``; координаты проставляет геокодер,
+    #: расстояние считается по всему пути через эти точки. NULL — остановок нет.
+    via_points: Mapped[Optional[list]] = mapped_column(JSON(none_as_null=True))
 
     # --- Параметры поездки ---
     car_class: Mapped[Optional[str]] = mapped_column(String(64))

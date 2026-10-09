@@ -57,7 +57,7 @@ def classify(order: Order) -> Optional[tuple[str, str]]:
     if order.from_lat is None or order.to_lat is None:
         return None
     same = (order.from_lat, order.from_lon) == (order.to_lat, order.to_lon)
-    if same:
+    if same and not order.via_points:
         # Поездка внутри одного города («ЖД → аэропорт») или туда-обратно: расстояния
         # нет по смыслу, это не ошибка. Подозрительно только «разные города — одна точка».
         if order.from_city_key and order.from_city_key == order.to_city_key:

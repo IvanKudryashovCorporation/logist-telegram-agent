@@ -15,7 +15,8 @@ import asyncio
 import logging
 import re
 import time
-from typing import Optional
+from itertools import pairwise
+from typing import Optional, Sequence
 
 import httpx
 
@@ -53,16 +54,21 @@ class RoutingUnavailable(Exception):
     """Сеть/OSRM недоступны — заказ НЕ помечаем проверенным, попробуем позже."""
 
 
-async def road_distance_km(origin: Coords, destination: Coords) -> Optional[float]:
+async def road_distance_km(
+    origin: Coords, destination: Coords, via: Sequence[Coords] = ()
+) -> Optional[float]:
     """Длина маршрута по дорогам, км. ``None`` — маршрута нет (море, нет дороги).
+
+    ``via`` — остановки по пути: расстояние считается по всему маршруту «откуда → остановки → куда»,
+    а не по прямой между концами (поездка «Пермь — Соликамск — Пермь Аэропорт» начинается и
+    кончается в одном городе, но это 400 км пути).
 
     Бросает :class:`RoutingUnavailable` при сбое сети или ответе сервера 429/5xx.
     """
     global _last_request_at
-    url = (
-        f"{settings.routing_url.rstrip('/')}/route/v1/driving/"
-        f"{origin[1]:.6f},{origin[0]:.6f};{destination[1]:.6f},{destination[0]:.6f}"
-    )
+    points = [origin, *via, destination]
+    path = ";".join(f"{lon:.6f},{lat:.6f}" for lat, lon in points)
+    url = f"{settings.routing_url.rstrip('/')}/route/v1/driving/{path}"
     async with _lock:
         wait = _MIN_INTERVAL - (time.monotonic() - _last_request_at)
         if wait > 0:
@@ -85,7 +91,7 @@ async def road_distance_km(origin: Coords, destination: Coords) -> Optional[floa
         payload = response.json()
     except ValueError as exc:
         raise RoutingUnavailable("не JSON в ответе") from exc
-    return parse_distance_km(payload, origin, destination)
+    return parse_distance_km(payload, origin, destination, via)
 
 
 def parse_stated_km(text: Optional[str]) -> Optional[float]:
@@ -107,7 +113,9 @@ def parse_stated_km(text: Optional[str]) -> Optional[float]:
     return value if 5 <= value <= 5000 else None
 
 
-def parse_distance_km(payload: dict, origin: Coords, destination: Coords) -> Optional[float]:
+def parse_distance_km(
+    payload: dict, origin: Coords, destination: Coords, via: Sequence[Coords] = ()
+) -> Optional[float]:
     """Достаёт километры из ответа OSRM и отбрасывает заведомо неверные."""
     if payload.get("code") != "Ok":
         # NoRoute / NoSegment / InvalidQuery — для этой пары точек дороги нет.
@@ -116,16 +124,19 @@ def parse_distance_km(payload: dict, origin: Coords, destination: Coords) -> Opt
         meters = float(payload["routes"][0]["distance"])
     except (KeyError, IndexError, TypeError, ValueError):
         return None
-    return check_km(meters / 1000, origin, destination)
+    return check_km(meters / 1000, origin, destination, via)
 
 
-def check_km(km: float, origin: Coords, destination: Coords) -> Optional[float]:
+def check_km(km: float, origin: Coords, destination: Coords, via: Sequence[Coords] = ()) -> Optional[float]:
     """Проверяет километраж на здравый смысл относительно прямой между точками.
 
     Используется и для свежего ответа OSRM, и для расстояния, взятого из другого
     заказа с теми же точками: неверное число иначе перекочёвывает от заказа к заказу.
+    С остановками «прямая» — это ломаная через все точки: иначе круговой маршрут
+    (начало и конец в одном городе) выглядел бы как дорога длиннее прямой в сотни раз.
     """
-    straight = haversine_km(origin, destination)
+    chain = [origin, *via, destination]
+    straight = sum(haversine_km(a, b) for a, b in pairwise(chain))
     if km < straight * _MIN_RATIO:
         log.warning("OSRM вернул %.0f км при прямой %.0f км — отбрасываю", km, straight)
         return None

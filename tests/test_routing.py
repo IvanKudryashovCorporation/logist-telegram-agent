@@ -55,7 +55,7 @@ def test_parse_distance_rejects_road_much_shorter_than_straight_line():
 def fake_osrm(monkeypatch):
     calls: list[tuple] = []
 
-    async def fake(origin, destination):
+    async def fake(origin, destination, via=()):
         calls.append((origin, destination))
         return 243.5
 
@@ -94,7 +94,7 @@ async def test_same_pair_of_points_is_requested_only_once(make_order, fake_osrm)
 
 
 async def test_unavailable_service_leaves_order_for_a_retry(make_order, monkeypatch):
-    async def down(origin, destination):
+    async def down(origin, destination, via=()):
         raise routing.RoutingUnavailable("HTTP 429")
 
     monkeypatch.setattr(routing, "road_distance_km", down)
@@ -108,7 +108,7 @@ async def test_unavailable_service_leaves_order_for_a_retry(make_order, monkeypa
 
 
 async def test_no_route_marks_order_checked_without_distance(make_order, monkeypatch):
-    async def nothing(origin, destination):
+    async def nothing(origin, destination, via=()):
         return None
 
     monkeypatch.setattr(routing, "road_distance_km", nothing)

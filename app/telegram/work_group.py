@@ -44,6 +44,7 @@ from app.models import (
     ParseOutcome,
 )
 from app.parsing import stats as parse_stats
+from app.parsing.closed import ACTION_CLOSED_LOCK, has_closed_lock
 from app.parsing.llm_parser import parse_orders, text_hash
 from app.parsing.order_builder import apply_parsed_fields, resolve_pickup_at
 from app.parsing.prefilter import PrefilterDecision, prefilter
@@ -333,6 +334,18 @@ async def upsert_order_text(
             ).scalars().all()
         }
 
+        free_existing = [o for o in existing_by_index.values() if not o.taken_by_token]
+        if has_closed_lock(text) and len(existing_by_index) == 1:
+            # Диспетчер дописал 🔒 — заказ взяли: снимаем с ленты. Водителя, который его уже
+            # взял, это не касается — его заказ остаётся в «Мои заказах».
+            await _cancel_orders(db, free_existing, dispatcher_tg_id, action=ACTION_CLOSED_LOCK)
+            await parse_stats.record(
+                db, ParseOutcome.NOT_ORDER, chat_id=chat_id, message_id=message_id,
+                text_hash=text_hash(text), error="closed_lock",
+            )
+            await db.commit()
+            return []
+
         decision: PrefilterDecision = (
             prefilter(text)
             if settings.prefilter_enabled
@@ -421,6 +434,14 @@ async def upsert_order_text(
         return result_ids
 
 
+def _is_closed(parsed: ParsedOrder, text: str, count: int) -> bool:
+    """Закрытый замок относится к этой заявке: к её фрагменту текста, а у одиночной — ко всему тексту.
+
+    В списке из нескольких заявок замок у каждой свой: закрытая и открытая стоят рядом."""
+    snippet = (parsed.raw_snippet or "").strip()
+    return has_closed_lock(snippet if snippet else (text if count == 1 else ""))
+
+
 async def _cancel_orders(db, orders, dispatcher_tg_id: Optional[int], *, action: str) -> None:
     """Снимает заказы с ленты (правка/удаление сообщения в Telegram)."""
     for order in orders:
@@ -454,6 +475,13 @@ async def _save_orders(
     for index, parsed in enumerate(parsed_list):
         existing = existing_by_index.get(index)
         is_new_order = existing is None
+
+        if _is_closed(parsed, text, len(parsed_list)):
+            # Заявка помечена закрытым замком — её уже взяли: новую не создаём, живую снимаем.
+            if existing is not None and not existing.taken_by_token:
+                await _cancel_orders(db, [existing], dispatcher_tg_id, action=ACTION_CLOSED_LOCK)
+            log.info("Заявка с закрытым замком пропущена (chat=%s msg=%s sub=%s)", chat_id, message_id, index)
+            continue
 
         if is_new_order and not (parsed.from_city or parsed.to_city):
             log.info(

@@ -55,6 +55,15 @@ async def route_pending(*, limit: Optional[int] = None) -> int:
     return processed
 
 
+def via_coords(order: Order) -> list:
+    """Координаты остановок заказа, которые удалось найти (без них маршрут считается без этой точки)."""
+    return [
+        (point["lat"], point["lon"])
+        for point in (order.via_points or [])
+        if point.get("lat") is not None and point.get("lon") is not None
+    ]
+
+
 async def _known_distance(session, order: Order) -> Optional[float]:
     """Расстояние из другого заказа с теми же координатами (None — такого нет).
 
@@ -67,6 +76,7 @@ async def _known_distance(session, order: Order) -> Optional[float]:
             .where(
                 Order.id != order.id,
                 Order.distance_km.is_not(None),
+                Order.via_points.is_(None),  # расстояние «через остановки» — не для заказов без них
                 Order.geo_version == geo.GEO_VERSION,
                 Order.from_lat == order.from_lat,
                 Order.from_lon == order.from_lon,
@@ -104,15 +114,18 @@ async def _route_order(session, order: Order) -> None:
     origin = (order.from_lat, order.from_lon)
     destination = (order.to_lat, order.to_lon)
     order_id = order.id
+    via = via_coords(order)
 
-    distance = await _known_distance(session, order)
+    # С остановками расстояние — по всему пути; донор с теми же концами тут не годится, а
+    # начало и конец могут совпасть (круговая поездка), и это не «одна точка».
+    distance = None if via else await _known_distance(session, order)
     if distance is not None:
         # Неправдоподобное число из другого заказа не берём — спросим OSRM заново.
         checked = routing.check_km(distance, origin, destination)
         if checked is None or abs(checked - distance) > 0.05:
             distance = None
-    if distance is None and origin != destination:
-        distance = await routing.road_distance_km(origin, destination)
+    if distance is None and (origin != destination or via):
+        distance = await routing.road_distance_km(origin, destination, via)
 
     # Диспетчер сам написал километраж («Расстояние: 70 км»). Если наш расчёт сильно
     # расходится или его нет — верим написанному: чаще всего это значит, что одно из
@@ -120,14 +133,14 @@ async def _route_order(session, order: Order) -> None:
     stated = routing.parse_stated_km(order.raw_text)
     if (
         stated
-        and origin != destination
+        and (origin != destination or via)
         and (distance is None or abs(distance - stated) / stated > routing.STATED_TOLERANCE)
     ):
         distance = stated
 
     # Цена за км нереальна — возможно, место найдено не то. Пробуем другую пару мест.
     new_coords = {}
-    if distance and not stated and origin != destination:
+    if distance and not stated and origin != destination and not via:
         pair = await _better_pair(session, order, distance)
         if pair is not None:
             alt_distance = await routing.road_distance_km(pair[0].coords, pair[1].coords)
@@ -171,7 +184,7 @@ async def heal_stale_routes() -> int:
             await session.execute(
                 select(
                     Order.id, Order.from_lat, Order.from_lon, Order.to_lat, Order.to_lon,
-                    Order.distance_km, Order.raw_text,
+                    Order.distance_km, Order.raw_text, Order.via_points,
                 ).where(
                     Order.distance_km.is_not(None),
                     Order.from_lat.is_not(None),
@@ -180,10 +193,11 @@ async def heal_stale_routes() -> int:
             )
         ).all()
         bad = []
-        for order_id, flat, flon, tlat, tlon, km, raw_text in rows:
-            if (flat, flon) == (tlat, tlon) or routing.parse_stated_km(raw_text):
+        for order_id, flat, flon, tlat, tlon, km, raw_text, via_points in rows:
+            via = [(p["lat"], p["lon"]) for p in (via_points or []) if p.get("lat") is not None]
+            if ((flat, flon) == (tlat, tlon) and not via) or routing.parse_stated_km(raw_text):
                 continue
-            checked = routing.check_km(km, (flat, flon), (tlat, tlon))
+            checked = routing.check_km(km, (flat, flon), (tlat, tlon), via)
             if checked is None or abs(checked - km) > 0.05:
                 bad.append(order_id)
         if bad:

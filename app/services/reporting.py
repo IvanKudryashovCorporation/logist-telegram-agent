@@ -180,6 +180,7 @@ HIDDEN_REASONS = {
     "duplicate_cancelled_on_edit": "После правки сообщения заявка стала повтором — двойник снят сразу",
     "cancelled_message_deleted": "Диспетчер удалил сообщение в Telegram",
     "cancelled_edited_out": "Диспетчер отредактировал сообщение, заявки в нём не осталось",
+    "cancelled_closed_lock": "Диспетчер поставил замок 🔒 — заказ взяли",
     "hidden_by_admin": "Скрыта вручную в админке",
 }
 

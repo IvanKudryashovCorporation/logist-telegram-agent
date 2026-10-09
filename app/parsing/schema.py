@@ -76,6 +76,16 @@ _ORDER_ITEM_PROPERTIES = {
     },
     "to_city": {"type": "string", "description": "Город/населённый пункт назначения."},
     "to_address": {"type": "string", "description": "Полный адрес назначения, если указан. Иначе пусто."},
+    "via_points": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": (
+            "Промежуточные пункты маршрута по порядку: города или места, куда нужно заехать между "
+            "«откуда» и «куда». «Пермь - Соликамск - Пермь Аэропорт»: from_city «Пермь», via_points "
+            "[«Соликамск»], to_city «Пермь Аэропорт». Только остановки по пути, не адреса внутри города "
+            "и не повтор «откуда»/«куда». Пусто, если остановок нет."
+        ),
+    },
     "flight_or_train": {
         "type": "string",
         "description": "Номер рейса или поезда, если указан. Иначе пусто.",
@@ -151,6 +161,7 @@ class ParsedOrder(BaseModel):
     from_address: Optional[str] = None
     to_city: Optional[str] = None
     to_address: Optional[str] = None
+    via_points: list[str] = []
     flight_or_train: Optional[str] = None
     car_class: Optional[str] = None
     passengers: Optional[int] = None
