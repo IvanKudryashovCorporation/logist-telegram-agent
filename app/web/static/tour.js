@@ -129,6 +129,7 @@
     if (target && visible(target)) {
       var r = target.getBoundingClientRect();
       hole.style.display = 'block';
+      root.classList.remove('no-target');
       hole.style.left = (r.left - pad) + 'px';
       hole.style.top = (r.top - pad) + 'px';
       hole.style.width = (r.width + pad * 2) + 'px';
@@ -140,6 +141,7 @@
       left = Math.max(12, Math.min(r.left + r.width / 2 - tw / 2, vw - tw - 12));
     } else {
       hole.style.display = 'none'; // без цели: затемнение и карточка по центру
+      root.classList.add('no-target');
       left = (vw - tw) / 2;
       top = Math.max(12, (vh - th) / 2);
     }

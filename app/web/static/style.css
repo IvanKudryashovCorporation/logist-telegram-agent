@@ -889,6 +889,7 @@ input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), select, t
 /* ---------- Обучение для новых водителей (tour.js) ---------- */
 .tour-root { position: fixed; inset: 0; z-index: 1000; }
 .tour-blocker { position: absolute; inset: 0; background: transparent; }
+.tour-root.no-target .tour-blocker { background: rgba(8, 10, 16, 0.72); }
 .tour-hole {
   position: absolute; border-radius: 12px; pointer-events: none;
   box-shadow: 0 0 0 9999px rgba(8, 10, 16, 0.72), 0 0 0 2px var(--accent);
