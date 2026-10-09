@@ -41,6 +41,7 @@ import httpx
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
 
 from app.config import settings
+from app.parsing.price import extract_price
 from app.parsing.schema import PARSE_ORDERS_TOOL_OPENAI, ParsedOrder
 from app.timeutil import now_msk_naive
 
@@ -107,6 +108,8 @@ missing_fields: сайт покажет такой заказ как «в бли
 «7.5к» — это 25000, 14000, 7500). Но если сумма уже полная (от 1000), а рядом
 стоит лишнее «т» / «тыс» / «т.р.» («4000 т», «12000т», «2000 т.р.») — цена 4000,
 12000 и 2000: на 1000 больше не умножай. Цена поездки не бывает больше нескольких сотен тысяч.
+Цена — это любая названная сумма за поездку, даже если рядом написано «водителю», «вод», «на руки»,
+«за рейс» («30000 водителю» — цена 30000). Если в заявке есть сумма, не оставляй цену пустой.
 
 Сегодняшняя дата: {today}."""
 
@@ -236,6 +239,18 @@ async def _call_llm(text: str, today: str):
     )
 
 
+def fill_missing_prices(orders: list[ParsedOrder], text: str) -> None:
+    """Модель иногда отвечает price=null на очевидное «30000 водителю» — добираем цену из текста."""
+    for order in orders:
+        if order.client_price is not None:
+            continue
+        snippet = (order.raw_snippet or "").strip()
+        price = extract_price(snippet) or (extract_price(text) if len(orders) == 1 else None)
+        if price is not None:
+            log.warning("Цену не вернула модель — взята из текста: %s ₽ (%s → %s)", price, order.from_city, order.to_city)
+            order.client_price = price
+
+
 def _extract_orders(response) -> list[ParsedOrder]:
     tool_calls = response.choices[0].message.tool_calls or []
     for call in tool_calls:
@@ -271,6 +286,7 @@ async def parse_orders(text: str) -> ParseResult:
         try:
             response = await _call_llm(text, today)
             orders = _extract_orders(response)
+            fill_missing_prices(orders, text)
         except Exception as exc:
             last_error = exc
             if not _is_transient(exc):
