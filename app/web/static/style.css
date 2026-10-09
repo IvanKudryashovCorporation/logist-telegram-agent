@@ -884,3 +884,30 @@ input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), select, t
 
 /* Атрибут hidden должен скрывать элемент, даже если у класса задан display. */
 [hidden] { display: none !important; }
+
+/* ---------- Обучение для новых водителей (tour.js) ---------- */
+.tour-root { position: fixed; inset: 0; z-index: 1000; }
+.tour-blocker { position: absolute; inset: 0; background: transparent; }
+.tour-hole {
+  position: absolute; border-radius: 12px; pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(8, 10, 16, 0.72), 0 0 0 2px var(--accent);
+  transition: left .2s, top .2s, width .2s, height .2s;
+}
+.tour-tip {
+  position: absolute; box-sizing: border-box; padding: 16px 18px;
+  background: var(--card); color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: 0 12px 40px rgba(0, 0, 0, .35);
+}
+.tour-step { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.tour-title { font-size: 17px; font-weight: 700; margin-bottom: 6px; }
+.tour-text { font-size: 14px; line-height: 1.45; }
+.tour-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
+.tour-nav { display: flex; gap: 8px; margin-left: auto; }
+.tour-tip button { font: inherit; font-size: 14px; border-radius: 10px; padding: 8px 14px; cursor: pointer; }
+.tour-next { background: var(--btn-bg); color: var(--btn-text); border: 1px solid var(--btn-border); }
+.tour-back { background: transparent; color: var(--text); border: 1px solid var(--border); }
+.tour-tip .tour-skip { background: none; border: none; color: var(--muted); padding-left: 0; }
+.tour-skip:hover { color: var(--text); }
+.tour-tip button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#tourBtn { font-weight: 700; font-size: 15px; }
+@media (prefers-reduced-motion: reduce) { .tour-hole { transition: none; } }
