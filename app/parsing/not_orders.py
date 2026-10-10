@@ -39,9 +39,18 @@ _RECRUIT_RE: Final[re.Pattern[str]] = re.compile(
 )
 
 
+#: Крест рядом со словом о закрытии: «❌закрыт❌», «ОТМЕНА КЛИЕНТОМ ❌», «❌ Отдан». Один-два креста сами по себе
+#: ничего не значат («страховка❌❌» — страховка не включена), поэтому нужно ещё и слово.
+_CANCEL_WORD_RE: Final[re.Pattern[str]] = re.compile(
+    r"❌[^\n]{0,20}(?:закрыт|отмен|отдан|не\s*актуал)"
+    r"|(?:закрыт|отмен|отдан|не\s*актуал)[^\n]{0,20}❌",
+    re.IGNORECASE,
+)
+
+
 def has_cancel_mark(text: Optional[str]) -> bool:
-    """В тексте три и более ❌ подряд: диспетчер пометил заявку неактуальной."""
-    return bool(text) and bool(_CANCEL_MARK_RE.search(text))
+    """Диспетчер пометил заявку неактуальной: три и более ❌ подряд или ❌ рядом со словом «закрыт»/«отмена»."""
+    return bool(text) and bool(_CANCEL_MARK_RE.search(text) or _CANCEL_WORD_RE.search(text))
 
 
 def is_driver_offer(text: Optional[str]) -> bool:

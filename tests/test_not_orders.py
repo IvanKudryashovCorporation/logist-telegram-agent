@@ -115,3 +115,31 @@ async def test_cleanup_cancels_saved_non_orders_but_not_real_or_taken_ones(sessi
 async def test_prompt_example_does_not_break_parse_result_type():
     # страховка: ParseResult/ParsedOrder по-прежнему собираются (схема не менялась)
     assert ParseResult(orders=[ParsedOrder(from_city="А", to_city="Б")]).orders
+
+
+def test_cross_next_to_a_closing_word_cancels_but_a_bare_cross_does_not():
+    assert has_cancel_mark("62000+ платка 💰\n\n❌закрыт❌")  # заказ №6373
+    assert has_cancel_mark("ОТМЕНА КЛИЕНТОМ ❌")
+    assert not has_cancel_mark("₽ + платная дорога + страховка❌❌")  # заказ №8267: страховка не включена
+    assert not has_cancel_mark("Животные ❌")
+
+
+ORDER_5584 = (
+    "📅 Заказ на 16.10.2026 в 10:00\n\n📍 Откуда: Мариуполь\n\n🏁 Куда: Волгоград\n\n👥 Пассажиров: 2\n\n"
+    "🤝 Водителю на руки: 20 700 ₽\n\n⚠️ Заказ закрыт!\n\n🔒🔒🔒"
+)
+
+
+async def test_cleanup_cancels_orders_closed_with_a_lock_before_the_rule_existed(session, make_order):
+    closed = await make_order(from_city="Мариуполь", to_city="Волгоград", raw_text=ORDER_5584)
+    open_lock = await make_order(from_city="Курск", to_city="Тольятти", raw_text="Курск Тольятти 30000 🔓 свободно")
+    insurance = await make_order(from_city="Курск", to_city="Тольятти", raw_text="30000 + страховка❌❌")
+
+    assert await cancel_non_orders() == 1
+
+    for order in (closed, open_lock, insurance):
+        await session.refresh(order)
+    assert closed.status == OrderStatus.CANCELLED
+    assert open_lock.status == OrderStatus.NEW and insurance.status == OrderStatus.NEW
+    actions = {a.action for a in (await session.execute(select(ActionLog))).scalars().all()}
+    assert "cancelled_closed_lock" in actions

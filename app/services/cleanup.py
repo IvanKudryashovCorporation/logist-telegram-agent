@@ -34,6 +34,7 @@ from app.models import (
     ParseStat,
     SubscriptionNotification,
 )
+from app.parsing.closed import has_closed_lock
 from app.parsing.not_orders import non_order_reason
 from app.parsing.order_builder import FAR_FUTURE, correct_far_year, has_critical_gaps
 from app.services.dedupe import cancel_duplicate_orders
@@ -363,7 +364,8 @@ async def prune_old_stats(*, retention_days: Optional[int] = None) -> int:
 
 async def cancel_non_orders() -> int:
     """Снимает с ленты уже сохранённые заказы, которые не заказы: предложения водителей и заявки
-    с пометкой ❌❌❌ (диспетчер дописал её после публикации). Взятые водителем не трогаем."""
+    с пометкой «закрыто» (🔒, ❌❌❌, «❌закрыт❌»), которую диспетчер дописал после публикации.
+    Взятые водителем не трогаем."""
     cancelled = 0
     async with SessionLocal() as session:
         rows = (
@@ -376,7 +378,9 @@ async def cancel_non_orders() -> int:
             )
         ).all()
         for order_id, raw_text in rows:
-            reason = non_order_reason(raw_text)
+            # Закрытый замок 🔒 снимает заказ всегда: так диспетчер помечает «взяли». Живой разбор делает то же при
+            # правке, но заказы, закрытые до появления этого правила, добираем здесь.
+            reason = non_order_reason(raw_text) or ("closed_lock" if has_closed_lock(raw_text) else None)
             if reason is None:
                 continue
             await session.execute(update(Order).where(Order.id == order_id).values(status=OrderStatus.CANCELLED))
