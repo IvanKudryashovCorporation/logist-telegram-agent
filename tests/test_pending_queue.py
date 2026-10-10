@@ -417,3 +417,31 @@ async def test_unknown_group_without_username_still_fails_with_the_real_reason(s
     assert await queue_worker.process_one(client, pending.id) is False
 
     assert "Could not find the input entity" in (await _reload_pending(pending.id)).last_error
+
+
+async def test_worker_processes_a_batch_concurrently_and_survives_one_failure(session, monkeypatch):
+    import asyncio
+
+    texts = {9100 + i: f"Курск — Тольятти {30000 + i}" for i in range(6)}
+    pendings = {mid: await _ready(session, mid, text) for mid, text in texts.items()}
+    running = {"now": 0, "peak": 0}
+
+    async def fake_upsert(**kwargs):
+        running["now"] += 1
+        running["peak"] = max(running["peak"], running["now"])
+        await asyncio.sleep(0.05)
+        running["now"] -= 1
+        if kwargs["message_id"] == 9103:
+            raise RuntimeError("boom")
+        return [1]
+
+    monkeypatch.setattr(queue_worker, "upsert_order_text", fake_upsert)
+    client = FakeClient({mid: FakeMessage(text) for mid, text in texts.items()})
+
+    processed = await queue_worker.process_due_once(client, limit=10, concurrency=3)
+
+    assert processed == 6
+    assert 1 < running["peak"] <= 3  # параллельно, но не больше заданного
+    statuses = {mid: (await _reload_pending(p.id)).status for mid, p in pendings.items()}
+    assert statuses[9103] != PendingStatus.DONE  # упавшее осталось в очереди на повтор
+    assert all(s == PendingStatus.DONE for mid, s in statuses.items() if mid != 9103)

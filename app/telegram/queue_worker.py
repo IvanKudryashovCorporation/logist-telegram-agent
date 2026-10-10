@@ -144,18 +144,37 @@ ClientPicker = Callable[[int], TelegramClient]
 
 
 async def process_due_once(
-    client: TelegramClient, *, limit: int = 10, client_for: Optional[ClientPicker] = None
+    client: TelegramClient,
+    *,
+    limit: Optional[int] = None,
+    client_for: Optional[ClientPicker] = None,
+    concurrency: Optional[int] = None,
 ) -> int:
     """Один проход по сообщениям с наступившим сроком. Возвращает число обработанных.
 
     ``client_for`` — если группы читаются разными аккаунтами, сообщение надо
     перечитывать тем клиентом, у которого есть доступ к чату.
+
+    Сообщения разбираются по ``concurrency`` штук одновременно (по умолчанию из настроек): очередь
+    после сбоя провайдера большая, и по одному она разбиралась бы часами.
     """
+    limit = limit if limit is not None else settings.queue_batch_size
+    workers = max(1, concurrency if concurrency is not None else settings.queue_concurrency)
     async with SessionLocal() as session:
         due = await pending_queue.fetch_due(session, limit=limit)
         due_items = [(item.id, item.chat_id) for item in due]
-    for pending_id, chat_id in due_items:
-        await process_one(client_for(chat_id) if client_for else client, pending_id)
+
+    gate = asyncio.Semaphore(workers)
+
+    async def _one(pending_id: int, chat_id: int) -> None:
+        async with gate:
+            try:
+                await process_one(client_for(chat_id) if client_for else client, pending_id)
+            except Exception:
+                # Сбой одного сообщения не должен обрывать остальные: оно останется в очереди.
+                log.exception("Очередь: необработанная ошибка в записи %s", pending_id)
+
+    await asyncio.gather(*(_one(pending_id, chat_id) for pending_id, chat_id in due_items))
     return len(due_items)
 
 

@@ -78,7 +78,11 @@ class Settings(BaseSettings):
     #: Задержка первой попытки, секунд; дальше растёт экспоненциально.
     queue_base_delay_seconds: int = 60
     #: Как часто воркер просматривает очередь, секунд.
-    queue_poll_seconds: int = 60
+    queue_poll_seconds: int = 15
+    #: Сколько сообщений берёт за один проход и сколько разбирает одновременно. Упирается в лимиты
+    #: LLM (429), поэтому параллельность невелика: лишнее уйдёт на повторы и в платный резерв.
+    queue_batch_size: int = 30
+    queue_concurrency: int = 3
 
     # БД
     database_url: str = "sqlite+aiosqlite:///./logist.db"
