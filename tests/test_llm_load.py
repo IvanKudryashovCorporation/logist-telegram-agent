@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import select
 
 from app.config import settings
-from app.models import ParseOutcome, ParseStat
+from app.models import Order, ParseOutcome, ParseStat
 from app.parsing import llm_parser
 from app.parsing.llm_parser import ParseResult, cache_text, parse_orders
 from app.parsing.schema import ParsedOrder
@@ -175,3 +175,91 @@ async def test_fresh_queued_message_is_parsed_normally(session, monkeypatch):
         sent_at=now_utc_naive() - timedelta(minutes=10),
     )
     assert len(ids) == 1
+
+
+# --- Точные копии заявки отсеиваются без LLM -----------------------------------------------
+
+
+async def _twin_setup(session, make_order, **order_fields):
+    from app.parsing.llm_parser import text_key
+
+    order = await make_order(from_city="Курск", to_city="Тольятти", price="30000", raw_text="x", **order_fields)
+    order.text_key = text_key("Курск Тольятти 30000 водителю")
+    await session.commit()
+    return order
+
+
+def _forbid_llm(monkeypatch):
+    called = []
+
+    async def fake_parse(text):
+        called.append(text)
+        return ParseResult(orders=[ParsedOrder(from_city="Курск", to_city="Тольятти", client_price=30000)])
+
+    monkeypatch.setattr(work_group, "parse_orders", fake_parse)
+    return called
+
+
+async def test_exact_copy_of_a_live_order_skips_llm(session, make_order, monkeypatch):
+    original = await _twin_setup(session, make_order)
+    called = _forbid_llm(monkeypatch)
+
+    ids = await work_group.upsert_order_text(
+        chat_id=-100950, message_id=10, text="🚖 курск  Тольятти 30000 водителю",
+    )
+
+    assert ids == [original.id] and called == []
+    assert len((await session.execute(select(Order))).scalars().all()) == 1
+
+
+async def test_copy_of_a_cancelled_order_goes_to_llm(session, make_order, monkeypatch):
+    from app.models import OrderStatus
+
+    original = await _twin_setup(session, make_order, status=OrderStatus.CANCELLED)
+    called = _forbid_llm(monkeypatch)
+
+    await work_group.upsert_order_text(chat_id=-100950, message_id=11, text="Курск Тольятти 30000 водителю")
+
+    assert called  # заказ снят, свежая публикация — новая возможность
+    assert original.id
+
+
+async def test_copy_posted_on_another_day_goes_to_llm(session, make_order, monkeypatch):
+    original = await _twin_setup(session, make_order)
+    original.created_at = now_utc_naive() - timedelta(hours=30)
+    await session.commit()
+    called = _forbid_llm(monkeypatch)
+
+    await work_group.upsert_order_text(chat_id=-100950, message_id=12, text="Курск Тольятти 30000 водителю")
+
+    assert called
+
+
+async def test_different_price_is_not_a_copy(session, make_order, monkeypatch):
+    await _twin_setup(session, make_order)
+    called = _forbid_llm(monkeypatch)
+
+    await work_group.upsert_order_text(chat_id=-100950, message_id=13, text="Курск Тольятти 35000 водителю")
+
+    assert called
+
+
+async def test_edit_is_never_treated_as_a_copy(session, make_order, monkeypatch):
+    await _twin_setup(session, make_order)
+    called = _forbid_llm(monkeypatch)
+
+    await work_group.upsert_order_text(
+        chat_id=-100950, message_id=14, text="Курск Тольятти 30000 водителю", is_edit=True,
+    )
+
+    assert called
+
+
+async def test_saved_order_gets_its_text_key(session, monkeypatch):
+    from app.parsing.llm_parser import text_key
+
+    _forbid_llm(monkeypatch)
+    ids = await work_group.upsert_order_text(chat_id=-100951, message_id=1, text="Курск Тольятти 30000 водителю")
+
+    order = (await session.execute(select(Order).where(Order.id == ids[0]))).scalar_one()
+    assert order.text_key == text_key("Курск Тольятти 30000 водителю")

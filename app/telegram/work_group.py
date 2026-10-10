@@ -45,14 +45,14 @@ from app.models import (
 )
 from app.parsing import stats as parse_stats
 from app.parsing.closed import ACTION_CLOSED_LOCK, has_closed_lock
-from app.parsing.llm_parser import parse_orders, text_hash
+from app.parsing.llm_parser import parse_orders, text_hash, text_key
 from app.parsing.order_builder import apply_parsed_fields, resolve_pickup_at
 from app.parsing.prefilter import PrefilterDecision, prefilter
 from app.parsing.schema import ParsedOrder
 from app.parsing.stale import is_stale
 from app.telegram import pending as pending_queue
 from app.telegram.dedup import mark_processed, unmark_processed
-from app.timeutil import now_utc_naive
+from app.timeutil import now_msk_naive, now_utc_naive
 
 log = logging.getLogger("agent.work_group")
 
@@ -295,6 +295,30 @@ async def _find_duplicate(
     return candidates[0] if candidates else None
 
 
+#: Копию заявки ищем только за этот срок и только в пределах одних московских суток: одинаковый
+#: текст «завтра в 10:00…», написанный в разные дни, — два разных заказа.
+_TEXT_DUPLICATE_WINDOW = timedelta(hours=12)
+
+
+async def _find_text_duplicate(db, text: str) -> Optional[Order]:
+    """Живой заказ, уже созданный из точно такого же текста (кроме регистра, эмодзи и пробелов)."""
+    now = now_utc_naive()
+    moscow_midnight = now_msk_naive().replace(hour=0, minute=0, second=0, microsecond=0)
+    since = max(now - _TEXT_DUPLICATE_WINDOW, moscow_midnight - timedelta(hours=3))
+    return (
+        await db.execute(
+            select(Order)
+            .where(
+                Order.text_key == text_key(text),
+                Order.created_at >= since,
+                Order.status.notin_((OrderStatus.CANCELLED, OrderStatus.AGREED, OrderStatus.EXPIRED)),
+            )
+            .order_by(Order.id)
+            .limit(1)
+        )
+    ).scalars().first()
+
+
 async def upsert_order_text(
     *,
     chat_id: int,
@@ -386,6 +410,25 @@ async def upsert_order_text(
                 "Предфильтр отсеял сообщение chat=%s msg=%s (%s)", chat_id, message_id, decision.reason
             )
             return []
+
+        if not is_edit and not existing_by_index:
+            twin = await _find_text_duplicate(db, text)
+            if twin is not None:
+                # Точная копия заявки, из которой уже есть живой заказ (в другой группе или повтор):
+                # LLM даст тот же разбор, а заказ всё равно будет признан дублем.
+                db.add(
+                    ActionLog(
+                        order_id=twin.id, actor=ActorType.DISPATCHER, actor_tg_id=dispatcher_tg_id,
+                        action="duplicate_skipped", details=f"chat={chat_id} msg={message_id} text_match",
+                    )
+                )
+                await parse_stats.record(
+                    db, ParseOutcome.DUPLICATE, chat_id=chat_id, message_id=message_id,
+                    text_hash=text_hash(text), orders_found=1, error=f"text_duplicate_of={twin.id}",
+                )
+                await db.commit()
+                log.info("Копия текста пропущена без LLM: заказ #%s (chat=%s msg=%s)", twin.id, chat_id, message_id)
+                return [twin.id]
 
         parse_result = await parse_orders(text)
         parsed_list = parse_result.orders
@@ -563,11 +606,13 @@ async def _save_orders(
                 dispatcher_tg_id=dispatcher_tg_id,
                 dispatcher_username=dispatcher_username,
                 raw_text=_order_raw_text(parsed, text),
+                text_key=text_key(text),
             )
             db.add(order)
         else:
             order = existing
             order.raw_text = _order_raw_text(parsed, text)
+            order.text_key = text_key(text)
 
         apply_parsed_fields(order, parsed)
         try:

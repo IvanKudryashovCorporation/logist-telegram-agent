@@ -175,6 +175,11 @@ def cache_text(text: str) -> str:
     return _DECORATION_RE.sub(" ", kept).strip()
 
 
+def text_key(text: str) -> str:
+    """Короткий отпечаток нормализованного текста: ключ «это та же заявка» для отсева копий."""
+    return hashlib.sha256(cache_text(text).encode("utf-8")).hexdigest()[:32]
+
+
 class _ParseCache:
     """LRU-кэш успешных разборов.
 

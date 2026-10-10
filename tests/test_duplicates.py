@@ -33,7 +33,10 @@ def _parse(monkeypatch, **fields):
     monkeypatch.setattr(work_group.settings, "prefilter_enabled", False)
 
 
-async def _post(chat_id, message_id, text="заявка", **dispatcher):
+async def _post(chat_id, message_id, text=None, **dispatcher):
+    # Разные сообщения — разные тексты (реальный текст даёт один и тот же разбор, а точные копии
+    # отсеиваются до LLM); ответ LLM в этих тестах подменяется, поэтому текст делаем уникальным.
+    text = text or f"заявка {chat_id} {message_id}"
     return await work_group.upsert_order_text(chat_id=chat_id, message_id=message_id, text=text, **dispatcher)
 
 
