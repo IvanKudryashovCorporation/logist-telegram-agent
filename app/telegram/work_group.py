@@ -328,9 +328,11 @@ async def upsert_order_text(
     dispatcher_username: Optional[str] = None,
     is_edit: bool = False,
     sent_at: Optional[datetime] = None,
+    urgent: bool = True,
 ) -> list[int]:
     """Разбирает текст сообщения и создаёт/обновляет заказы.
 
+    ``urgent=False`` — сообщение из очереди: при лимите основного LLM не идёт в резерв.
     ``sent_at`` — когда сообщение отправлено (наивный UTC). Нужен только для отложенных
     сообщений: протухшие пропускаются без вызова LLM (см. app.parsing.stale).
 
@@ -433,7 +435,8 @@ async def upsert_order_text(
                 log.info("Копия текста пропущена без LLM: заказ #%s (chat=%s msg=%s)", twin.id, chat_id, message_id)
                 return [twin.id]
 
-        parse_result = await parse_orders(text)
+        # Несрочное (из очереди) сообщение при лимите провайдера ждёт, а не уходит в платный резерв.
+        parse_result = await (parse_orders(text) if urgent else parse_orders(text, urgent=False))
         parsed_list = parse_result.orders
 
         if not parsed_list:

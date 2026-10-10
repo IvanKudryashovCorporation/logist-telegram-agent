@@ -101,6 +101,7 @@ async def process_one(client: TelegramClient, pending_id: int) -> bool:
             dispatcher_username=getattr(sender, "username", None),
             is_edit=is_edit,
             sent_at=_naive_utc(getattr(message, "date", None)),
+            urgent=False,
         )
     except Exception as exc:  # noqa: BLE001
         detail = f"{type(exc).__name__}: {exc}"

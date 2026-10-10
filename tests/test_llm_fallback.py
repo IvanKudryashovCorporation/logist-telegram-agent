@@ -125,3 +125,60 @@ def test_proxy_is_passed_only_when_configured():
     assert plain._mounts == {}  # без прокси клиент ходит напрямую (и не берёт HTTP_PROXY из окружения)
     assert len(proxied._mounts) > 0
     assert len(socks._mounts) > 0
+
+
+# --- Основной работает почти всегда, резерв — редко --------------------------------------------
+
+
+async def test_rate_limit_on_a_queued_message_waits_instead_of_using_the_fallback(monkeypatch):
+    monkeypatch.setattr(llm_parser, "_fallback_client", object())
+    seen = _patch_calls(monkeypatch, _status_error(RateLimitError, 429), _response([_ORDER]))
+
+    with pytest.raises(ParseUnavailable) as info:
+        await parse_orders("Курск Тольятти 30000 из очереди", urgent=False)
+
+    assert seen == ["primary"]  # платный резерв не тронут
+    assert info.value.rate_limited is True
+
+
+async def test_auth_error_on_a_queued_message_still_uses_the_fallback(monkeypatch):
+    monkeypatch.setattr(llm_parser, "_fallback_client", object())
+    seen = _patch_calls(monkeypatch, _status_error(AuthenticationError, 401), _response([_ORDER]))
+
+    result = await parse_orders("Курск Тольятти 30000 из очереди 401", urgent=False)
+
+    assert seen == ["primary", "fallback"] and result.orders  # ключ отвергнут — это поломка, а не «подожди»
+
+
+def test_retry_after_is_honoured_and_capped(monkeypatch):
+    monkeypatch.setattr(settings, "llm_retry_after_cap_seconds", 30.0)
+    request = httpx.Request("POST", "https://example.test/v1")
+
+    def limited(retry_after):
+        headers = {"retry-after": retry_after} if retry_after is not None else {}
+        return RateLimitError("slow", response=httpx.Response(429, request=request, headers=headers), body=None)
+
+    assert 7.0 <= llm_parser._retry_delay(limited("7"), 1) < 7.5
+    assert llm_parser._retry_delay(limited("600"), 1) < 30.5  # потолок
+    assert llm_parser._retry_delay(limited(None), 1) >= 5.0  # заголовка нет — не секундная пауза
+    assert llm_parser._retry_delay(ValueError("x"), 1) < 2  # не лимит — обычная короткая пауза
+
+
+async def test_primary_requests_run_at_most_concurrency_at_a_time(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(llm_parser, "_primary_gate", asyncio.Semaphore(2))
+    state = {"now": 0, "peak": 0}
+
+    async def slow(text, today, fallback=False):
+        state["now"] += 1
+        state["peak"] = max(state["peak"], state["now"])
+        await asyncio.sleep(0.03)
+        state["now"] -= 1
+        return _response([_ORDER])
+
+    monkeypatch.setattr(llm_parser, "_call_llm", slow)
+
+    await asyncio.gather(*(parse_orders(f"Курск Тольятти {30000 + i} параллельно") for i in range(8)))
+
+    assert state["peak"] == 2  # лишние запросы ждут очереди, а не дают лимит 429

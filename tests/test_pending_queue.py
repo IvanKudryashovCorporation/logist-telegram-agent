@@ -467,3 +467,19 @@ async def test_worker_skips_messages_of_a_disabled_group(session, monkeypatch):
     assert called == []  # заказ из убранной группы не создаётся
     reloaded = await _reload_pending(pending.id)
     assert reloaded.status == PendingStatus.DONE and reloaded.last_error == "group_disabled"
+
+
+async def test_queued_messages_are_parsed_as_not_urgent(session, monkeypatch):
+    await _ready(session, 9300, "Курск — Тольятти 30000")
+    captured = {}
+
+    async def fake_upsert(**kwargs):
+        captured.update(kwargs)
+        return [1]
+
+    monkeypatch.setattr(queue_worker, "upsert_order_text", fake_upsert)
+    client = FakeClient({9300: FakeMessage("Курск — Тольятти 30000")})
+
+    await queue_worker.process_due_once(client, limit=5)
+
+    assert captured["urgent"] is False  # лимит провайдера для очереди — повод подождать, а не платить за резерв

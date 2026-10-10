@@ -147,7 +147,14 @@ class ParseUnavailable(RuntimeError):
 
     Отличается от «сообщение не заявка» (там возвращается пустой список):
     это сигнал ВЫЗЫВАЮЩЕМУ коду отложить сообщение и попробовать позже.
+
+    ``rate_limited`` — провайдер ответил лимитом запросов (429): это не поломка, а «подожди»,
+    поэтому для несрочных сообщений резерв не включаем, а просто повторяем позже.
     """
+
+    def __init__(self, message: str = "", *, rate_limited: bool = False) -> None:
+        super().__init__(message)
+        self.rate_limited = rate_limited
 
 
 
@@ -240,6 +247,10 @@ class _ParseCache:
 
 _cache = _ParseCache(settings.parse_cache_size)
 
+#: Не больше стольких одновременных запросов к основному провайдеру: у бесплатных тарифов жёсткий лимит
+#: запросов, и лишняя параллельность даёт 429, а не скорость. Лишние запросы просто ждут своей очереди.
+_primary_gate = asyncio.Semaphore(max(1, settings.llm_concurrency))
+
 
 def cache_stats() -> dict[str, int]:
     """Счётчики попаданий в кэш — видно в /admin и в scripts/parse_stats.py."""
@@ -265,6 +276,26 @@ def _is_transient(exc: BaseException) -> bool:
     # Кривой JSON в аргументах tool-call или невалидная схема — недетерминизм
     # модели, вторая попытка часто проходит.
     return isinstance(exc, (json.JSONDecodeError, ValueError))
+
+
+def _is_rate_limit(exc: Optional[BaseException]) -> bool:
+    """Ответ 429: провайдер просит притормозить."""
+    return isinstance(exc, APIStatusError) and getattr(exc, "status_code", None) == 429
+
+
+def _retry_delay(exc: BaseException, attempt: int) -> float:
+    """Пауза перед повтором. При лимите слушаем провайдера (Retry-After), иначе — растущая пауза."""
+    if _is_rate_limit(exc):
+        header = getattr(getattr(exc, "response", None), "headers", {}).get("retry-after")
+        try:
+            wait = float(header) if header is not None else 0.0
+        except ValueError:
+            wait = 0.0
+        if wait > 0:
+            return min(wait, settings.llm_retry_after_cap_seconds) + random.uniform(0, 0.35)
+        # Заголовка нет: лимит обычно по минутному окну, секундная пауза ему не помогает.
+        return min(max(_delay_for(attempt), 5.0 * attempt), settings.llm_retry_after_cap_seconds)
+    return _delay_for(attempt)
 
 
 def _delay_for(attempt: int) -> float:
@@ -330,8 +361,11 @@ def _as_cached(result: ParseResult) -> ParseResult:
     )
 
 
-async def parse_orders(text: str) -> ParseResult:
-    """Основная точка входа: разбор с кэшем, склейкой одинаковых запросов, повторами и метриками."""
+async def parse_orders(text: str, *, urgent: bool = True) -> ParseResult:
+    """Основная точка входа: разбор с кэшем, склейкой одинаковых запросов, повторами и метриками.
+
+    ``urgent=False`` — несрочное сообщение (из очереди): при лимите основного провайдера оно не идёт
+    в платный резерв, а ждёт и повторяется позже."""
     cached = _cache.get(text)
     if cached is not None:
         log.debug("Разбор из кэша (%s заявок)", len(cached.orders))
@@ -347,7 +381,7 @@ async def parse_orders(text: str) -> ParseResult:
     future: "asyncio.Future[ParseResult]" = asyncio.get_running_loop().create_future()
     _inflight[key] = future
     try:
-        result = await _parse_uncached(text)
+        result = await _parse_uncached(text, urgent)
     except BaseException as exc:
         if not future.done():
             future.set_exception(exc)
@@ -360,7 +394,7 @@ async def parse_orders(text: str) -> ParseResult:
         _inflight.pop(key, None)
 
 
-async def _parse_uncached(text: str) -> ParseResult:
+async def _parse_uncached(text: str, urgent: bool = True) -> ParseResult:
     # Диспетчеры пишут «сегодня» по Москве; с 00:00 до 03:00 МСК на сервере (UTC) ещё вчера.
     today = now_msk_naive().date().isoformat()
     try:
@@ -368,6 +402,8 @@ async def _parse_uncached(text: str) -> ParseResult:
     except ParseUnavailable as primary_error:
         if _fallback_client is None:
             raise
+        if primary_error.rate_limited and not urgent:
+            raise  # несрочное сообщение подождёт: основной провайдер просто просит притормозить
         log.warning("Основной LLM недоступен (%s) — пробуем резервный %s", primary_error, settings.llm_fallback_model)
         try:
             return await _parse_with(text, today, fallback=True)
@@ -384,7 +420,11 @@ async def _parse_with(text: str, today: str, fallback: bool) -> ParseResult:
     for attempt in range(1, max_attempts + 1):
         started = time.perf_counter()
         try:
-            response = await _call_llm(text, today, fallback) if fallback else await _call_llm(text, today)
+            if fallback:
+                response = await _call_llm(text, today, fallback)
+            else:
+                async with _primary_gate:
+                    response = await _call_llm(text, today)
             orders = _extract_orders(response)
             fill_missing_prices(orders, text)
         except Exception as exc:
@@ -393,7 +433,7 @@ async def _parse_with(text: str, today: str, fallback: bool) -> ParseResult:
                 log.error("Фатальная ошибка LLM (не повторяем): %s: %s", type(exc).__name__, exc)
                 raise ParseUnavailable(f"{type(exc).__name__}: {exc}") from exc
             if attempt < max_attempts:
-                delay = _delay_for(attempt)
+                delay = _retry_delay(exc, attempt)
                 log.warning(
                     "LLM попытка %s/%s не удалась (%s: %s) — повтор через %.1fs",
                     attempt, max_attempts, type(exc).__name__, exc, delay,
@@ -417,4 +457,4 @@ async def _parse_with(text: str, today: str, fallback: bool) -> ParseResult:
 
     detail = f"{type(last_error).__name__}: {last_error}" if last_error else "неизвестная ошибка"
     log.error("LLM недоступна после %s попыток: %s", max_attempts, detail)
-    raise ParseUnavailable(detail)
+    raise ParseUnavailable(detail, rate_limited=_is_rate_limit(last_error))
