@@ -49,26 +49,33 @@ from app.timeutil import now_msk_naive
 
 log = logging.getLogger("agent.parse")
 
-# trust_env=False — иначе httpx подхватывает системные HTTP_PROXY/HTTPS_PROXY
-# (в этом окружении прокси подменяет заголовок авторизации на чужой токен).
+def _http_client(proxy: str = "") -> httpx.AsyncClient:
+    """HTTP-клиент для провайдера, при необходимости через прокси (``http://…``, ``socks5://…``).
+
+    trust_env=False — иначе httpx подхватывает системные HTTP_PROXY/HTTPS_PROXY (в этом окружении
+    прокси подменяет заголовок авторизации на чужой токен); прокси задаётся только явно настройкой."""
+    return httpx.AsyncClient(trust_env=False, proxy=proxy or None)
+
+
 _client = AsyncOpenAI(
     api_key=settings.llm_api_key,
     base_url=settings.llm_base_url or None,
     timeout=settings.llm_timeout_seconds,
     # max_retries=0 — повторы делаем сами, чтобы считать попытки и логировать их.
     max_retries=0,
-    http_client=httpx.AsyncClient(trust_env=False),
+    http_client=_http_client(settings.llm_proxy),
 )
 
 # Резервный провайдер: включается, если основной отверг ключ (401/403), исчерпал лимит или лежит.
-# Задаётся LLM_FALLBACK_* в .env; без ключа резерва нет и поведение прежнее.
+# Задаётся LLM_FALLBACK_* в .env; без ключа резерва нет и поведение прежнее. Если провайдер закрыт
+# для IP сервера (OpenRouter отвечает 403), его можно вызывать через LLM_FALLBACK_PROXY.
 _fallback_client: Optional[AsyncOpenAI] = (
     AsyncOpenAI(
         api_key=settings.llm_fallback_api_key,
         base_url=settings.llm_fallback_base_url or None,
         timeout=settings.llm_fallback_timeout_seconds,
         max_retries=0,
-        http_client=httpx.AsyncClient(trust_env=False),
+        http_client=_http_client(settings.llm_fallback_proxy),
     )
     if settings.llm_fallback_api_key and settings.llm_fallback_model
     else None

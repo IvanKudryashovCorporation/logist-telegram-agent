@@ -115,3 +115,13 @@ async def test_fallback_gets_its_own_extra_body_and_not_the_dashscope_one(monkey
 
     assert captured["model"] == "backup/model:free"
     assert captured["extra_body"] == {"thinking": {"type": "disabled"}}
+
+
+def test_proxy_is_passed_only_when_configured():
+    plain = llm_parser._http_client("")
+    proxied = llm_parser._http_client("http://user:pass@127.0.0.1:3128")
+    socks = llm_parser._http_client("socks5://127.0.0.1:1080")
+
+    assert plain._mounts == {}  # без прокси клиент ходит напрямую (и не берёт HTTP_PROXY из окружения)
+    assert len(proxied._mounts) > 0
+    assert len(socks._mounts) > 0

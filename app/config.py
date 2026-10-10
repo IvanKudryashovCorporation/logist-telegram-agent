@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     #: Доп. параметры запроса, JSON. У GLM по умолчанию включено «размышление», оно тратит
     #: токены и время, поэтому для разбора заявок его выключаем.
     llm_extra_body: str = '{"thinking": {"type": "disabled"}}'
+    #: Прокси для запросов к основному LLM (``http://user:pass@host:port`` или ``socks5://…``). Пусто — напрямую.
+    llm_proxy: str = ""
     #: Таймаут одного запроса к LLM, секунд.
     llm_timeout_seconds: float = 60.0
     #: Сколько раз повторяем запрос при таймауте/429/5xx, прежде чем отложить
@@ -61,6 +63,8 @@ class Settings(BaseSettings):
     llm_fallback_timeout_seconds: float = 60.0
     #: Доп. параметры запроса резерва, JSON.
     llm_fallback_extra_body: str = ""
+    #: Прокси для запросов к резервному LLM: нужен, если провайдер закрыт для IP сервера.
+    llm_fallback_proxy: str = ""
 
     # --- Разбор заявок ---
     #: Не отправлять в LLM сообщения, которые заведомо не являются заявкой

@@ -15,6 +15,8 @@ pydantic-settings==2.6.1
 # LLM (разбор текста заявки) — OpenAI-совместимый клиент (используется с
 # DashScope, но подходит для любого OpenAI-совместимого провайдера)
 openai==1.57.4
+# SOCKS-прокси для LLM (LLM_PROXY / LLM_FALLBACK_PROXY=socks5://…); для http-прокси не нужен
+socksio==1.0.0
 
 # Сайт со списком заказов
 fastapi==0.115.6
