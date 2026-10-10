@@ -1,6 +1,6 @@
 """Разбор свободного текста заявки диспетчера в структуру ParsedOrder через LLM.
 
-Провайдер — любой OpenAI-совместимый chat/completions API (сейчас DashScope,
+Провайдер — любой OpenAI-совместимый chat/completions API (сейчас Z.ai, GLM-4.5-Flash,
 модель настраивается через LLM_MODEL). Разбор идёт через function-calling
 (tool record_orders), а не через свободный текст — так поля приходят готовой
 структурой без дополнительного парсинга ответа.
@@ -56,20 +56,6 @@ _client = AsyncOpenAI(
     # max_retries=0 — повторы делаем сами, чтобы считать попытки и логировать их.
     max_retries=0,
     http_client=httpx.AsyncClient(trust_env=False),
-)
-
-# Резервный провайдер: включается, если основной отверг ключ (401/403), исчерпал лимит или лежит.
-# Задаётся LLM_FALLBACK_* в .env; без ключа резерва нет и поведение прежнее.
-_fallback_client: Optional[AsyncOpenAI] = (
-    AsyncOpenAI(
-        api_key=settings.llm_fallback_api_key,
-        base_url=settings.llm_fallback_base_url or None,
-        timeout=settings.llm_fallback_timeout_seconds,
-        max_retries=0,
-        http_client=httpx.AsyncClient(trust_env=False),
-    )
-    if settings.llm_fallback_api_key and settings.llm_fallback_model
-    else None
 )
 
 _SYSTEM_PROMPT = """Ты разбираешь сообщение в рабочем чате диспетчеров такси на
@@ -237,19 +223,9 @@ def _delay_for(attempt: int) -> float:
     return min(base, 30.0) + random.uniform(0, 0.35)
 
 
-async def _call_llm(text: str, today: str, fallback: bool = False):
-    client = _fallback_client if fallback else _client
-    extra = {}
-    if fallback:
-        if settings.llm_fallback_extra_body:
-            extra["extra_body"] = json.loads(settings.llm_fallback_extra_body)
-    else:
-        # Qwen3 в DashScope по умолчанию включает "thinking mode", которая
-        # несовместима с принудительным tool_choice — отключаем явно. Параметр
-        # специфичен для DashScope, резервному провайдеру его не передаём.
-        extra["extra_body"] = {"enable_thinking": False}
-    return await client.chat.completions.create(
-        model=settings.llm_fallback_model if fallback else settings.llm_model,
+async def _call_llm(text: str, today: str):
+    return await _client.chat.completions.create(
+        model=settings.llm_model,
         max_tokens=2048,
         messages=[
             {"role": "system", "content": _SYSTEM_PROMPT.format(today=today)},
@@ -257,7 +233,8 @@ async def _call_llm(text: str, today: str, fallback: bool = False):
         ],
         tools=[PARSE_ORDERS_TOOL_OPENAI],
         tool_choice={"type": "function", "function": {"name": "record_orders"}},
-        **extra,
+        # Параметры провайдера (у GLM — отключение режима «размышления»).
+        extra_body=json.loads(settings.llm_extra_body) if settings.llm_extra_body else None,
     )
 
 
@@ -300,28 +277,13 @@ async def parse_orders(text: str) -> ParseResult:
 
     # Диспетчеры пишут «сегодня» по Москве; с 00:00 до 03:00 МСК на сервере (UTC) ещё вчера.
     today = now_msk_naive().date().isoformat()
-    try:
-        return await _parse_with(text, today, fallback=False)
-    except ParseUnavailable as primary_error:
-        if _fallback_client is None:
-            raise
-        log.warning("Основной LLM недоступен (%s) — пробуем резервный %s", primary_error, settings.llm_fallback_model)
-        try:
-            return await _parse_with(text, today, fallback=True)
-        except ParseUnavailable as fallback_error:
-            raise ParseUnavailable(f"основной: {primary_error}; резервный: {fallback_error}") from fallback_error
-
-
-async def _parse_with(text: str, today: str, fallback: bool) -> ParseResult:
-    """Разбор одним провайдером с повторами при временных сбоях."""
     max_attempts = max(1, settings.llm_max_retries)
-    model = settings.llm_fallback_model if fallback else settings.llm_model
     last_error: Optional[BaseException] = None
 
     for attempt in range(1, max_attempts + 1):
         started = time.perf_counter()
         try:
-            response = await _call_llm(text, today, fallback) if fallback else await _call_llm(text, today)
+            response = await _call_llm(text, today)
             orders = _extract_orders(response)
             fill_missing_prices(orders, text)
         except Exception as exc:
@@ -342,7 +304,7 @@ async def _parse_with(text: str, today: str, fallback: bool) -> ParseResult:
         usage = getattr(response, "usage", None)
         result = ParseResult(
             orders=orders,
-            model=model,
+            model=settings.llm_model,
             prompt_tokens=getattr(usage, "prompt_tokens", None),
             completion_tokens=getattr(usage, "completion_tokens", None),
             latency_ms=int((time.perf_counter() - started) * 1000),
@@ -355,3 +317,4 @@ async def _parse_with(text: str, today: str, fallback: bool) -> ParseResult:
     detail = f"{type(last_error).__name__}: {last_error}" if last_error else "неизвестная ошибка"
     log.error("LLM недоступна после %s попыток: %s", max_attempts, detail)
     raise ParseUnavailable(detail)
+

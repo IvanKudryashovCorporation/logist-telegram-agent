@@ -10,7 +10,7 @@
 
 Python 3.10+ · Telethon (юзербот-сессия, только чтение групп) · SQLAlchemy 2
 (async) + Alembic · PostgreSQL в проде, SQLite локально и в тестах (переключается
-строкой `DATABASE_URL`) · Claude API для разбора текста заявки · FastAPI —
+строкой `DATABASE_URL`) · Z.ai (GLM-4.5-Flash) для разбора текста заявки · FastAPI —
 публичный сайт со списком заказов.
 
 ## Установка
@@ -25,8 +25,8 @@ copy .env.example .env
 
 - `TG_API_ID` / `TG_API_HASH` — получить на https://my.telegram.org → API development tools
 - `TG_PHONE` — телефон аккаунта, от лица которого агент читает группы
-- `LLM_API_KEY` — ключ Claude API (имя намеренно не `ANTHROPIC_*`, см. комментарий в `app/config.py`)
-- `LLM_BASE_URL` — заполнить, только если ключ выдан прокси-сервисом, а не напрямую console.anthropic.com
+- `LLM_API_KEY` — ключ Z.ai (создаётся на https://z.ai в разделе API Keys; имя намеренно не `ANTHROPIC_*`/`OPENAI_*`, см. комментарий в `app/config.py`)
+- `LLM_MODEL`, `LLM_BASE_URL`, `LLM_EXTRA_BODY` — модель и адрес провайдера (по умолчанию Z.ai, `glm-4.5-flash`, «размышление» выключено). Подойдёт любой OpenAI-совместимый API с function calling
 
 ## Авторизация в Telegram (один раз)
 

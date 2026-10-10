@@ -141,7 +141,7 @@ _ORDERS_ARRAY_PARAMETERS = {
     "required": ["orders"],
 }
 
-# Формат OpenAI function-calling (DashScope compatible-mode и любой другой
+# Формат OpenAI function-calling (Z.ai, DashScope compatible-mode и любой другой
 # OpenAI-совместимый провайдер).
 PARSE_ORDERS_TOOL_OPENAI = {
     "type": "function",

@@ -36,28 +36,23 @@ class Settings(BaseSettings):
     # это поле — только для разового переноса старой настройки из .env.
     work_group_chat_id: OptionalInt = None
 
-    # LLM — любой OpenAI-совместимый chat/completions API (сейчас DashScope).
+    # LLM — любой OpenAI-совместимый chat/completions API (сейчас Z.ai, бесплатная GLM-4.5-Flash).
     # Внимание: НЕ называть ANTHROPIC_*/OPENAI_*  — такие имена зарезервированы
     # окружением песочницы разработки и имеют приоритет над .env, значения
     # будут подменены.
     llm_api_key: str = ""
-    llm_model: str = "qwen3.8-max-0902"
-    llm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    llm_model: str = "glm-4.5-flash"
+    llm_base_url: str = "https://api.z.ai/api/paas/v4"
+    #: Доп. параметры запроса, JSON. У GLM по умолчанию включено «размышление», оно тратит
+    #: токены и время, поэтому для разбора заявок его выключаем.
+    llm_extra_body: str = '{"thinking": {"type": "disabled"}}'
     #: Таймаут одного запроса к LLM, секунд.
-    llm_timeout_seconds: float = 30.0
+    llm_timeout_seconds: float = 60.0
     #: Сколько раз повторяем запрос при таймауте/429/5xx, прежде чем отложить
     #: сообщение в очередь (app/models/pending_message.py).
     llm_max_retries: int = 3
     #: База экспоненциальной задержки между повторами, секунд.
     llm_retry_backoff_seconds: float = 1.0
-    #: Резервный провайдер (любой OpenAI-совместимый, например OpenRouter): используется,
-    #: когда основной отверг ключ, исчерпал лимит или недоступен. Пусто — резерва нет.
-    llm_fallback_api_key: str = ""
-    llm_fallback_model: str = ""
-    llm_fallback_base_url: str = "https://openrouter.ai/api/v1"
-    llm_fallback_timeout_seconds: float = 60.0
-    #: Доп. параметры запроса резерва, JSON (напр. {"thinking": {"type": "disabled"}} для GLM).
-    llm_fallback_extra_body: str = ""
 
     # --- Разбор заявок ---
     #: Не отправлять в LLM сообщения, которые заведомо не являются заявкой
