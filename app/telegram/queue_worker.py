@@ -12,6 +12,7 @@
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from sqlalchemy import select
@@ -27,6 +28,15 @@ from app.telegram import pending as pending_queue
 from app.telegram.work_group import upsert_order_text
 
 log = logging.getLogger("agent.queue_worker")
+
+
+def _naive_utc(moment: Optional[datetime]) -> Optional[datetime]:
+    """Время сообщения Telegram (aware UTC) -> наивный UTC, как хранится в БД."""
+    if moment is None:
+        return None
+    if moment.tzinfo is not None:
+        moment = moment.astimezone(timezone.utc).replace(tzinfo=None)
+    return moment
 
 
 async def _load(session, pending_id: int) -> Optional[PendingMessage]:
@@ -81,6 +91,7 @@ async def process_one(client: TelegramClient, pending_id: int) -> bool:
             dispatcher_tg_id=getattr(sender, "id", None),
             dispatcher_username=getattr(sender, "username", None),
             is_edit=is_edit,
+            sent_at=_naive_utc(getattr(message, "date", None)),
         )
     except Exception as exc:  # noqa: BLE001
         detail = f"{type(exc).__name__}: {exc}"

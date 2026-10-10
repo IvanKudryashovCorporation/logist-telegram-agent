@@ -32,7 +32,9 @@ import hashlib
 import json
 import logging
 import random
+import re
 import time
+import unicodedata
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Optional
@@ -156,6 +158,23 @@ def text_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+_DECORATION_RE = re.compile(r"[\s​-‏︎️]+")
+
+
+def cache_text(text: str) -> str:
+    """Текст для сравнения копий заявки: без регистра, эмодзи и лишних пробелов.
+
+    Диспетчеры копируют одну заявку в десятки групп, добавляя свой значок или переставляя
+    пробелы; для модели это тот же заказ. Цифры, буквы и знаки препинания сохраняются:
+    «7.5» и «75» — разные цены.
+    """
+    kept = "".join(
+        ch for ch in unicodedata.normalize("NFKC", text).casefold()
+        if unicodedata.category(ch)[0] not in ("S", "C") or ch.isspace()
+    )
+    return _DECORATION_RE.sub(" ", kept).strip()
+
+
 class _ParseCache:
     """LRU-кэш успешных разборов.
 
@@ -171,7 +190,7 @@ class _ParseCache:
 
     @staticmethod
     def _key(text: str) -> str:
-        return f"{now_msk_naive().date().isoformat()}::{text_hash(text)}"
+        return f"{now_msk_naive().date().isoformat()}::{text_hash(cache_text(text))}"
 
     def get(self, text: str) -> Optional[ParseResult]:
         if not self._maxsize:
@@ -262,7 +281,9 @@ def fill_missing_prices(orders: list[ParsedOrder], text: str) -> None:
         snippet = (order.raw_snippet or "").strip()
         price = extract_price(snippet) or (extract_price(text) if len(orders) == 1 else None)
         if price is not None:
-            log.warning("Цену не вернула модель — взята из текста: %s ₽ (%s → %s)", price, order.from_city, order.to_city)
+            log.warning(
+                "Цену не вернула модель — взята из текста: %s ₽ (%s → %s)", price, order.from_city, order.to_city
+            )
             order.client_price = price
 
 
@@ -275,22 +296,54 @@ def _extract_orders(response) -> list[ParsedOrder]:
     return []
 
 
+#: Разборы, которые прямо сейчас идут: одинаковая заявка из нескольких групп ждёт один вызов LLM.
+_inflight: "dict[str, asyncio.Future[ParseResult]]" = {}
+
+
+def _as_cached(result: ParseResult) -> ParseResult:
+    return ParseResult(
+        orders=list(result.orders),
+        model=result.model,
+        prompt_tokens=0,
+        completion_tokens=0,
+        latency_ms=0,
+        attempts=0,
+        from_cache=True,
+        text_hash=result.text_hash,
+    )
+
+
 async def parse_orders(text: str) -> ParseResult:
-    """Основная точка входа: разбор текста с повторами, кэшем и метриками."""
+    """Основная точка входа: разбор с кэшем, склейкой одинаковых запросов, повторами и метриками."""
     cached = _cache.get(text)
     if cached is not None:
         log.debug("Разбор из кэша (%s заявок)", len(cached.orders))
-        return ParseResult(
-            orders=list(cached.orders),
-            model=cached.model,
-            prompt_tokens=0,
-            completion_tokens=0,
-            latency_ms=0,
-            attempts=0,
-            from_cache=True,
-            text_hash=cached.text_hash,
-        )
+        return _as_cached(cached)
 
+    key = _ParseCache._key(text)
+    leader = _inflight.get(key)
+    if leader is not None:
+        # Та же заявка уже уходит в LLM (пришла из другой группы): ждём её результат.
+        _cache.hits += 1
+        return _as_cached(await asyncio.shield(leader))
+
+    future: "asyncio.Future[ParseResult]" = asyncio.get_running_loop().create_future()
+    _inflight[key] = future
+    try:
+        result = await _parse_uncached(text)
+    except BaseException as exc:
+        if not future.done():
+            future.set_exception(exc)
+            future.exception()  # помечаем «прочитанным», если ждущих нет
+        raise
+    else:
+        future.set_result(result)
+        return result
+    finally:
+        _inflight.pop(key, None)
+
+
+async def _parse_uncached(text: str) -> ParseResult:
     # Диспетчеры пишут «сегодня» по Москве; с 00:00 до 03:00 МСК на сервере (UTC) ещё вчера.
     today = now_msk_naive().date().isoformat()
     try:

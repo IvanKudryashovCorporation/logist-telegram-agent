@@ -18,7 +18,7 @@
 
 import asyncio
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Optional
 
 from sqlalchemy import or_, select
@@ -49,6 +49,7 @@ from app.parsing.llm_parser import parse_orders, text_hash
 from app.parsing.order_builder import apply_parsed_fields, resolve_pickup_at
 from app.parsing.prefilter import PrefilterDecision, prefilter
 from app.parsing.schema import ParsedOrder
+from app.parsing.stale import is_stale
 from app.telegram import pending as pending_queue
 from app.telegram.dedup import mark_processed, unmark_processed
 from app.timeutil import now_utc_naive
@@ -302,8 +303,12 @@ async def upsert_order_text(
     dispatcher_tg_id: Optional[int] = None,
     dispatcher_username: Optional[str] = None,
     is_edit: bool = False,
+    sent_at: Optional[datetime] = None,
 ) -> list[int]:
     """Разбирает текст сообщения и создаёт/обновляет заказы.
+
+    ``sent_at`` — когда сообщение отправлено (наивный UTC). Нужен только для отложенных
+    сообщений: протухшие пропускаются без вызова LLM (см. app.parsing.stale).
 
     Возвращает id всех созданных или обновлённых заказов (пустой список —
     сообщение не заявка). Не зависит от Telethon: воркер очереди вызывает
@@ -342,6 +347,16 @@ async def upsert_order_text(
             await parse_stats.record(
                 db, ParseOutcome.NOT_ORDER, chat_id=chat_id, message_id=message_id,
                 text_hash=text_hash(text), error="closed_lock",
+            )
+            await db.commit()
+            return []
+
+        if sent_at is not None and not existing_by_index and is_stale(text, sent_at, now_utc_naive()):
+            # Сообщение отстояло в очереди дольше, чем живёт такая заявка: на сайте оно бы сразу
+            # пропало. Заявки с названной датой («завтра», «12.10») сюда не попадают.
+            await parse_stats.record(
+                db, ParseOutcome.PREFILTERED, chat_id=chat_id, message_id=message_id,
+                text_hash=text_hash(text), error="stale",
             )
             await db.commit()
             return []
