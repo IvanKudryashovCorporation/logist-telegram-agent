@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     llm_max_retries: int = 3
     #: База экспоненциальной задержки между повторами, секунд.
     llm_retry_backoff_seconds: float = 1.0
+    #: Резервный провайдер (любой OpenAI-совместимый, например OpenRouter): используется,
+    #: когда основной отверг ключ, исчерпал лимит или недоступен. Пусто — резерва нет.
+    llm_fallback_api_key: str = ""
+    llm_fallback_model: str = ""
+    llm_fallback_base_url: str = "https://openrouter.ai/api/v1"
+    llm_fallback_timeout_seconds: float = 60.0
 
     # --- Разбор заявок ---
     #: Не отправлять в LLM сообщения, которые заведомо не являются заявкой
