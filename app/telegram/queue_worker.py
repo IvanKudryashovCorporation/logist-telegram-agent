@@ -69,6 +69,15 @@ async def process_one(client: TelegramClient, pending_id: int) -> bool:
         chat_id, message_id, is_edit = pending.chat_id, pending.message_id, pending.is_edit
         stored_text = pending.text
 
+        group_active = (
+            await session.execute(select(WorkGroup.is_active).where(WorkGroup.tg_chat_id == chat_id))
+        ).scalar_one_or_none()
+
+    if group_active is False:
+        # Группу убрали из парсинга, пока сообщение ждало в очереди: заказ из неё создавать нельзя.
+        await _finish(pending_id, ok=True, note="group_disabled")
+        return True
+
     try:
         message = await _fetch_message(client, chat_id, message_id)
     except Exception as exc:  # noqa: BLE001 — сеть/лимиты Telegram

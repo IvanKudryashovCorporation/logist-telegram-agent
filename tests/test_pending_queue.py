@@ -445,3 +445,25 @@ async def test_worker_processes_a_batch_concurrently_and_survives_one_failure(se
     statuses = {mid: (await _reload_pending(p.id)).status for mid, p in pendings.items()}
     assert statuses[9103] != PendingStatus.DONE  # упавшее осталось в очереди на повтор
     assert all(s == PendingStatus.DONE for mid, s in statuses.items() if mid != 9103)
+
+
+async def test_worker_skips_messages_of_a_disabled_group(session, monkeypatch):
+    from app.models import WorkGroup
+
+    session.add(WorkGroup(tg_chat_id=CHAT_ID, title="Отключённая", is_active=False))
+    await session.commit()
+    pending = await _ready(session, 9200, "Курск — Тольятти 30000")
+    called = []
+
+    async def fake_upsert(**kwargs):
+        called.append(kwargs)
+        return [1]
+
+    monkeypatch.setattr(queue_worker, "upsert_order_text", fake_upsert)
+    client = FakeClient({9200: FakeMessage("Курск — Тольятти 30000")})
+
+    await queue_worker.process_due_once(client, limit=5)
+
+    assert called == []  # заказ из убранной группы не создаётся
+    reloaded = await _reload_pending(pending.id)
+    assert reloaded.status == PendingStatus.DONE and reloaded.last_error == "group_disabled"
