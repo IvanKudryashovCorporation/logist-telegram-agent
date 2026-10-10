@@ -240,7 +240,10 @@ def _delay_for(attempt: int) -> float:
 async def _call_llm(text: str, today: str, fallback: bool = False):
     client = _fallback_client if fallback else _client
     extra = {}
-    if not fallback:
+    if fallback:
+        if settings.llm_fallback_extra_body:
+            extra["extra_body"] = json.loads(settings.llm_fallback_extra_body)
+    else:
         # Qwen3 в DashScope по умолчанию включает "thinking mode", которая
         # несовместима с принудительным tool_choice — отключаем явно. Параметр
         # специфичен для DashScope, резервному провайдеру его не передаём.

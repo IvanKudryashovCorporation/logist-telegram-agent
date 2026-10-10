@@ -97,3 +97,21 @@ async def test_both_providers_down_reports_both(monkeypatch):
     with pytest.raises(ParseUnavailable) as info:
         await parse_orders("Курск Тольятти 30000 оба лежат")
     assert "основной" in str(info.value) and "резервный" in str(info.value)
+
+
+async def test_fallback_gets_its_own_extra_body_and_not_the_dashscope_one(monkeypatch):
+    captured = {}
+
+    class _Completions:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return _response([_ORDER])
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
+    monkeypatch.setattr(llm_parser, "_fallback_client", fake_client)
+    monkeypatch.setattr(settings, "llm_fallback_extra_body", '{"thinking": {"type": "disabled"}}')
+
+    await llm_parser._call_llm("текст", "2026-10-10", True)
+
+    assert captured["model"] == "backup/model:free"
+    assert captured["extra_body"] == {"thinking": {"type": "disabled"}}

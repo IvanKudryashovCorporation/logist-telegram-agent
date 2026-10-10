@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     llm_fallback_model: str = ""
     llm_fallback_base_url: str = "https://openrouter.ai/api/v1"
     llm_fallback_timeout_seconds: float = 60.0
+    #: Доп. параметры запроса резерва, JSON (напр. {"thinking": {"type": "disabled"}} для GLM).
+    llm_fallback_extra_body: str = ""
 
     # --- Разбор заявок ---
     #: Не отправлять в LLM сообщения, которые заведомо не являются заявкой
