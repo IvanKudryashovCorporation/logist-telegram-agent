@@ -34,6 +34,7 @@ from app.models import (
     ParseStat,
     SubscriptionNotification,
 )
+from app.parsing.not_orders import non_order_reason
 from app.parsing.order_builder import FAR_FUTURE, correct_far_year, has_critical_gaps
 from app.services.dedupe import cancel_duplicate_orders
 from app.timeutil import now_msk_naive, now_utc_naive
@@ -360,6 +361,38 @@ async def prune_old_stats(*, retention_days: Optional[int] = None) -> int:
     return removed
 
 
+async def cancel_non_orders() -> int:
+    """Снимает с ленты уже сохранённые заказы, которые не заказы: предложения водителей и заявки
+    с пометкой ❌❌❌ (диспетчер дописал её после публикации). Взятые водителем не трогаем."""
+    cancelled = 0
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(Order.id, Order.raw_text).where(
+                    Order.status.in_(OPEN_STATUSES),
+                    Order.taken_by_token.is_(None),
+                    Order.raw_text.is_not(None),
+                )
+            )
+        ).all()
+        for order_id, raw_text in rows:
+            reason = non_order_reason(raw_text)
+            if reason is None:
+                continue
+            await session.execute(update(Order).where(Order.id == order_id).values(status=OrderStatus.CANCELLED))
+            session.add(
+                ActionLog(
+                    order_id=order_id, actor=ActorType.SYSTEM, action=f"cancelled_{reason}",
+                    details="не заказ: " + (raw_text or "")[:120].replace("\n", " "),
+                )
+            )
+            cancelled += 1
+            log.info("Снят заказ #%s (%s): %s", order_id, reason, (raw_text or "")[:100].replace("\n", " "))
+        if cancelled:
+            await session.commit()
+    return cancelled
+
+
 async def cleanup_once() -> dict[str, int]:
     """Один проход обслуживания — его же вызывает scripts/cleanup_orders.py."""
     corrected = await fix_far_future_dates()
@@ -370,6 +403,7 @@ async def cleanup_once() -> dict[str, int]:
     notifications = await prune_old_notifications()
     pruned = await prune_old_stats()
     duplicates = await cancel_duplicate_orders()
+    non_orders = await cancel_non_orders()
     return {
         "dates_corrected": corrected,
         "clarifications_resolved": clarified,
@@ -380,6 +414,7 @@ async def cleanup_once() -> dict[str, int]:
         "notifications_pruned": notifications,
         "stats_pruned": pruned,
         "duplicates_cancelled": duplicates,
+        "non_orders_cancelled": non_orders,
     }
 
 

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from app.city_aliases import CITY_ALIASES
+from app.parsing.not_orders import is_driver_offer
 
 #: Короче этого текста заявки не бывает физически («Керчь→Краснодар 8000» = 24).
 _MIN_LENGTH: Final[int] = 12
@@ -123,6 +124,10 @@ def prefilter(text: str | None) -> PrefilterDecision:
     # Совсем короткое и без единого признака поездки — переписка.
     if len(normalized) < _MIN_LENGTH and not _DIGITS_RE.search(normalized):
         return PrefilterDecision(False, "too_short_no_signal")
+
+    if is_driver_offer(normalized):
+        # «Еду Горловка-Ростов, есть места»: водитель предлагает поездку, заказа нет.
+        return PrefilterDecision(False, "driver_offer")
 
     if _PHONE_RE.search(normalized):
         return PrefilterDecision(True, "has_phone")

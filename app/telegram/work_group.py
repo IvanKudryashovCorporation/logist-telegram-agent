@@ -406,8 +406,11 @@ async def upsert_order_text(
                 error=decision.reason,
             )
             await db.commit()
-            log.debug(
-                "Предфильтр отсеял сообщение chat=%s msg=%s (%s)", chat_id, message_id, decision.reason
+            # Отсев по предложению водителя — на INFO с началом текста: так владелец видит и проверяет срабатывания.
+            level = logging.INFO if decision.reason == "driver_offer" else logging.DEBUG
+            log.log(
+                level, "Предфильтр отсеял сообщение chat=%s msg=%s (%s): %s",
+                chat_id, message_id, decision.reason, text[:100].replace("\n", " "),
             )
             return []
 
