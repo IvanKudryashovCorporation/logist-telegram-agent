@@ -72,7 +72,7 @@ def test_admin_is_never_limited(subscription_on):
     admin_id = next(iter(settings.admin_ids))
     driver = _driver(telegram_id=admin_id, trial_ends_at=NOW - timedelta(days=100))
     sub = billing.describe(driver, now=NOW)
-    assert sub.state == billing.STATE_ADMIN and sub.has_access and not sub.shows_badge
+    assert sub.state == billing.STATE_ADMIN and sub.has_access and sub.shows_badge  # плашка «∞», доступ без ограничений
 
 
 def test_payment_stacks_on_top_of_the_remaining_trial(subscription_on):
@@ -594,3 +594,11 @@ def test_yookassa_payload_parsing():
 
 def test_now_helpers_are_naive_utc():
     assert now_utc_naive().tzinfo is None and now_msk_naive().tzinfo is None
+
+
+async def test_admin_sees_an_infinity_badge_and_is_not_limited(client, subscription_on, telegram_login_on):
+    await client.get("/auth/telegram", params=_signed_params())  # тестовый админ
+
+    page = await client.get("/")
+
+    assert "Дней подписки: ∞" in page.text

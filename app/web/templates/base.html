@@ -34,7 +34,7 @@
           {% if subscription is defined and subscription.shows_badge %}
             <a href="/subscription" class="sub-badge sub-{{ subscription.state }}" id="subBadge"
                title="Подписка: оплата и продление">
-              {% if subscription.state == 'expired' %}Подписка закончилась{% else %}Дней подписки: {{ subscription.days }}{% endif %}
+              {% if subscription.state == 'expired' %}Подписка закончилась{% elif subscription.state == 'admin' %}Дней подписки: ∞{% else %}Дней подписки: {{ subscription.days }}{% endif %}
             </a>
           {% endif %}
           <a href="/profile" class="btn btn-secondary header-profile {{ 'active' if request.url.path == '/profile' else '' }}">

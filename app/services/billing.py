@@ -91,8 +91,8 @@ class Subscription:
 
     @property
     def shows_badge(self) -> bool:
-        """Плашка «Дней подписки: N» нужна всем, кроме выключенной подписки и админов."""
-        return self.state in (STATE_TRIAL, STATE_PAID, STATE_EXPIRED)
+        """Плашка «Дней подписки: N» нужна всем вошедшим, кроме случая выключенной подписки (у админа — «∞»)."""
+        return self.state in (STATE_ADMIN, STATE_TRIAL, STATE_PAID, STATE_EXPIRED)
 
 
 def describe(
