@@ -20,6 +20,7 @@ PAYMENT_CANCELED = "canceled"
 #: Виды платежа.
 KIND_SBP = "sbp"
 KIND_CARD = "card"
+KIND_AUTOPAY = "autopay"
 KIND_ANY = "any"
 KIND_AUTORENEW = "autorenew"
 KIND_ADMIN = "admin"

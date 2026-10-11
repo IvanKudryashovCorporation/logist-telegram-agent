@@ -16,7 +16,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.db.base import SessionLocal
 from app.models import Payment
-from app.models.payment import KIND_ANY, KIND_CARD, KIND_SBP, PAYMENT_PENDING
+from app.models.payment import KIND_ANY, KIND_AUTOPAY, KIND_CARD, KIND_SBP, PAYMENT_PENDING
 from app.services import billing, billing_flow
 from app.services.payments import PaymentError, get_provider
 from app.timeutil import now_utc_naive
@@ -38,7 +38,8 @@ router = APIRouter()
 #: Сколько последних платежей показываем и сверяем с провайдером при открытии страницы.
 _HISTORY_LIMIT = 10
 _PAYMENT_KINDS = {
-    KIND_SBP: "СБП", KIND_CARD: "Картой", KIND_ANY: "Другой способ", "autorenew": "Автопродление",
+    KIND_SBP: "СБП", KIND_CARD: "Банковской картой", KIND_AUTOPAY: "Автоплатёж (карта)", KIND_ANY: "Другой способ",
+    "autorenew": "Автопродление",
     "admin": "Начислено вручную",
 }
 
@@ -58,7 +59,7 @@ def _banner(notice: Optional[str]) -> Optional[dict]:
         return {
             "kind": "err", "title": "Не удалось создать платёж",
             "text": "Деньги не списаны. Попробуйте ещё раз или выберите другой способ оплаты.",
-            "retry": notice[4:] if notice[4:] in (KIND_SBP, KIND_CARD, KIND_ANY) else KIND_SBP,
+            "retry": notice[4:] if notice[4:] in (KIND_SBP, KIND_CARD, KIND_AUTOPAY, KIND_ANY) else KIND_SBP,
         }
     return {"kind": "wait", "title": notice, "text": "", "retry": ""}
 
@@ -151,7 +152,7 @@ async def subscription_pay(request: Request):
 
     form = await request.form()
     requested = str(form.get("kind") or "")
-    kind = requested if requested in (KIND_CARD, KIND_ANY) else KIND_SBP
+    kind = requested if requested in (KIND_CARD, KIND_AUTOPAY, KIND_ANY) else KIND_SBP
     provider = get_provider()
     if provider is None:
         return _redirect("/subscription", new_token, "Оплата пока недоступна. Попробуйте позже.")

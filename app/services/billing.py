@@ -208,7 +208,7 @@ async def record_success(
     payment.amount_kop = amount_kop
 
     extend(driver, days, now)
-    if payment_method_id and kind in ("card", "autorenew"):
+    if payment_method_id and kind in ("autopay", "autorenew"):
         driver.payment_method_id = payment_method_id
         driver.auto_renew = True
     await session.commit()

@@ -990,6 +990,19 @@ input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), select, t
 @keyframes sb-sp { to { transform:rotate(360deg); } }
 .sb-hints { margin:14px 0 0; padding:0; list-style:none; display:flex; flex-direction:column; gap:6px; font-size:13px; line-height:1.45; color:var(--sb-muted); }
 .sb-hints b { color:var(--sb-text); font-weight:600; }
+.sb-autopay { margin:14px 0 0; padding-top:12px; border-top:1px solid var(--sb-line); }
+.sb-link { display:inline-flex; align-items:center; min-height:44px; padding:0; border:0; background:transparent; color:var(--sb-accent-text);
+  font:inherit; font-size:13px; font-weight:600; text-decoration:underline; text-underline-offset:3px; cursor:pointer; }
+.sb-link:focus-visible { outline:3px solid var(--sb-focus); outline-offset:2px; border-radius:4px; }
+.sb-fine { margin:0; font-size:12px; line-height:1.45; color:var(--sb-muted); }
+/* Публичная оферта */
+.sb-doc { font-size:15px; line-height:1.6; }
+.sb-doc p { margin:10px 0 0; }
+.sb-doc h2 { margin:26px 0 0; font-size:17px; font-weight:700; line-height:1.3; }
+.sb-doc ul { margin:10px 0 0; padding-left:20px; display:flex; flex-direction:column; gap:6px; }
+.sb-doc-lead { margin:0 0 4px; text-align:center; font-size:16px; font-weight:600; line-height:1.5; }
+.sb-doc-date { font-weight:400; font-size:13px; color:var(--sb-muted); }
+.sb-offer-link { color:var(--sb-accent-text); text-underline-offset:3px; word-break:break-all; }
 .sb-h2 { margin:0; font-size:17px; font-weight:700; }
 .sb-bl { display:flex; flex-direction:column; gap:14px; margin-top:16px; }
 .sb-bi { display:flex; align-items:flex-start; gap:12px; }

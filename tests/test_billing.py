@@ -108,17 +108,30 @@ async def test_payment_is_credited_once(session, subscription_on):
     assert len((await session.execute(select(Payment))).scalars().all()) == 1
 
 
-async def test_card_payment_saves_the_method_for_autorenew(session, subscription_on):
+async def test_autopay_payment_saves_the_method_for_autorenew(session, subscription_on):
+    session.add(_driver())
+    await session.commit()
+
+    await billing.record_success(
+        session, telegram_id=777000111, provider="yookassa", provider_payment_id="pay-autopay", kind="autopay",
+        amount_kop=99000, days=30, payment_method_id="pm-1", now=NOW,
+    )
+
+    driver = await billing.get_driver(session, 777000111)
+    assert driver.auto_renew is True and driver.payment_method_id == "pm-1"
+
+
+async def test_one_time_card_payment_does_not_turn_autorenew_on(session, subscription_on):
     session.add(_driver())
     await session.commit()
 
     await billing.record_success(
         session, telegram_id=777000111, provider="yookassa", provider_payment_id="pay-card", kind="card",
-        amount_kop=100000, days=30, payment_method_id="pm-1", now=NOW,
+        amount_kop=99000, days=30, payment_method_id="pm-2", now=NOW,
     )
 
     driver = await billing.get_driver(session, 777000111)
-    assert driver.auto_renew is True and driver.payment_method_id == "pm-1"
+    assert driver.auto_renew is False and driver.payment_method_id is None
 
 
 async def test_sbp_payment_does_not_turn_autorenew_on(session, subscription_on):
@@ -361,10 +374,15 @@ async def test_pay_button_creates_a_payment_and_redirects_to_the_provider(
     assert stored.status == "pending" and stored.days == 30
 
 
-async def test_card_button_asks_for_autorenew_card_payment(client, subscription_on, telegram_login_on, provider):
+async def test_card_button_is_a_one_time_payment_and_autopay_link_saves_the_card(
+    client, subscription_on, telegram_login_on, provider
+):
     await _login(client)
     await client.post("/subscription/pay", data={"kind": "card"})
-    assert provider.created[0]["kind"] == "card"
+    await client.post("/subscription/pay", data={"kind": "autopay"})
+    await client.post("/subscription/pay", data={"kind": "garbage"})  # неизвестный способ — обычная СБП
+
+    assert [c["kind"] for c in provider.created] == ["card", "autopay", "sbp"]
 
 
 async def test_webhook_credits_the_payment_once_and_notifies(
@@ -627,7 +645,9 @@ async def test_trial_page_shows_days_benefits_and_both_pay_buttons(
 
     assert "Пробный период" in page and ">9<" in page  # крупное число дней
     assert "Что даёт подписка" in page and "Платежей пока не было." in page
-    assert "Оплатить 1000 ₽ по СБП" in page and "Картой, продлевать автоматически" in page
+    assert "Оплатить 1000 ₽ по СБП" in page and "Оплатить банковской картой" in page
+    assert page.rindex("Настроить автоплатёж") > page.rindex("Оплатить банковской картой")  # автоплатёж в конце, мелко
+    assert "Другой способ оплаты" not in page
 
 
 async def test_expired_page_lists_what_is_closed_and_what_stays_open(
@@ -653,7 +673,8 @@ async def test_paid_page_with_autorenew_hides_the_card_button(
     page = (await client.get("/subscription")).text
 
     assert "Подписка оплачена" in page and "Автопродление включено" in page and "Отключить автопродление" in page
-    assert "Картой, продлевать автоматически" not in page and "Оплатить 1000 ₽ по СБП" in page
+    assert "Настроить автоплатёж" not in page  # уже настроен
+    assert "Оплатить 1000 ₽ по СБП" in page and "Оплатить банковской картой" in page
     assert "Дни добавятся к остатку: будет 64" in page
 
 
@@ -696,10 +717,8 @@ async def test_any_method_button_creates_a_payment_without_forcing_the_method(
 ):
     await _login(client)
 
-    page = (await client.get("/subscription")).text
     response = await client.post("/subscription/pay", data={"kind": "any"})
 
-    assert "Другой способ оплаты" in page
     assert response.headers["location"] == "https://pay.test/fake-1"
     assert provider.created[0]["kind"] == "any"
     assert (await session.execute(select(Payment))).scalars().one().kind == "any"
@@ -730,12 +749,31 @@ def test_yookassa_any_kind_leaves_the_method_unset(monkeypatch):
 
     monkeypatch.setattr(YooKassa, "_request", fake_request)
     provider = YooKassa("1", "k")
-    for kind in ("sbp", "card", "any"):
+    for kind in ("sbp", "card", "autopay", "any"):
         sent.clear()
         asyncio.run(provider.create_payment(telegram_id=1, kind=kind, amount_kop=99000, days=30, return_url="r", description="d"))
         if kind == "any":
             assert "payment_method_data" not in sent and "save_payment_method" not in sent
-        elif kind == "card":
+        elif kind == "autopay":
             assert sent["payment_method_data"] == {"type": "bank_card"} and sent["save_payment_method"] is True
+        elif kind == "card":
+            assert sent["payment_method_data"] == {"type": "bank_card"} and "save_payment_method" not in sent
         else:
             assert sent["payment_method_data"] == {"type": "sbp"}
+
+
+async def test_offer_page_is_a_complete_document_without_a_template_remark(client, monkeypatch, subscription_on):
+    monkeypatch.setattr(settings, "offer_seller_name", "Иванов Иван Иванович")
+    monkeypatch.setattr(settings, "offer_seller_inn", "123456789012")
+    monkeypatch.setattr(settings, "subscription_price_rub", 990)
+
+    page = await client.get("/offer")
+    text = page.text
+
+    assert page.status_code == 200
+    assert "Публичная оферта" in text and "Редакция от" in text
+    assert "Иванов Иван Иванович" in text and "ИНН 123456789012" in text
+    assert "990 ₽ за 30 дней" in text and "14 дней" in text
+    for section in ("Предмет договора", "Пробный период", "Автоплатёж", "возврат", "Персональные данные", "Реквизиты"):
+        assert section in text
+    assert "шаблон" not in text.lower() and "сверьте" not in text.lower()
