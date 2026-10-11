@@ -285,6 +285,17 @@ async def user_filter(request: Request, telegram_id: int, sub_id: int, action: s
     return RedirectResponse(url=f"/admin/users/{telegram_id}", status_code=303)
 
 
+@router.get("/groups", response_class=HTMLResponse)
+async def groups_page(request: Request, days: int = 7):
+    """Статистика по группам: сколько заказов дала каждая, сколько дублей и спама."""
+    denied = _guard(request)
+    if denied is not None:
+        return denied
+
+    stats = await reporting.group_stats(days=max(1, min(days, 30)))
+    return await _render(request, "admin_groups.html", g=stats, section="groups")
+
+
 @router.get("/billing", response_class=HTMLResponse)
 async def billing_page(request: Request, days: int = 30):
     """Платежи и журнал подписки: что пришло, что вернули, что пошло не так."""

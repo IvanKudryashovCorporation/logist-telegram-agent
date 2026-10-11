@@ -737,3 +737,51 @@ async def test_admin_cannot_switch_a_filter_through_another_users_page(client, s
 
     async with SessionLocal() as fresh:
         assert (await fresh.execute(select(OrderSubscription))).scalar_one().is_active is True
+
+
+# --- Статистика по группам -----------------------------------------------------
+
+
+async def test_groups_page_counts_orders_duplicates_and_spam_per_group(client, session, make_order):
+    from app.models import ParseOutcome, ParseStat, WorkGroup
+    from app.services import reporting
+
+    chat = -1001234567890  # из фабрики заказов
+    other = -1009999999999
+    session.add_all([WorkGroup(tg_chat_id=chat, title="Рабочая группа"), WorkGroup(tg_chat_id=other, title="Болталка")])
+    await session.commit()
+    await make_order()
+    await make_order(price="5000")
+    session.add_all(
+        [
+            ParseStat(chat_id=chat, outcome=ParseOutcome.DUPLICATE, orders_found=1),
+            ParseStat(chat_id=chat, outcome=ParseOutcome.NOT_ORDER),
+            ParseStat(chat_id=chat, outcome=ParseOutcome.PREFILTERED, error="driver_offer"),
+            ParseStat(chat_id=chat, outcome=ParseOutcome.PREFILTERED, error="stale"),  # не спам
+            ParseStat(chat_id=chat, outcome=ParseOutcome.NOT_ORDER, error="closed_lock"),  # не спам
+            ParseStat(chat_id=other, outcome=ParseOutcome.NOT_ORDER),
+            ParseStat(chat_id=other, outcome=ParseOutcome.NOT_ORDER),
+        ]
+    )
+    await session.commit()
+
+    stats = await reporting.group_stats(days=7)
+    rows = {r["title"]: r for r in stats["rows"]}
+
+    work = rows["Рабочая группа"]
+    assert (work["orders"], work["duplicates"], work["spam"], work["messages"]) == (2, 1, 2, 5)
+    assert work["spam_share"] == pytest.approx(0.4) and work["spam_per_order"] == pytest.approx(1.0)
+    chat_only = rows["Болталка"]
+    assert (chat_only["orders"], chat_only["spam"]) == (0, 2) and chat_only["spam_per_order"] is None
+    assert stats["totals"]["orders"] == 2 and stats["totals"]["spam"] == 4
+    assert stats["rows"][0]["title"] == "Рабочая группа"  # сверху те, кто дал больше заказов
+
+    await _login(client)
+    page = await client.get("/admin/groups")
+    assert page.status_code == 200 and "Рабочая группа" in page.text and "Болталка" in page.text
+
+
+async def test_groups_page_is_hidden_from_non_admins(client):
+    assert (await client.get("/admin/groups")).status_code == 404
+    await _login(client, STRANGER_ID)
+    assert (await client.get("/admin/groups")).status_code == 404

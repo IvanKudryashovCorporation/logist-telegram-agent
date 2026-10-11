@@ -1,0 +1,58 @@
+{% extends "admin_base.html" %}
+{% block title %}Группы — админка «Лента заказов»{% endblock %}
+
+{% block content %}
+<div class="metrics">
+  <div class="metric ok">
+    <div class="metric-value">{{ g.totals.orders }}</div>
+    <div class="metric-label">заказов в ленте за {{ g.days }} дн.</div>
+  </div>
+  <div class="metric">
+    <div class="metric-value">{{ g.totals.duplicates }}</div>
+    <div class="metric-label">дублей (не попали в ленту)</div>
+  </div>
+  <div class="metric {{ 'warn' if g.totals.spam_share > 0.7 else '' }}">
+    <div class="metric-value">{{ g.totals.spam }}</div>
+    <div class="metric-label">спама ({{ '%.0f'|format(g.totals.spam_share * 100) }}% сообщений)</div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>По группам</h2>
+  <p class="muted">
+    Период:
+    {% for d in (1, 7, 30) %}<a href="/admin/groups?days={{ d }}"{% if d == g.days %} style="font-weight:700"{% endif %}>{{ d }} дн.</a>{% if not loop.last %} · {% endif %}{% endfor %}
+    . <b>Заказы</b> — созданные из группы (без дублей). <b>Спам</b> — сообщения, отсеянные как не заявки
+    (болтовня, предложения водителей, реклама, без маршрута). <b>Спам на заказ</b> — сколько мусора приходится на один заказ.
+  </p>
+  {% if g.rows %}
+    <table>
+      <thead><tr>
+        <th>Группа</th><th class="num">Сообщений</th><th class="num">Заказов</th><th class="num">Дублей</th>
+        <th class="num">Спам</th><th class="num">Спам, %</th><th class="num">Спам на заказ</th>
+      </tr></thead>
+      <tbody>
+        {% for r in g.rows %}
+          <tr>
+            <td>
+              {% if r.username %}<a href="https://t.me/{{ r.username }}" target="_blank" rel="noopener">{{ r.title }}</a>{% else %}{{ r.title }}{% endif %}
+              {% if r.watch_only %}<span class="tag info">без вступления</span>{% endif %}
+              {% if not r.active %}<span class="tag warn">отключена</span>{% endif %}
+            </td>
+            <td class="num">{{ r.messages }}</td>
+            <td class="num"><b>{{ r.orders }}</b></td>
+            <td class="num">{{ r.duplicates }}</td>
+            <td class="num">{{ r.spam }}</td>
+            <td class="num">
+              {% if r.messages %}<span class="tag {{ 'bad' if r.spam_share > 0.9 else ('warn' if r.spam_share > 0.7 else 'ok') }}">{{ '%.0f'|format(r.spam_share * 100) }}%</span>{% else %}—{% endif %}
+            </td>
+            <td class="num">{% if r.spam_per_order is not none %}{{ '%.1f'|format(r.spam_per_order) }}{% elif r.spam %}∞{% else %}—{% endif %}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">За период данных нет.</div>
+  {% endif %}
+</div>
+{% endblock %}

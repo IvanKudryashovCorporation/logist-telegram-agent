@@ -12,7 +12,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.city_aliases import canonical_city_name
 from app.db.base import SessionLocal
@@ -29,6 +29,7 @@ from app.models import (
     Payment,
     PendingMessage,
     PendingStatus,
+    WorkGroup,
 )
 from app.services import billing
 from app.timeutil import MSK, now_utc_naive
@@ -528,3 +529,74 @@ async def queue_summary() -> dict[str, int]:
         key = status.value if isinstance(status, PendingStatus) else str(status)
         result[key] = count
     return result
+
+
+#: Причины отсева, которые не говорят о качестве группы: старое сообщение и правка с замком.
+_NOT_SPAM_REASONS = ("stale", "closed_lock")
+
+
+async def group_stats(days: int = 7) -> dict:
+    """Что дала каждая группа за период: заказы в ленте, дубли и спам (отсеянные сообщения).
+
+    ``orders`` — заказы, реально созданные из группы (дубли в таблицу не попадают).
+    ``spam`` — сообщения, признанные не заявкой (предфильтр, LLM, нет маршрута).
+    ``spam_share`` — доля спама среди всех разобранных сообщений группы.
+    """
+    since = now_utc_naive() - timedelta(days=max(1, days))
+    async with SessionLocal() as session:
+        groups = (await session.execute(select(WorkGroup))).scalars().all()
+        orders = dict(
+            (
+                await session.execute(
+                    select(Order.source_chat_id, func.count(Order.id))
+                    .where(Order.created_at >= since)
+                    .group_by(Order.source_chat_id)
+                )
+            ).all()
+        )
+        outcome_rows = (
+            await session.execute(
+                select(ParseStat.chat_id, ParseStat.outcome, func.count(ParseStat.id))
+                .where(
+                    ParseStat.created_at >= since,
+                    ParseStat.chat_id.is_not(None),
+                    ParseStat.outcome.in_([ParseOutcome.NOT_ORDER, ParseOutcome.PREFILTERED, ParseOutcome.DUPLICATE]),
+                    or_(ParseStat.error.is_(None), ParseStat.error.notin_(_NOT_SPAM_REASONS)),
+                )
+                .group_by(ParseStat.chat_id, ParseStat.outcome)
+            )
+        ).all()
+
+    spam: dict[int, int] = {}
+    duplicates: dict[int, int] = {}
+    for chat_id, outcome, count in outcome_rows:
+        target = duplicates if outcome == ParseOutcome.DUPLICATE else spam
+        target[chat_id] = target.get(chat_id, 0) + int(count)
+
+    titles = {g.tg_chat_id: g for g in groups}
+    rows = []
+    for chat_id in sorted(set(titles) | set(orders) | set(spam) | set(duplicates)):
+        group = titles.get(chat_id)
+        if group is not None and not group.is_active and chat_id not in orders and chat_id not in spam:
+            continue  # отключённая группа без активности за период только шумит
+        o, s, d = int(orders.get(chat_id, 0)), spam.get(chat_id, 0), duplicates.get(chat_id, 0)
+        total = o + s + d
+        rows.append(
+            {
+                "chat_id": chat_id,
+                "title": group.title if group else str(chat_id),
+                "username": group.username if group else None,
+                "active": bool(group.is_active) if group else False,
+                "watch_only": bool(group.watch_only) if group else False,
+                "orders": o,
+                "duplicates": d,
+                "spam": s,
+                "messages": total,
+                "spam_share": (s / total) if total else 0.0,
+                "spam_per_order": (s / o) if o else None,
+            }
+        )
+    rows.sort(key=lambda r: (-r["orders"], -r["spam"], r["title"]))
+    totals = {k: sum(r[k] for r in rows) for k in ("orders", "duplicates", "spam", "messages")}
+    totals["spam_share"] = (totals["spam"] / totals["messages"]) if totals["messages"] else 0.0
+    return {"days": days, "rows": rows, "totals": totals}
