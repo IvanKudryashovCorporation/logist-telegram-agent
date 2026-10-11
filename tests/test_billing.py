@@ -602,3 +602,13 @@ async def test_admin_sees_an_infinity_badge_and_is_not_limited(client, subscript
     page = await client.get("/")
 
     assert "Дней подписки: ∞" in page.text
+
+
+async def test_admin_can_open_payment_and_pay_for_a_check(client, session, subscription_on, telegram_login_on, provider):
+    await client.get("/auth/telegram", params=_signed_params())  # тестовый админ
+
+    page = await client.get("/subscription")
+    assert "Оплатить 1000 ₽ по СБП" in page.text  # у админа кнопки оплаты для проверки
+
+    pay = await client.post("/subscription/pay", data={"kind": "sbp"})
+    assert pay.status_code == 303 and pay.headers["location"] == "https://pay.test/fake-1"

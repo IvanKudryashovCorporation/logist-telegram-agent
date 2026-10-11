@@ -9,7 +9,10 @@
     <div class="hint">Все функции сайта работают бесплатно.</div>
   {% elif sub.state == 'admin' %}
     <div class="sub-status">Вы администратор</div>
-    <div class="hint">Ограничения подписки на вас не распространяются.</div>
+    <div class="hint">
+      Ограничения подписки на вас не распространяются. Оплатить можно для проверки: платёж пройдёт как обычный,
+      дни начислятся{% if driver.paid_until %} (оплачено до {{ driver.paid_until.strftime("%d.%m.%Y") }}){% endif %}.
+    </div>
   {% elif sub.state == 'expired' %}
     <div class="sub-status" style="color: var(--bad-text);">Подписка закончилась</div>
     <div class="hint">
@@ -24,7 +27,7 @@
     </div>
   {% endif %}
 
-  {% if sub.state != 'off' and sub.state != 'admin' %}
+  {% if sub.state != 'off' %}
     <div class="sub-price">{{ price_rub }} ₽ за {{ period_days }} дней. Оплаченные дни добавляются к остатку — ничего не сгорает.</div>
     {% if can_pay %}
       <div class="sub-actions">
