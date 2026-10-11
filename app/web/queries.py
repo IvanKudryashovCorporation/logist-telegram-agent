@@ -35,7 +35,7 @@ from app.models import (
     OrderSubscription,
     WorkGroup,
 )
-from app.services import billing
+from app.services import billing, notifications
 from app.timeutil import now_msk_naive, now_utc_naive
 from app.web.filters import Filters
 
@@ -367,6 +367,7 @@ async def header_counts(session: AsyncSession, token: str, telegram_id: Optional
         filters_error = next((error for error in errors if error), None)
     # Плашка «Дней подписки: N»: нужна только вошедшему водителю при включённой подписке.
     subscription = await billing.subscription_for(session, telegram_id)
+    bell = await notifications.bell_for(session, telegram_id)
     return {
         "lenta_count": lenta_count,
         "my_count": my_count,
@@ -374,6 +375,9 @@ async def header_counts(session: AsyncSession, token: str, telegram_id: Optional
         "filters_count": filters_count,
         "filters_error": filters_error,
         "subscription": subscription,
+        "notifications": bell.items,
+        "notifications_unread": bell.unread,
+        "notifications_seen": bell.seen,
     }
 
 
@@ -639,6 +643,12 @@ async def upsert_driver(session: AsyncSession, payload: dict) -> Driver:
     if driver is None:
         driver = Driver(telegram_id=telegram_id, trial_ends_at=billing.new_driver_trial_end())
         session.add(driver)
+        if billing.enabled():
+            await notifications.add(
+                telegram_id, "Добро пожаловать!",
+                f"Первые {settings.trial_days} дней все функции бесплатны. Дни подписки видны в шапке сайта.",
+                kind="subscription", url="/subscription", session=session,
+            )
 
     driver.username = payload.get("username") or None
     driver.first_name = payload.get("first_name") or None

@@ -36,7 +36,7 @@ from app.models import (
     PendingStatus,
 )
 from app.parsing.llm_parser import cache_stats
-from app.services import billing, geo_health, reporting
+from app.services import billing, geo_health, notifications, reporting
 from app.services import billing_events as events
 from app.services.subscriptions import describe_filters, set_subscription_active
 from app.timeutil import now_utc_naive
@@ -297,6 +297,23 @@ async def billing_page(request: Request, days: int = 30):
         request, "admin_billing.html", o=overview, kind_labels=events.KIND_LABELS,
         problem_kinds=events.PROBLEM_KINDS, section="billing",
     )
+
+
+@router.post("/notify")
+async def broadcast_notification(request: Request):
+    """Объявление всем водителям: появится в колокольчике на сайте."""
+    denied = _guard(request)
+    if denied is not None:
+        return denied
+
+    form = await request.form()
+    title = str(form.get("title") or "").strip()[:120]
+    text = str(form.get("text") or "").strip()[:1000]
+    url = str(form.get("url") or "").strip()[:300] or None
+    if title:
+        await notifications.broadcast(title, text, url=url)
+        log.info("Админ отправил объявление в колокольчик: %s", title)
+    return RedirectResponse(url="/admin/users", status_code=303)
 
 
 @router.post("/users/{telegram_id}/subscription/{action}")

@@ -12,6 +12,7 @@ from app.models.enums import (
 )
 from app.models.geo_place import GeoPlace
 from app.models.log import ActionLog
+from app.models.notification import Notification
 from app.models.order import Order
 from app.models.parse_stat import ParseStat
 from app.models.payment import BillingEvent, Payment, Refund
@@ -28,6 +29,7 @@ __all__ = [
     "BillingEvent",
     "Driver",
     "GeoPlace",
+    "Notification",
     "Order",
     "OrderStatus",
     "OrderSubscription",

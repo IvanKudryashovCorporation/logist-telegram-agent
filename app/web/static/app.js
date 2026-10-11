@@ -481,3 +481,25 @@
     if (e.persisted && document.querySelector('.pay-form [aria-busy="true"]')) location.reload();
   });
 })();
+
+// Колокольчик уведомлений: открыть/закрыть панель; при открытии всё отмечается прочитанным.
+(function () {
+  var btn = document.getElementById('bellBtn');
+  var panel = document.getElementById('bellPanel');
+  if (!btn || !panel) return;
+  function close() { panel.hidden = true; btn.setAttribute('aria-expanded', 'false'); }
+  btn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    var opening = panel.hidden;
+    panel.hidden = !opening;
+    btn.setAttribute('aria-expanded', opening ? 'true' : 'false');
+    var dot = document.getElementById('bellDot');
+    if (opening && dot) {
+      fetch('/notifications/read', { method: 'POST', credentials: 'same-origin' })
+        .then(function () { dot.remove(); })
+        .catch(function () { /* сеть: бейдж останется до перезагрузки */ });
+    }
+  });
+  document.addEventListener('click', function (e) { if (!panel.hidden && !panel.contains(e.target)) close(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
+})();

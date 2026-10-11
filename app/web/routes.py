@@ -17,7 +17,7 @@ from app import geo
 from app.config import settings
 from app.db.base import SessionLocal
 from app.models import HIDDEN_STATUSES, Driver, Order
-from app.services import billing
+from app.services import billing, notifications
 from app.services.subscriptions import (
     ADDED,
     EXISTS,
@@ -363,6 +363,16 @@ async def my_filter_action(request: Request, sub_id: int, action: str):
                 "Уведомления по фильтру включены." if action == "on" else "Уведомления по фильтру выключены."
             )
     return _redirect("/filters", new_token, notice)
+
+
+@router.post("/notifications/read")
+async def notifications_read(request: Request):
+    """Колокольчик открыли: всё, что было, считается прочитанным."""
+    telegram_id = logged_in_telegram_id(request)
+    if telegram_id is not None:
+        async with SessionLocal() as session:
+            await notifications.mark_seen(session, telegram_id)
+    return Response(status_code=204)
 
 
 @router.get("/profile", response_class=HTMLResponse)

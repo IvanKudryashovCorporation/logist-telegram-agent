@@ -37,6 +37,17 @@
 </div>
 
 <div class="card">
+  <h2>Объявление в колокольчик</h2>
+  <p class="muted">Появится у всех водителей на сайте (иконка колокольчика в шапке). Ссылка необязательна.</p>
+  <form method="post" action="/admin/notify" style="display:flex; flex-direction:column; gap:8px; max-width:560px;">
+    <input type="text" name="title" placeholder="Заголовок" maxlength="120" required>
+    <textarea name="text" placeholder="Текст" rows="3" maxlength="1000"></textarea>
+    <input type="text" name="url" placeholder="Ссылка (например, /subscription)" maxlength="300">
+    <button type="submit" class="btn">Отправить всем</button>
+  </form>
+</div>
+
+<div class="card">
   <h2>Пользователи</h2>
 
   <form method="get" action="/admin/users" class="filters-inline">

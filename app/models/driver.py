@@ -49,6 +49,8 @@ class Driver(Base, TimestampMixin):
     payment_method_id: Mapped[Optional[str]] = mapped_column(String(64))
     #: Подряд неудачных автосписаний; после трёх автопродление выключается.
     renew_failures: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    #: Когда водитель последний раз открывал колокольчик: уведомления новее — непрочитанные.
+    notifications_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime())
     #: Для какой даты окончания уже отправлено напоминание (чтобы не слать его каждые полминуты).
     reminded_for: Mapped[Optional[date]] = mapped_column(Date())
 

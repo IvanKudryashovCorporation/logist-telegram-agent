@@ -17,7 +17,7 @@ from app.config import settings
 from app.db.base import SessionLocal
 from app.models import Driver, Payment
 from app.models.payment import KIND_ADMIN, KIND_AUTORENEW, PAYMENT_PENDING
-from app.services import billing
+from app.services import billing, notifications
 from app.services import billing_events as events
 from app.services.payments import PaymentProvider, ProviderPayment
 from app.services.payments.base import STATUS_CANCELED, STATUS_SUCCEEDED, ProviderRefund
@@ -119,6 +119,11 @@ async def apply_payment(session: AsyncSession, provider_name: str, info: Provide
             telegram_id=info.telegram_id, provider_id=info.id, amount_kop=info.amount_kop,
             details=f"+{days} дн., оплачено до {until:%d.%m.%Y}" if until else f"+{days} дн.",
         )
+        await notifications.add(
+            info.telegram_id, "Оплата получена",
+            f"Подписка продлена до {until:%d.%m.%Y}." if until else "Подписка продлена.",
+            kind="payment", url="/subscription",
+        )
     else:
         await events.record(
             events.PAYMENT_DUPLICATE, telegram_id=info.telegram_id, provider_id=info.id, amount_kop=info.amount_kop,
@@ -167,6 +172,11 @@ async def apply_refund(session: AsyncSession, info: ProviderRefund) -> RefundSet
             telegram_id=refund.telegram_id, amount_kop=info.amount_kop, days=days, until=until, refund_id=info.id,
         ),
         telegram_id=refund.telegram_id, provider_id=info.id, amount_kop=info.amount_kop, details=f"-{days} дн.",
+    )
+    await notifications.add(
+        refund.telegram_id, "Платёж возвращён",
+        f"Срок подписки сокращён на {days} дн." + (f" Теперь она действует до {until:%d.%m.%Y}." if until else ""),
+        kind="payment", url="/subscription",
     )
     return RefundSettlement(True, refund.telegram_id, days, until)
 
@@ -254,6 +264,11 @@ async def remind_expiring(*, send=None, now: Optional[datetime] = None) -> int:
             await events.record(
                 events.REMINDER_SENT, telegram_id=driver.telegram_id, details=text[:80], session=session,
             )
+            await notifications.add(
+                driver.telegram_id,
+                "Подписка закончилась" if sub.state == billing.STATE_EXPIRED else "Подписка скоро закончится",
+                text.lstrip("⏳ "), kind="subscription", url="/subscription", session=session,
+            )
             if outcome != BLOCKED:
                 sent += 1
         await session.commit()
@@ -278,6 +293,7 @@ async def autorenew_due(
 
     charged = 0
     problems: list[tuple] = []
+    notes: list[int] = []
     async with SessionLocal() as session:
         drivers = (
             await session.execute(
@@ -334,6 +350,7 @@ async def autorenew_due(
                 if driver.renew_failures >= MAX_RENEW_FAILURES:
                     driver.auto_renew = False
                 await session.commit()
+                notes.append(driver.telegram_id)
                 problems.append((
                     events.AUTORENEW_FAILED,
                     f"⚠️ Автосписание не прошло: {await events.who(driver.telegram_id)}, неудач подряд: "
@@ -347,6 +364,12 @@ async def autorenew_due(
                     _pay_markup(),
                 )
             # pending: итог придёт вебхуком или сверкой
+    for telegram_id in notes:
+        await notifications.add(
+            telegram_id, "Не удалось списать оплату",
+            "Автопродление не сработало. Оплатите подписку вручную, чтобы не потерять доступ.",
+            kind="subscription", url="/subscription",
+        )
     for kind, text, telegram_id, provider_id, throttle in problems:
         await events.alert(kind, text, telegram_id=telegram_id, provider_id=provider_id, throttle=throttle)
     return charged

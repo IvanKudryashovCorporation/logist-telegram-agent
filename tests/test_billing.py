@@ -1202,3 +1202,154 @@ async def test_reconcile_closes_a_payment_the_provider_does_not_know_without_ala
 
     assert (await session.execute(select(Payment))).scalars().one().status == PAYMENT_CANCELED
     assert [text for chat, text in sent_messages if chat == 424242] == []  # ложной тревоги владельцу нет
+
+
+# --- Колокольчик: уведомления на сайте ---------------------------------------------------------------
+
+
+async def _driver_row(session, telegram_id=int(USER), **fields):
+    session.add(Driver(telegram_id=telegram_id, first_name="Водитель", **fields))
+    await session.commit()
+
+
+async def test_bell_shows_personal_and_broadcast_notifications_with_unread_count(session):
+    from app.services import notifications
+
+    await _driver_row(session)
+    await notifications.add(int(USER), "Личное", "только вам")
+    await notifications.add(999, "Чужое", "не вам")
+    await notifications.broadcast("Объявление", "всем")
+
+    bell = await notifications.bell_for(session, int(USER))
+
+    assert [n.title for n in bell.items] == ["Объявление", "Личное"]  # чужое не видно, новые сверху
+    assert bell.unread == 2
+
+
+async def test_broadcast_sent_before_registration_is_not_shown_to_a_newcomer(session):
+    from sqlalchemy import update
+
+    from app.models import Notification
+    from app.services import notifications
+
+    await notifications.broadcast("Старое объявление", "было до вас")
+    await session.execute(update(Notification).values(created_at=now_utc_naive() - timedelta(days=3)))
+    await session.commit()
+    await _driver_row(session)
+
+    bell = await notifications.bell_for(session, int(USER))
+
+    assert bell.items == [] and bell.unread == 0
+
+
+async def test_opening_the_bell_marks_everything_read(session):
+    from app.services import notifications
+
+    await _driver_row(session)
+    await notifications.add(int(USER), "Новость", "текст")
+    assert (await notifications.bell_for(session, int(USER))).unread == 1
+
+    assert await notifications.mark_seen(session, int(USER), now=now_utc_naive() + timedelta(seconds=1)) is True
+
+    bell = await notifications.bell_for(session, int(USER))
+    assert bell.unread == 0 and len(bell.items) == 1  # список остался, непрочитанных нет
+    assert await notifications.mark_seen(session, 12345) is False  # такого водителя нет
+
+
+async def test_bell_in_the_header_has_a_badge_and_a_panel_for_a_logged_in_driver(
+    client, session, subscription_on, telegram_login_on
+):
+    from app.services import notifications
+
+    await _login(client)
+    await notifications.add(int(USER), "Оплата получена", "Подписка продлена до 01.12.2026.", url="/subscription")
+
+    page = (await client.get("/")).text
+
+    # бейдж с числом: приветствие при регистрации и оплата
+    assert 'id="bellBtn"' in page and 'id="bellDot"' in page and ">2<" in page
+    assert "Оплата получена" in page and 'href="/subscription"' in page
+
+
+async def test_guest_sees_no_bell(client, subscription_on, telegram_login_on):
+    assert 'id="bellBtn"' not in (await client.get("/")).text
+
+
+async def test_read_endpoint_clears_the_badge(client, session, subscription_on, telegram_login_on):
+    from app.services import notifications
+
+    await _login(client)
+    await notifications.add(int(USER), "Новость", "текст")
+    assert 'id="bellDot"' in (await client.get("/")).text
+
+    response = await client.post("/notifications/read")
+    page = (await client.get("/")).text
+
+    assert response.status_code == 204
+    assert 'id="bellDot"' not in page and "Новость" in page  # бейджа нет, а уведомление в списке осталось
+
+
+async def test_registration_greets_a_new_driver_when_subscription_is_on(session, subscription_on):
+    from app.services import notifications
+
+    await queries.upsert_driver(session, {"id": "9300", "first_name": "Новичок"})
+
+    bell = await notifications.bell_for(session, 9300)
+
+    assert [n.title for n in bell.items] == ["Добро пожаловать!"] and "14 дней" in bell.items[0].text
+
+
+async def test_payment_and_refund_leave_notifications_for_the_driver(
+    client, session, subscription_on, telegram_login_on, provider, sent_messages
+):
+    from app.services import notifications
+
+    await _login(client)
+    await client.post("/subscription/pay", data={"kind": "sbp"})
+    provider.succeed("fake-1")
+    await client.post("/payments/yookassa", json={"event": "payment.succeeded", "object": {"id": "fake-1"}})
+    provider.refund("ref-1", "fake-1", 100000)
+    await client.post("/payments/yookassa", json={"event": "refund.succeeded", "object": {"id": "ref-1"}})
+
+    titles = [n.title for n in (await notifications.bell_for(session, int(USER))).items]
+
+    assert "Оплата получена" in titles and "Платёж возвращён" in titles
+
+
+async def test_subscription_reminder_leaves_a_notification(session, subscription_on):
+    from app.services import notifications
+
+    session.add(Driver(telegram_id=3101, trial_ends_at=NOW + timedelta(days=2, hours=5)))
+    await session.commit()
+
+    await billing_flow.remind_expiring(send=Messages(), now=NOW)
+
+    bell = await notifications.bell_for(session, 3101)
+    assert [n.title for n in bell.items] == ["Подписка скоро закончится"]
+
+
+async def test_admin_can_send_an_announcement_to_everyone(client, session, subscription_on, telegram_login_on):
+    from app.services import notifications
+
+    session.add(Driver(telegram_id=8803, first_name="Получатель"))
+    await session.commit()
+    await client.get("/auth/telegram", params=_signed_params())  # тестовый админ
+
+    response = await client.post(
+        "/admin/notify", data={"title": "Запуск подписки", "text": "14 дней бесплатно", "url": "/subscription"}
+    )
+
+    assert response.status_code == 303
+    bell = await notifications.bell_for(session, 8803)
+    assert [n.title for n in bell.items] == ["Запуск подписки"] and bell.items[0].url == "/subscription"
+
+
+async def test_non_admin_cannot_send_announcements(client, session, subscription_on, telegram_login_on):
+    from app.models import Notification
+
+    await _login(client)
+
+    response = await client.post("/admin/notify", data={"title": "Взлом", "text": "x"})
+
+    assert response.status_code == 404
+    assert "Взлом" not in [n.title for n in (await session.execute(select(Notification))).scalars().all()]
