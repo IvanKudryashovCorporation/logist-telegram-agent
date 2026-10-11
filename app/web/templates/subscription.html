@@ -137,7 +137,7 @@
       {% endif %}
       {% if can_pay %}
         <div class="sb-btns">
-          {{ pay_form('sbp', 'Оплатить ' ~ price_rub ~ ' ₽ по СБП', 'phone') }}
+          {{ pay_form('sbp', 'Оплатить по СБП', 'phone') }}
           {{ pay_form('card', 'Оплатить банковской картой', 'card', true) }}
           {{ pay_form('any', 'Другой способ оплаты', 'card', true) }}
         </div>

@@ -626,7 +626,7 @@ async def test_admin_can_open_payment_and_pay_for_a_check(client, session, subsc
     await client.get("/auth/telegram", params=_signed_params())  # тестовый админ
 
     page = await client.get("/subscription")
-    assert "Оплатить 1000 ₽ по СБП" in page.text  # у админа кнопки оплаты для проверки
+    assert "Оплатить по СБП" in page.text  # у админа кнопки оплаты для проверки
 
     pay = await client.post("/subscription/pay", data={"kind": "sbp"})
     assert pay.status_code == 303 and pay.headers["location"] == "https://pay.test/fake-1"
@@ -645,7 +645,7 @@ async def test_trial_page_shows_days_benefits_and_both_pay_buttons(
 
     assert "Пробный период" in page and ">9<" in page  # крупное число дней
     assert "Что даёт подписка" in page and "Платежей пока не было." in page
-    assert "Оплатить 1000 ₽ по СБП" in page and "Оплатить банковской картой" in page
+    assert "Оплатить по СБП" in page and "Оплатить банковской картой" in page
     assert page.rindex("Настроить автоплатёж") > page.rindex("Оплатить банковской картой")  # автоплатёж в конце, мелко
     assert page.index("Оплатить банковской картой") < page.index("Другой способ оплаты") < page.rindex("Настроить автоплатёж")
 
@@ -674,7 +674,7 @@ async def test_paid_page_with_autorenew_hides_the_card_button(
 
     assert "Подписка оплачена" in page and "Автопродление включено" in page and "Отключить автопродление" in page
     assert "Настроить автоплатёж" not in page  # уже настроен
-    assert "Оплатить 1000 ₽ по СБП" in page and "Оплатить банковской картой" in page
+    assert "Оплатить по СБП" in page and "Оплатить банковской картой" in page
     assert "Дни добавятся к остатку: будет 64" in page
 
 
