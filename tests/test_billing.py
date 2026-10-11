@@ -777,3 +777,12 @@ async def test_offer_page_is_a_complete_document_without_a_template_remark(clien
     for section in ("Предмет договора", "Пробный период", "Автоплатёж", "возврат", "Персональные данные", "Реквизиты"):
         assert section in text
     assert "шаблон" not in text.lower() and "сверьте" not in text.lower()
+
+
+async def test_webhook_ignores_non_payment_events_without_asking_the_provider(
+    client, subscription_on, telegram_login_on, provider
+):
+    # привязка способа оплаты и возврат приходят с id, который не является платежом
+    for event in ("payment_method.active", "refund.succeeded"):
+        response = await client.post("/payments/yookassa", json={"event": event, "object": {"id": "not-a-payment"}})
+        assert response.status_code == 200, event  # не 502: иначе ЮKassa будет повторять уведомление

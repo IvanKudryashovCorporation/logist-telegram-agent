@@ -221,10 +221,13 @@ async def yookassa_webhook(request: Request):
         return JSONResponse({"ok": True})
     try:
         payload = await request.json()
+        event = str(payload.get("event") or "")
         payment_id = str((payload.get("object") or {}).get("id") or "")
     except Exception:  # noqa: BLE001 — не JSON: просто игнорируем
         return JSONResponse({"ok": True})
-    if not payment_id:
+    # Нужны только события платежа (payment.succeeded / canceled / waiting_for_capture). Привязка способа оплаты
+    # (payment_method.active) и возвраты (refund.succeeded) приходят с чужим id: запрашивать их как платёж нельзя.
+    if not payment_id or not event.startswith("payment."):
         return JSONResponse({"ok": True})
     try:
         result = await billing_flow.settle(provider, payment_id)
