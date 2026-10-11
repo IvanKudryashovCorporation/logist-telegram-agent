@@ -1353,3 +1353,21 @@ async def test_non_admin_cannot_send_announcements(client, session, subscription
 
     assert response.status_code == 404
     assert "Взлом" not in [n.title for n in (await session.execute(select(Notification))).scalars().all()]
+
+
+async def test_subscription_page_always_shows_card_unbinding_block(client, session, subscription_on, telegram_login_on):
+    await _login(client)
+
+    page = (await client.get("/subscription")).text
+
+    assert "Сохранённая карта и автоплатёж" in page
+    assert "Карта не привязана" in page and "Отвязать карту и отключить автоплатёж" in page
+    assert "disabled" in page.split("Отвязать карту")[0].rsplit("<button", 1)[1]  # без карты кнопка неактивна
+
+    driver = (await session.execute(select(Driver).where(Driver.telegram_id == int(USER)))).scalar_one()
+    driver.auto_renew, driver.payment_method_id = True, "pm-1"
+    await session.commit()
+
+    page = (await client.get("/subscription")).text
+    assert "Карта привязана" in page
+    assert "disabled" not in page.split("Отвязать карту")[0].rsplit("<button", 1)[1]

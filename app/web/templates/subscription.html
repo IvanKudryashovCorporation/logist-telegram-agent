@@ -160,6 +160,22 @@
     </section>
   {% endif %}
 
+  {# ---- Сохранённая карта и автоплатёж: блок виден всегда, отвязать карту можно в один клик ---- #}
+  {% if sub.state != 'off' %}
+    {% set card_saved = driver.payment_method_id or driver.auto_renew %}
+    <section class="sb-card" aria-label="Сохранённая карта и автоплатёж" id="card-autopay">
+      <h2 class="sb-h2">Сохранённая карта и автоплатёж</h2>
+      <p class="sb-note">
+        {% if card_saved %}Карта привязана, подписка продлевается автоматически за сутки до конца срока ({{ price_rub }} ₽ за {{ period_days }} дней).
+        {% else %}Карта не привязана, автоплатёж выключен. Привязать карту можно ссылкой «Настроить автоплатёж» в блоке оплаты выше.{% endif %}
+      </p>
+      <form method="post" action="/subscription/autorenew/off">
+        <button type="submit" class="sb-btn sb-btn-alt sb-btn-sm" {% if not card_saved %}disabled{% endif %}>Отвязать карту и отключить автоплатёж</button>
+      </form>
+      <p class="sb-fine" style="margin-top:10px;">Данные карты хранятся в ЮKassa, на нашем сайте их нет. После отвязки списаний больше не будет; оплаченные дни сохраняются.</p>
+    </section>
+  {% endif %}
+
   {# ---- Что даёт подписка (в пробный период) ---- #}
   {% if sub.state == 'trial' %}
     <section class="sb-card" aria-label="Что даёт подписка">
