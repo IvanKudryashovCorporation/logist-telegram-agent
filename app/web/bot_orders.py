@@ -18,6 +18,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.db.base import SessionLocal
 from app.models import Driver, Order
+from app.services import billing
 from app.services.subscriptions import chat_url, order_line, order_url
 from app.web import queries
 
@@ -85,6 +86,11 @@ async def handle_take(callback: dict, api: BotApi) -> None:
         ).scalar_one_or_none()
         if known is None:
             await answer(f"Сначала войдите на сайт через Telegram: {settings.public_base_url}", alert=True)
+            return
+        if not await billing.has_access_for(session, user_id):
+            await answer(
+                f"Подписка закончилась. Продлите её на сайте: {settings.public_base_url}/subscription", alert=True
+            )
             return
         result = await queries.take_order(session, order_id, f"tg:{user_id}")
         order = await session.get(Order, order_id)

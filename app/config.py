@@ -262,6 +262,20 @@ class Settings(BaseSettings):
     #: Сколько подряд ошибок разбора до алерта.
     notify_error_threshold: int = 5
 
+    # --- Платная подписка ---
+    #: Дата запуска подписки (ГГГГ-ММ-ДД). Пусто — подписка выключена и сайт работает как раньше.
+    #: Существующим водителям пробный период считается от этой даты, новым — от регистрации.
+    subscription_launch_date: str = ""
+    trial_days: int = 14
+    subscription_price_rub: int = 1000
+    subscription_period_days: int = 30
+    #: Ключи магазина ЮKassa (СБП и карты). Без них оплатить нельзя, а подписка работает на пробном периоде.
+    yookassa_shop_id: str = ""
+    yookassa_secret_key: str = ""
+    #: Реквизиты продавца для публичной оферты (/offer): ФИО самозанятого и ИНН.
+    offer_seller_name: str = ""
+    offer_seller_inn: str = ""
+
     @property
     def session_path(self) -> Path:
         return PROJECT_ROOT / f"{self.tg_session_name}.session"

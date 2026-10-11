@@ -26,9 +26,11 @@ from app.models import (
     OrderSubscription,
     ParseOutcome,
     ParseStat,
+    Payment,
     PendingMessage,
     PendingStatus,
 )
+from app.services import billing
 from app.timeutil import MSK, now_utc_naive
 
 #: Сдвиг МСК от UTC: ``created_at`` лежит в UTC, а «день» владельцу нужен по Москве.
@@ -291,6 +293,7 @@ async def users_overview(*, q: str = "", sort: str = "login", limit: int = 200) 
                 "registered": _msk(driver.created_at),
                 "last_login": _msk(driver.last_login_at),
                 "is_new": driver.created_at >= week,
+                "sub": billing.describe(driver, driver.telegram_id, now),
             }
         )
 
@@ -312,6 +315,9 @@ async def users_overview(*, q: str = "", sort: str = "login", limit: int = 200) 
             "active_week": sum(1 for d in drivers if d.last_login_at and d.last_login_at >= week),
             "took_orders": sum(1 for d in drivers if stats.get(d.token, UserStats()).taken),
             "with_notifications": sum(1 for group in subs.values() if any(s.is_active for s in group)),
+            "paid": sum(1 for u in users if u["sub"].state == billing.STATE_PAID),
+            "expired": sum(1 for u in users if u["sub"].state == billing.STATE_EXPIRED),
+            "subscription_on": billing.enabled(),
         },
     }
 
@@ -343,6 +349,13 @@ async def user_detail(telegram_id: int, *, orders_limit: int = 50, actions_limit
                 )
             ).scalars().all()
         )
+        payments = list(
+            (
+                await session.execute(
+                    select(Payment).where(Payment.telegram_id == telegram_id).order_by(Payment.id.desc()).limit(20)
+                )
+            ).scalars().all()
+        )
         actions = []
         if orders:
             actions = list(
@@ -367,6 +380,8 @@ async def user_detail(telegram_id: int, *, orders_limit: int = 50, actions_limit
         "name": " ".join(part for part in (driver.first_name, driver.last_name) if part) or "—",
         "stats": stats,
         "subscriptions": subs,
+        "sub": billing.describe(driver, telegram_id),
+        "payments": payments,
         "registered": _msk(driver.created_at),
         "last_login": _msk(driver.last_login_at),
         "orders": orders[:orders_limit],

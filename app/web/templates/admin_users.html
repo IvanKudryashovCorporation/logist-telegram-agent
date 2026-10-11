@@ -24,6 +24,16 @@
     <div class="metric-value">{{ s.with_notifications }}</div>
     <div class="metric-label">с уведомлениями</div>
   </div>
+  {% if s.subscription_on %}
+    <div class="metric ok">
+      <div class="metric-value">{{ s.paid }}</div>
+      <div class="metric-label">оплатили подписку</div>
+    </div>
+    <div class="metric {{ 'warn' if s.expired else '' }}">
+      <div class="metric-value">{{ s.expired }}</div>
+      <div class="metric-label">подписка закончилась</div>
+    </div>
+  {% endif %}
 </div>
 
 <div class="card">
@@ -58,6 +68,7 @@
           <th class="num">Сумма</th>
           <th class="num">Жалоб</th>
           <th>Уведомления</th>
+          <th>Подписка</th>
         </tr>
       </thead>
       <tbody>
@@ -82,6 +93,13 @@
               {% if not u.filters_total %}<span class="muted">нет фильтров</span>
               {% elif u.filters_active %}<span class="tag ok">{{ u.filters_active }} из {{ u.filters_total }} вкл.</span>
               {% else %}<span class="tag warn" title="{{ u.filters_error or '' }}">все выключены ({{ u.filters_total }})</span>{% endif %}
+            </td>
+            <td class="nowrap">
+              {% set sb = u.sub %}
+              {% if sb.state == 'paid' %}<span class="tag ok">оплачено · {{ sb.days }} дн.</span>
+              {% elif sb.state == 'trial' %}<span class="tag info">пробный · {{ sb.days }} дн.</span>
+              {% elif sb.state == 'expired' %}<span class="tag warn">закончилась</span>
+              {% else %}<span class="muted">—</span>{% endif %}
             </td>
           </tr>
         {% endfor %}

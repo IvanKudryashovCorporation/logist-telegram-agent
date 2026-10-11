@@ -17,6 +17,7 @@ from app import geo
 from app.config import settings
 from app.db.base import SessionLocal
 from app.models import HIDDEN_STATUSES, Driver, Order
+from app.services import billing
 from app.services.subscriptions import (
     ADDED,
     EXISTS,
@@ -288,7 +289,9 @@ async def apply_filter(request: Request):
         return _login_redirect(request, target)
 
     notice = ""
-    if form.get("notify"):
+    if form.get("notify") and not await _has_subscription(request):
+        notice = "Подписка закончилась: фильтр применён без сохранения. Уведомления в Telegram доступны по подписке."
+    elif form.get("notify"):
         if not has_criteria(params):
             notice = (
                 "Чтобы сохранить фильтр, задайте хотя бы одно условие: город, тип авто, дату, время или цену — "
@@ -348,6 +351,8 @@ async def my_filter_action(request: Request, sub_id: int, action: str):
         return HTMLResponse("Страница не найдена", status_code=404)
 
     telegram_id = logged_in_telegram_id(request)
+    if action == "on" and not await _has_subscription(request):
+        return _redirect("/subscription", new_token, queries.ActionResult(False, "no_subscription").message)
     async with SessionLocal() as session:
         if action == "delete":
             done = await delete_subscription(session, telegram_id, sub_id)
@@ -467,12 +472,29 @@ def _redirect(url: str, new_token: Optional[str], notice: str = "") -> Response:
     return response
 
 
+async def _has_subscription(request: Request) -> bool:
+    """Есть ли у вошедшего водителя подписка (пробный период или оплата). Без входа проверять нечего."""
+    telegram_id = logged_in_telegram_id(request)
+    if telegram_id is None:
+        return True
+    async with SessionLocal() as session:
+        return await billing.has_access_for(session, telegram_id)
+
+
+def _no_subscription(order_id: Optional[int], back: str, new_token: Optional[str]) -> Response:
+    """Функция закрыта: подписка закончилась. Ведём на страницу оплаты с понятным сообщением."""
+    return _redirect("/subscription", new_token, queries.ActionResult(False, "no_subscription").message)
+
+
 @router.post("/orders/{order_id}/take")
 async def take_order(request: Request, order_id: int, back: str = ""):
     """«Взять заказ» без перехода в Telegram (оставлено для прямых ссылок)."""
     token, new_token, login_required = resolve_driver(request)
     if login_required:
         return _login_redirect(request, _order_url(order_id, back))
+
+    if not await _has_subscription(request):
+        return _no_subscription(order_id, back, new_token)
 
     async with SessionLocal() as session:
         result = await queries.take_order(session, order_id, token)
@@ -490,6 +512,9 @@ async def contact_dispatcher(request: Request, order_id: int, back: str = ""):
     token, new_token, login_required = resolve_driver(request)
     if login_required:
         return _login_redirect(request, _order_url(order_id, back))
+
+    if not await _has_subscription(request):
+        return _no_subscription(order_id, back, new_token)
 
     async with SessionLocal() as session:
         order = await session.get(Order, order_id)
@@ -532,6 +557,9 @@ async def agree_order(request: Request, order_id: int, back: str = ""):
     token, new_token, login_required = resolve_driver(request)
     if login_required:
         return _login_redirect(request, _order_url(order_id, back))
+
+    if not await _has_subscription(request):
+        return _no_subscription(order_id, back, new_token)
 
     async with SessionLocal() as session:
         result = await queries.agree_order(session, order_id, token)

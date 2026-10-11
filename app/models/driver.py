@@ -12,10 +12,10 @@ driver_token). Она никуда не делась: у водителя БЕЗ
 браузера/устройства, а не только для этого браузера.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, DateTime, String
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Integer, String, false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin
@@ -37,6 +37,20 @@ class Driver(Base, TimestampMixin):
     #: Обновляется при каждом входе — не то же самое, что created_at
     #: (TimestampMixin), которая фиксирует именно первую регистрацию.
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime())
+
+    # --- Подписка (см. app/services/billing.py) ---
+    #: Конец пробного периода. Новым водителям ставится при регистрации; пусто у тех, кто зарегистрирован до запуска
+    #: подписки: у них пробный период считается от ``SUBSCRIPTION_LAUNCH_DATE``.
+    trial_ends_at: Mapped[Optional[datetime]] = mapped_column(DateTime())
+    #: До какого момента оплачено (наивный UTC). Оплаты копятся поверх остатка пробного периода.
+    paid_until: Mapped[Optional[datetime]] = mapped_column(DateTime())
+    #: Продлевать картой автоматически и способ оплаты, сохранённый у провайдера.
+    auto_renew: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
+    payment_method_id: Mapped[Optional[str]] = mapped_column(String(64))
+    #: Подряд неудачных автосписаний; после трёх автопродление выключается.
+    renew_failures: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    #: Для какой даты окончания уже отправлено напоминание (чтобы не слать его каждые полминуты).
+    reminded_for: Mapped[Optional[date]] = mapped_column(Date())
 
     @property
     def token(self) -> str:

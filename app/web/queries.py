@@ -35,6 +35,7 @@ from app.models import (
     OrderSubscription,
     WorkGroup,
 )
+from app.services import billing
 from app.timeutil import now_msk_naive, now_utc_naive
 from app.web.filters import Filters
 
@@ -364,12 +365,15 @@ async def header_counts(session: AsyncSession, token: str, telegram_id: Optional
         ).scalars().all()
         filters_count = len(errors)
         filters_error = next((error for error in errors if error), None)
+    # Плашка «Дней подписки: N»: нужна только вошедшему водителю при включённой подписке.
+    subscription = await billing.subscription_for(session, telegram_id)
     return {
         "lenta_count": lenta_count,
         "my_count": my_count,
         "groups_count": groups_count,
         "filters_count": filters_count,
         "filters_error": filters_error,
+        "subscription": subscription,
     }
 
 
@@ -401,6 +405,7 @@ class ActionResult:
             "closed": "Заказ уже закрыт (скрыт или просрочен).",
             "completed": "Заказ уже выполнен.",
             "not_active": "Выполнить можно только заказ, по которому вы договорились.",
+            "no_subscription": "Подписка закончилась — продлите её, чтобы писать диспетчерам и брать заказы.",
         }.get(self.reason, "")
 
 
@@ -632,7 +637,7 @@ async def upsert_driver(session: AsyncSession, payload: dict) -> Driver:
     ).scalar_one_or_none()
 
     if driver is None:
-        driver = Driver(telegram_id=telegram_id)
+        driver = Driver(telegram_id=telegram_id, trial_ends_at=billing.new_driver_trial_end())
         session.add(driver)
 
     driver.username = payload.get("username") or None

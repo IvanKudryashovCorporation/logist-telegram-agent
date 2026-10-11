@@ -36,7 +36,7 @@ from app.models import (
     PendingStatus,
 )
 from app.parsing.llm_parser import cache_stats
-from app.services import geo_health, reporting
+from app.services import billing, geo_health, reporting
 from app.services.subscriptions import describe_filters, set_subscription_active
 from app.timeutil import now_utc_naive
 from app.web import queries
@@ -281,6 +281,31 @@ async def user_filter(request: Request, telegram_id: int, sub_id: int, action: s
             "Админ %s уведомления по фильтру #%s у tg:%s",
             "включил" if action == "on" else "выключил", sub_id, telegram_id,
         )
+    return RedirectResponse(url=f"/admin/users/{telegram_id}", status_code=303)
+
+
+@router.post("/users/{telegram_id}/subscription/{action}")
+async def user_subscription(request: Request, telegram_id: int, action: str):
+    """Подписка пользователя вручную: добавить дни (подарок, компенсация) или обнулить доступ."""
+    denied = _guard(request)
+    if denied is not None:
+        return denied
+    if action not in ("grant", "reset"):
+        return _disabled()
+
+    async with SessionLocal() as session:
+        if action == "grant":
+            form = await request.form()
+            try:
+                days = max(1, min(int(str(form.get("days") or "0")), 366))
+            except ValueError:
+                days = 0
+            if days:
+                until = await billing.grant_days(session, telegram_id, days)
+                log.info("Админ добавил %s дн. подписки tg:%s (до %s)", days, telegram_id, until)
+        else:
+            await billing.reset_access(session, telegram_id)
+            log.info("Админ обнулил доступ по подписке у tg:%s", telegram_id)
     return RedirectResponse(url=f"/admin/users/{telegram_id}", status_code=303)
 
 

@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Подписка — Лента заказов{% endblock %}
+{% block content %}
+
+<div class="detail-card profile-card sub-card">
+  <div class="hint">Подписка</div>
+  {% if sub.state == 'off' %}
+    <div class="sub-status">Подписка пока не включена</div>
+    <div class="hint">Все функции сайта работают бесплатно.</div>
+  {% elif sub.state == 'admin' %}
+    <div class="sub-status">Вы администратор</div>
+    <div class="hint">Ограничения подписки на вас не распространяются.</div>
+  {% elif sub.state == 'expired' %}
+    <div class="sub-status" style="color: var(--bad-text);">Подписка закончилась</div>
+    <div class="hint">
+      Лента и «Мои заказы» по-прежнему доступны. Чтобы снова писать диспетчерам, брать заказы и получать
+      уведомления в Telegram, продлите подписку.
+    </div>
+  {% else %}
+    <div class="sub-status">Дней подписки: {{ sub.days }}</div>
+    <div class="hint">
+      {% if sub.state == 'trial' %}Пробный период ({{ trial_days }} дней), полный доступ.{% else %}Подписка оплачена.{% endif %}
+      Действует до {{ sub.until.strftime("%d.%m.%Y") }}.
+    </div>
+  {% endif %}
+
+  {% if sub.state != 'off' and sub.state != 'admin' %}
+    <div class="sub-price">{{ price_rub }} ₽ за {{ period_days }} дней. Оплаченные дни добавляются к остатку — ничего не сгорает.</div>
+    {% if can_pay %}
+      <div class="sub-actions">
+        <form method="post" action="/subscription/pay">
+          <input type="hidden" name="kind" value="sbp">
+          <button type="submit">Оплатить {{ price_rub }} ₽ по СБП</button>
+        </form>
+        <form method="post" action="/subscription/pay">
+          <input type="hidden" name="kind" value="card">
+          <button type="submit" class="btn-secondary">Картой, продлевать автоматически</button>
+        </form>
+      </div>
+      <div class="hint">СБП — разовая оплата без комиссии для вас. Картой — карта сохраняется, и подписка продлевается сама за сутки до конца.</div>
+    {% else %}
+      <div class="hint">Приём оплаты скоро появится.</div>
+    {% endif %}
+
+    {% if driver.auto_renew %}
+      <div class="hint" style="margin-top: 14px;">Автопродление картой включено.</div>
+      <form method="post" action="/subscription/autorenew/off" style="margin-top: 6px;">
+        <button type="submit" class="btn-secondary">Отключить автопродление</button>
+      </form>
+    {% endif %}
+  {% endif %}
+</div>
+
+<div class="detail-card profile-card sub-card">
+  <div class="hint">Что даёт подписка</div>
+  <ul class="hint" style="margin: 8px 0 0 18px;">
+    <li>кнопки «Написать диспетчеру», «Договорился с диспетчером» и «Взять заказ»;</li>
+    <li>уведомления о новых заказах по вашим фильтрам в Telegram.</li>
+  </ul>
+  <div class="hint" style="margin-top: 8px;">Условия — в <a href="/offer">публичной оферте</a>.</div>
+</div>
+
+{% if payments %}
+  <div class="detail-card profile-card sub-card">
+    <div class="hint" style="margin-bottom: 8px;">Платежи</div>
+    <table class="sub-table">
+      <tr><th>Дата</th><th>Способ</th><th>Сумма</th><th>Статус</th></tr>
+      {% for p in payments %}
+        <tr>
+          <td>{{ (p.paid_at or p.created_at).strftime("%d.%m.%Y %H:%M") }}</td>
+          <td>{{ kind_labels.get(p.kind, p.kind) }}</td>
+          <td>{{ "%.0f"|format(p.amount_kop / 100) }} ₽ · {{ p.days }} дн.</td>
+          <td>{{ {"succeeded": "оплачен", "pending": "ожидает оплаты", "canceled": "отменён"}.get(p.status, p.status) }}</td>
+        </tr>
+      {% endfor %}
+    </table>
+  </div>
+{% endif %}
+
+{% endblock %}

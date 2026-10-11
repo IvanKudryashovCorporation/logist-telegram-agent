@@ -37,6 +37,7 @@ from app.models import (
     SubscriptionNotification,
     WorkGroup,
 )
+from app.services import billing
 from app.timeutil import now_msk_naive, now_utc_naive
 from app.web import queries
 from app.web.filters import VEHICLE_CHOICES, Filters
@@ -408,6 +409,12 @@ async def notify_once(*, send: Sender = send_message, now: Optional[datetime] = 
         if not subs:
             return 0
 
+        # Водителям без подписки уведомления не шлём (кнопки-ссылки в сообщении перехватить нельзя).
+        access = await billing.access_map(session, {sub.telegram_id for sub in subs}, now)
+        subs = [sub for sub in subs if access.get(sub.telegram_id, True)]
+        if not subs:
+            return 0
+
         candidates = list(
             (
                 await session.execute(
@@ -599,6 +606,26 @@ async def retract_withdrawn(
     return done
 
 
+#: Напоминания и автопродление проверяем не каждые полминуты, а раз в несколько минут.
+_BILLING_EVERY = timedelta(minutes=5)
+_billing_last: Optional[datetime] = None
+
+
+async def _billing_tick() -> None:
+    """Напоминания об окончании подписки и автосписания (раз в ``_BILLING_EVERY``)."""
+    global _billing_last
+    now = now_utc_naive()
+    if _billing_last is not None and now - _billing_last < _BILLING_EVERY:
+        return
+    _billing_last = now
+    from app.services import billing_flow
+
+    reminded = await billing_flow.remind_expiring(send=send_message, now=now)
+    charged = await billing_flow.autorenew_due(send=send_message, now=now)
+    if reminded or charged:
+        log.info("Подписка: напоминаний %s, автосписаний %s", reminded, charged)
+
+
 async def run_subscription_worker(stop_event: asyncio.Event) -> None:
     """Фоновый цикл воркера уведомлений."""
     if not bot_token():
@@ -617,6 +644,10 @@ async def run_subscription_worker(stop_event: asyncio.Event) -> None:
             await retract_withdrawn()
         except Exception:
             log.exception("Ошибка уборки снятых уведомлений")
+        try:
+            await _billing_tick()
+        except Exception:
+            log.exception("Ошибка фоновых задач подписки")
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=interval)
         except asyncio.TimeoutError:

@@ -31,6 +31,12 @@
       {% endif %}
       {% if telegram_login_enabled %}
         {% if is_logged_in %}
+          {% if subscription is defined and subscription.shows_badge %}
+            <a href="/subscription" class="sub-badge sub-{{ subscription.state }}" id="subBadge"
+               title="Подписка: оплата и продление">
+              {% if subscription.state == 'expired' %}Подписка закончилась{% else %}Дней подписки: {{ subscription.days }}{% endif %}
+            </a>
+          {% endif %}
           <a href="/profile" class="btn btn-secondary header-profile {{ 'active' if request.url.path == '/profile' else '' }}">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/></svg>
             Профиль
