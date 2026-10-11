@@ -267,7 +267,7 @@ class Settings(BaseSettings):
     #: Существующим водителям пробный период считается от этой даты, новым — от регистрации.
     subscription_launch_date: str = ""
     trial_days: int = 14
-    subscription_price_rub: int = 1000
+    subscription_price_rub: int = 990
     subscription_period_days: int = 30
     #: Ключи магазина ЮKassa (СБП и карты). Без них оплатить нельзя, а подписка работает на пробном периоде.
     yookassa_shop_id: str = ""
