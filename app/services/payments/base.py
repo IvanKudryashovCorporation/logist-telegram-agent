@@ -28,8 +28,30 @@ class ProviderPayment:
     payment_method_id: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class ProviderRefund:
+    """Возврат глазами провайдера."""
+
+    id: str
+    #: ``pending`` | ``succeeded`` | ``canceled``
+    status: str
+    payment_id: str
+    amount_kop: int
+
+
 class PaymentError(RuntimeError):
-    """Провайдер недоступен или отверг запрос."""
+    """Провайдер недоступен или отверг запрос.
+
+    ``status`` — HTTP-статус отказа провайдера (``None`` — сеть/таймаут).
+    Отказ 4xx (кроме 429) повторять бессмысленно."""
+
+    def __init__(self, message: str = "", *, status: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.status = status
+
+    @property
+    def permanent(self) -> bool:
+        return self.status is not None and 400 <= self.status < 500 and self.status != 429
 
 
 class PaymentProvider(Protocol):
@@ -48,3 +70,6 @@ class PaymentProvider(Protocol):
 
     async def fetch(self, payment_id: str) -> ProviderPayment:
         """Актуальное состояние платежа. Вебхуку не верим: статус всегда берём отсюда."""
+
+    async def fetch_refund(self, refund_id: str) -> ProviderRefund:
+        """Актуальное состояние возврата (уведомлению о возврате, как и о платеже, не верим)."""

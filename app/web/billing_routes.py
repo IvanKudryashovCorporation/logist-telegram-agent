@@ -212,6 +212,24 @@ async def subscription_autorenew_off(request: Request):
     return _redirect("/subscription", new_token, "Автопродление выключено.")
 
 
+async def _handle_refund(provider, refund_id: str) -> JSONResponse:
+    """Возврат: сверяем с ЮKassa, снимаем соответствующие дни и сообщаем водителю."""
+    try:
+        result = await billing_flow.settle_refund(provider, refund_id)
+    except PaymentError as exc:
+        log.warning("Вебхук: сверка возврата %s не удалась: %s", refund_id, exc)
+        # Нет такого возврата у магазина (4xx): повторять нечего. Сеть и 5xx — пусть ЮKassa повторит позже.
+        return JSONResponse({"ok": exc.permanent}, status_code=200 if exc.permanent else 502)
+    if result.applied and result.telegram_id is not None:
+        log.info(
+            "Возврат %s: у tg:%s снято %s дн., оплачено до %s", refund_id, result.telegram_id, result.days, result.until
+        )
+        from app.services.subscriptions import send_message
+
+        await send_message(result.telegram_id, billing_flow.refund_message(result.days, result.until))
+    return JSONResponse({"ok": True})
+
+
 @router.post("/payments/yookassa")
 async def yookassa_webhook(request: Request):
     """Уведомление ЮKassa. Телу не верим (подписи нет): берём из него только id платежа и перепроверяем статус
@@ -225,15 +243,18 @@ async def yookassa_webhook(request: Request):
         payment_id = str((payload.get("object") or {}).get("id") or "")
     except Exception:  # noqa: BLE001 — не JSON: просто игнорируем
         return JSONResponse({"ok": True})
-    # Нужны только события платежа (payment.succeeded / canceled / waiting_for_capture). Привязка способа оплаты
-    # (payment_method.active) и возвраты (refund.succeeded) приходят с чужим id: запрашивать их как платёж нельзя.
+    if payment_id and event == "refund.succeeded":
+        return await _handle_refund(provider, payment_id)
+    # Дальше только события платежа (payment.succeeded / canceled / waiting_for_capture). Привязка способа оплаты
+    # (payment_method.active) приходит с чужим id: запрашивать её как платёж нельзя.
     if not payment_id or not event.startswith("payment."):
         return JSONResponse({"ok": True})
     try:
         result = await billing_flow.settle(provider, payment_id)
     except PaymentError as exc:
         log.warning("Вебхук: сверка платежа %s не удалась: %s", payment_id, exc)
-        return JSONResponse({"ok": False}, status_code=502)  # пусть ЮKassa повторит позже
+        # Нет такого платежа у магазина (4xx): повторять нечего. Сеть и 5xx — пусть ЮKassa повторит позже.
+        return JSONResponse({"ok": exc.permanent}, status_code=200 if exc.permanent else 502)
     if result.credited and result.telegram_id is not None:
         log.info("Оплата засчитана: tg:%s до %s (платёж %s)", result.telegram_id, result.until, payment_id)
         await billing_flow.notify_paid(result.telegram_id, result.until)

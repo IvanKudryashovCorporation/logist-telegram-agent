@@ -313,6 +313,7 @@ class FakeProvider:
         self.payments: dict[str, ProviderPayment] = {}
         self.charges: list[dict] = []
         self.charge_status = STATUS_SUCCEEDED
+        self.refunds: dict = {}
 
     async def create_payment(self, *, telegram_id, kind, amount_kop, days, return_url, description):
         payment_id = f"fake-{len(self.created) + 1}"
@@ -330,7 +331,23 @@ class FakeProvider:
         return info
 
     async def fetch(self, payment_id):
+        from app.services.payments import PaymentError
+
+        if payment_id not in self.payments:
+            raise PaymentError("нет такого платежа", status=404)
         return self.payments[payment_id]
+
+    async def fetch_refund(self, refund_id):
+        from app.services.payments import PaymentError
+
+        if refund_id not in self.refunds:
+            raise PaymentError("нет такого возврата", status=404)
+        return self.refunds[refund_id]
+
+    def refund(self, refund_id, payment_id, amount_kop, status=STATUS_SUCCEEDED):
+        from app.services.payments.base import ProviderRefund
+
+        self.refunds[refund_id] = ProviderRefund(id=refund_id, status=status, payment_id=payment_id, amount_kop=amount_kop)
 
     def succeed(self, payment_id, method_id=None):
         old = self.payments[payment_id]
@@ -786,3 +803,148 @@ async def test_webhook_ignores_non_payment_events_without_asking_the_provider(
     for event in ("payment_method.active", "refund.succeeded"):
         response = await client.post("/payments/yookassa", json={"event": event, "object": {"id": "not-a-payment"}})
         assert response.status_code == 200, event  # не 502: иначе ЮKassa будет повторять уведомление
+
+
+# --- Возвраты: дни списываются сами ---------------------------------------------------------------
+
+
+async def _paid_driver(session, payment_id="pay-r", days=30, amount_kop=99000):
+    session.add(_driver(trial_ends_at=NOW - timedelta(days=1)))
+    await session.commit()
+    await billing.record_success(
+        session, telegram_id=777000111, provider="yookassa", provider_payment_id=payment_id, kind="sbp",
+        amount_kop=amount_kop, days=days, now=NOW,
+    )
+    return await billing.get_driver(session, 777000111)
+
+
+async def test_full_refund_takes_back_all_the_days(session, subscription_on):
+    driver = await _paid_driver(session)
+    assert driver.paid_until == NOW + timedelta(days=30)
+
+    refund, days = await billing.record_refund(
+        session, provider_refund_id="ref-1", provider_payment_id="pay-r", amount_kop=99000,
+    )
+
+    await session.refresh(driver)
+    assert days == 30 and refund.days == 30
+    assert driver.paid_until == NOW  # вернули все деньги — вернули и все дни
+    payment = (await session.execute(select(Payment))).scalars().one()
+    assert payment.status == "refunded"
+    assert billing.describe(driver, now=NOW + timedelta(seconds=1)).state == billing.STATE_EXPIRED
+
+
+async def test_repeated_refund_notification_does_not_take_days_twice(session, subscription_on):
+    driver = await _paid_driver(session)
+    kwargs = dict(provider_refund_id="ref-1", provider_payment_id="pay-r", amount_kop=99000)
+
+    _, first = await billing.record_refund(session, **kwargs)
+    _, second = await billing.record_refund(session, **kwargs)
+
+    await session.refresh(driver)
+    assert (first, second) == (30, 0) and driver.paid_until == NOW
+
+
+async def test_partial_refunds_take_days_proportionally_and_finish_exactly(session, subscription_on):
+    driver = await _paid_driver(session)
+
+    _, half = await billing.record_refund(session, provider_refund_id="r1", provider_payment_id="pay-r", amount_kop=49500)
+    await session.refresh(driver)
+    payment = (await session.execute(select(Payment))).scalars().one()
+    assert half == 15 and driver.paid_until == NOW + timedelta(days=15) and payment.status == "succeeded"
+
+    _, rest = await billing.record_refund(session, provider_refund_id="r2", provider_payment_id="pay-r", amount_kop=49500)
+    await session.refresh(driver)
+    await session.refresh(payment)
+    assert rest == 15 and driver.paid_until == NOW and payment.status == "refunded"  # ровно, без остатка и лишнего
+
+
+async def test_refund_keeps_the_rest_of_the_trial(session, subscription_on):
+    session.add(_driver(trial_ends_at=NOW + timedelta(days=5)))
+    await session.commit()
+    await billing.record_success(
+        session, telegram_id=777000111, provider="yookassa", provider_payment_id="pay-t", kind="sbp",
+        amount_kop=99000, days=30, now=NOW,
+    )
+
+    await billing.record_refund(session, provider_refund_id="rt", provider_payment_id="pay-t", amount_kop=99000)
+
+    driver = await billing.get_driver(session, 777000111)
+    sub = billing.describe(driver, now=NOW)
+    assert sub.state == billing.STATE_TRIAL and sub.days == 5  # остаток пробного периода не пострадал
+
+
+async def test_refund_of_an_unknown_or_unpaid_payment_is_ignored(session, subscription_on):
+    driver = await _paid_driver(session)
+
+    refund, days = await billing.record_refund(
+        session, provider_refund_id="ref-x", provider_payment_id="no-such-payment", amount_kop=99000,
+    )
+
+    await session.refresh(driver)
+    assert (refund, days) == (None, 0) and driver.paid_until == NOW + timedelta(days=30)
+
+
+async def test_refund_webhook_takes_the_days_notifies_and_marks_history(
+    client, session, subscription_on, telegram_login_on, provider, sent_messages
+):
+    await _login(client)
+    await client.post("/subscription/pay", data={"kind": "sbp"})
+    provider.succeed("fake-1")
+    await client.post("/payments/yookassa", json={"event": "payment.succeeded", "object": {"id": "fake-1"}})
+    sent_messages.clear()
+    provider.refund("ref-9", "fake-1", 100000)
+
+    response = await client.post("/payments/yookassa", json={"event": "refund.succeeded", "object": {"id": "ref-9"}})
+    repeat = await client.post("/payments/yookassa", json={"event": "refund.succeeded", "object": {"id": "ref-9"}})
+
+    assert response.status_code == 200 and repeat.status_code == 200
+    driver = await billing.get_driver(session, int(USER))
+    await session.refresh(driver)
+    assert driver.paid_until <= now_utc_naive() + timedelta(days=14)  # осталось только то, что было до оплаты
+    assert len(sent_messages) == 1 and "Платёж возвращён" in sent_messages[0][1]  # повтор не шлёт второго сообщения
+    assert "Возвращён" in (await client.get("/subscription")).text
+
+
+async def test_refund_webhook_trusts_the_provider_not_the_body(
+    client, session, subscription_on, telegram_login_on, provider, sent_messages
+):
+    await _login(client)
+    await client.post("/subscription/pay", data={"kind": "sbp"})
+    provider.succeed("fake-1")
+    await client.post("/payments/yookassa", json={"event": "payment.succeeded", "object": {"id": "fake-1"}})
+    provider.refund("ref-p", "fake-1", 100000, status="pending")  # у провайдера возврат ещё не прошёл
+
+    await client.post("/payments/yookassa", json={"event": "refund.succeeded", "object": {"id": "ref-p", "status": "succeeded"}})
+
+    driver = await billing.get_driver(session, int(USER))
+    await session.refresh(driver)
+    assert driver.paid_until > now_utc_naive() + timedelta(days=20)  # дни на месте
+
+
+def test_yookassa_refund_payload_parsing():
+    from app.services.payments.yookassa import parse_refund
+
+    info = parse_refund({"id": "r1", "status": "succeeded", "payment_id": "p1", "amount": {"value": "990.00", "currency": "RUB"}})
+
+    assert (info.id, info.status, info.payment_id, info.amount_kop) == ("r1", STATUS_SUCCEEDED, "p1", 99000)
+
+
+async def test_webhook_for_an_unknown_payment_or_refund_is_not_retried(client, subscription_on, telegram_login_on, provider):
+    # у магазина нет такого платежа/возврата (4xx): отвечаем 200, чтобы ЮKassa не повторяла уведомление
+    for event in ("payment.succeeded", "refund.succeeded"):
+        response = await client.post("/payments/yookassa", json={"event": event, "object": {"id": "ghost"}})
+        assert response.status_code == 200, event
+
+
+async def test_webhook_asks_to_retry_on_provider_outage(client, subscription_on, telegram_login_on, provider, monkeypatch):
+    from app.services.payments import PaymentError
+
+    async def down(payment_id):
+        raise PaymentError("сеть", status=None)
+
+    monkeypatch.setattr(provider, "fetch", down)
+
+    response = await client.post("/payments/yookassa", json={"event": "payment.succeeded", "object": {"id": "p"}})
+
+    assert response.status_code == 502  # временный сбой — пусть ЮKassa повторит позже

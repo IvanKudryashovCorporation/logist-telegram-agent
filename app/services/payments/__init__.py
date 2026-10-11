@@ -3,7 +3,7 @@
 from typing import Optional
 
 from app.config import settings
-from app.services.payments.base import PaymentError, PaymentProvider, ProviderPayment
+from app.services.payments.base import PaymentError, PaymentProvider, ProviderPayment, ProviderRefund
 
 
 def get_provider() -> Optional[PaymentProvider]:
@@ -17,4 +17,4 @@ def get_provider() -> Optional[PaymentProvider]:
     return None
 
 
-__all__ = ["PaymentError", "PaymentProvider", "ProviderPayment", "get_provider"]
+__all__ = ["PaymentError", "PaymentProvider", "ProviderPayment", "ProviderRefund", "get_provider"]

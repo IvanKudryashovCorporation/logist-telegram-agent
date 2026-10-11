@@ -21,11 +21,13 @@ from app.services.payments.base import (
     STATUS_SUCCEEDED,
     PaymentError,
     ProviderPayment,
+    ProviderRefund,
 )
 
 log = logging.getLogger("payments.yookassa")
 
 API_URL = "https://api.yookassa.ru/v3/payments"
+REFUNDS_URL = "https://api.yookassa.ru/v3/refunds"
 
 
 def _amount(amount_kop: int) -> dict[str, str]:
@@ -70,6 +72,21 @@ def parse_payment(data: dict[str, Any]) -> ProviderPayment:
     )
 
 
+def parse_refund(data: dict[str, Any]) -> ProviderRefund:
+    """Ответ ЮKassa о возврате -> :class:`ProviderRefund`."""
+    amount = data.get("amount") or {}
+    try:
+        amount_kop = round(float(amount.get("value", "0")) * 100)
+    except (TypeError, ValueError):
+        amount_kop = 0
+    return ProviderRefund(
+        id=str(data.get("id", "")),
+        status=_status(str(data.get("status", ""))),
+        payment_id=str(data.get("payment_id", "")),
+        amount_kop=amount_kop,
+    )
+
+
 class YooKassa:
     name = "yookassa"
 
@@ -87,7 +104,7 @@ class YooKassa:
             raise PaymentError(f"ЮKassa недоступна: {type(exc).__name__}") from exc
         if response.status_code >= 400:
             log.error("ЮKassa %s %s -> %s %s", method, url, response.status_code, response.text[:300])
-            raise PaymentError(f"ЮKassa отклонила запрос ({response.status_code})")
+            raise PaymentError(f"ЮKassa отклонила запрос ({response.status_code})", status=response.status_code)
         return response.json()
 
     async def create_payment(
@@ -126,3 +143,6 @@ class YooKassa:
 
     async def fetch(self, payment_id: str) -> ProviderPayment:
         return parse_payment(await self._request("GET", f"{API_URL}/{payment_id}"))
+
+    async def fetch_refund(self, refund_id: str) -> ProviderRefund:
+        return parse_refund(await self._request("GET", f"{REFUNDS_URL}/{refund_id}"))

@@ -16,6 +16,7 @@ from app.db.base import Base, TimestampMixin
 PAYMENT_PENDING = "pending"
 PAYMENT_SUCCEEDED = "succeeded"
 PAYMENT_CANCELED = "canceled"
+PAYMENT_REFUNDED = "refunded"
 
 #: Виды платежа.
 KIND_SBP = "sbp"
@@ -44,3 +45,21 @@ class Payment(Base, TimestampMixin):
 
     def __repr__(self) -> str:
         return f"<Payment {self.provider_payment_id} tg:{self.telegram_id} {self.status}>"
+
+
+class Refund(Base, TimestampMixin):
+    """Возврат по платежу за подписку: сокращает оплаченный срок на соответствующее число дней."""
+
+    __tablename__ = "refunds"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    #: Идентификатор возврата у провайдера (уникален: повторное уведомление дни не снимает второй раз).
+    provider_refund_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    provider_payment_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    amount_kop: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: Сколько дней подписки снято этим возвратом.
+    days: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    def __repr__(self) -> str:
+        return f"<Refund {self.provider_refund_id} payment={self.provider_payment_id} -{self.days}d>"

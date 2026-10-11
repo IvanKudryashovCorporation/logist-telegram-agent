@@ -19,7 +19,7 @@ from app.models import Driver, Payment
 from app.models.payment import KIND_AUTORENEW
 from app.services import billing
 from app.services.payments import PaymentProvider, ProviderPayment
-from app.services.payments.base import STATUS_CANCELED, STATUS_SUCCEEDED
+from app.services.payments.base import STATUS_CANCELED, STATUS_SUCCEEDED, ProviderRefund
 from app.timeutil import now_utc_naive
 
 log = logging.getLogger("billing")
@@ -75,6 +75,40 @@ async def apply_payment(session: AsyncSession, provider_name: str, info: Provide
     )
     driver = await billing.get_driver(session, info.telegram_id)
     return Settlement(credited, info.telegram_id, driver.paid_until if driver else None)
+
+
+@dataclass(frozen=True)
+class RefundSettlement:
+    """Итог обработки возврата: сколько дней снято и до какого момента теперь оплачено."""
+
+    applied: bool
+    telegram_id: Optional[int] = None
+    days: int = 0
+    until: Optional[datetime] = None
+
+
+async def apply_refund(session: AsyncSession, info: ProviderRefund) -> RefundSettlement:
+    """Применяет состояние возврата от провайдера: успешный возврат сокращает подписку на соответствующие дни."""
+    if info.status != STATUS_SUCCEEDED or not info.payment_id:
+        return RefundSettlement(False)
+    refund, days = await billing.record_refund(
+        session, provider_refund_id=info.id, provider_payment_id=info.payment_id, amount_kop=info.amount_kop,
+    )
+    if refund is None or not days:
+        return RefundSettlement(False, refund.telegram_id if refund else None)
+    driver = await billing.get_driver(session, refund.telegram_id)
+    return RefundSettlement(True, refund.telegram_id, days, driver.paid_until if driver else None)
+
+
+async def settle_refund(provider: PaymentProvider, refund_id: str) -> RefundSettlement:
+    """Сверяет возврат с провайдером и применяет. Уведомлению не верим: возврат берём у ЮKassa."""
+    info = await provider.fetch_refund(refund_id)
+    async with SessionLocal() as session:
+        return await apply_refund(session, info)
+
+
+def refund_message(days: int, until: Optional[datetime]) -> str:
+    return f"↩️ Платёж возвращён: срок подписки сокращён на {days} дн. Теперь она действует до {_date(until)}."
 
 
 async def settle(provider: PaymentProvider, payment_id: str) -> Settlement:

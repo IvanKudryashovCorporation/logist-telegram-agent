@@ -25,6 +25,7 @@
 {% macro money(p) -%}{{ "%.0f"|format(p.amount_kop / 100) }} ₽{%- endmacro %}
 {% macro chip(status) -%}
   {%- if status == 'succeeded' -%}<span class="sb-chip sb-c-ok">{{ ic('tick', true) }}Оплачен</span>
+  {%- elif status == 'refunded' -%}<span class="sb-chip sb-c-no">{{ ic('refresh', true) }}Возвращён</span>
   {%- elif status == 'pending' -%}<span class="sb-chip sb-c-wait">{{ ic('clock', true) }}Ожидает оплаты</span>
   {%- else -%}<span class="sb-chip sb-c-no">{{ ic('close', true) }}Отменён</span>{%- endif -%}
 {%- endmacro %}

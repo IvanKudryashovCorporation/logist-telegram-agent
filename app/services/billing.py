@@ -18,12 +18,12 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Iterable, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import Driver, Payment
-from app.models.payment import PAYMENT_CANCELED, PAYMENT_PENDING, PAYMENT_SUCCEEDED
+from app.models import Driver, Payment, Refund
+from app.models.payment import PAYMENT_CANCELED, PAYMENT_PENDING, PAYMENT_REFUNDED, PAYMENT_SUCCEEDED
 from app.timeutil import now_utc_naive
 
 STATE_OFF = "off"
@@ -110,7 +110,12 @@ def describe(
     if until is None or until <= now:
         return Subscription(STATE_EXPIRED, 0, until)
     days = max(1, math.ceil((until - now).total_seconds() / 86400))
-    paid = driver is not None and driver.paid_until is not None and driver.paid_until > now
+    base = trial_end(driver)
+    # «Оплачено» — только срок за пределами пробного периода (после возврата остаток триала снова «пробный»).
+    paid = (
+        driver is not None and driver.paid_until is not None and driver.paid_until > now
+        and (base is None or driver.paid_until > base)
+    )
     return Subscription(STATE_PAID if paid else STATE_TRIAL, days, until)
 
 
@@ -213,6 +218,51 @@ async def record_success(
         driver.auto_renew = True
     await session.commit()
     return payment, True
+
+
+async def record_refund(
+    session: AsyncSession, *, provider_refund_id: str, provider_payment_id: str, amount_kop: int,
+) -> tuple[Optional[Refund], int]:
+    """Засчитывает возврат: снимает с оплаченного срока дни, соответствующие возвращённой сумме.
+
+    Возвращает ``(возврат, снято_дней)``. Идемпотентно по ``provider_refund_id``: повторное уведомление ничего
+    не снимает. Возврат по неизвестному платежу (или платежу, которого мы не засчитывали) игнорируется.
+    Полный возврат снимает все дни платежа, частичный — пропорционально сумме."""
+    existing = (
+        await session.execute(select(Refund).where(Refund.provider_refund_id == provider_refund_id))
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing, 0
+    payment = (
+        await session.execute(select(Payment).where(Payment.provider_payment_id == provider_payment_id))
+    ).scalar_one_or_none()
+    if payment is None or payment.status not in (PAYMENT_SUCCEEDED, PAYMENT_REFUNDED) or payment.amount_kop <= 0:
+        return None, 0
+
+    done_kop, done_days = (
+        await session.execute(
+            select(func.coalesce(func.sum(Refund.amount_kop), 0), func.coalesce(func.sum(Refund.days), 0)).where(
+                Refund.provider_payment_id == provider_payment_id
+            )
+        )
+    ).one()
+    total_kop = int(done_kop) + amount_kop
+    left = max(0, payment.days - int(done_days))
+    # Полный возврат снимает всё, что ещё не снято; частичный — дни пропорционально сумме.
+    days = left if total_kop >= payment.amount_kop else min(left, round(payment.days * amount_kop / payment.amount_kop))
+
+    refund = Refund(
+        provider_refund_id=provider_refund_id, provider_payment_id=provider_payment_id,
+        telegram_id=payment.telegram_id, amount_kop=amount_kop, days=days,
+    )
+    session.add(refund)
+    if total_kop >= payment.amount_kop:
+        payment.status = PAYMENT_REFUNDED
+    driver = await get_driver(session, payment.telegram_id)
+    if driver is not None and driver.paid_until is not None and days:
+        driver.paid_until = driver.paid_until - timedelta(days=days)
+    await session.commit()
+    return refund, days
 
 
 async def mark_canceled(session: AsyncSession, provider_payment_id: str) -> None:
