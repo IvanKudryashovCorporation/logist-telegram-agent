@@ -380,6 +380,11 @@ async def reconcile_pending(*, provider: Optional[PaymentProvider] = None, now: 
         try:
             result = await settle(provider, payment_id)
         except PaymentError as exc:
+            if exc.permanent:
+                # ЮKassa не знает такого платежа (например, он создан в другом магазине): тревоги нет, платёж
+                # просто перестанет ждать оплаты по истечении срока.
+                log.info("Сверка: платёж %s ЮKassa не нашла (%s)", payment_id, exc)
+                continue
             await events.alert(
                 events.PROVIDER_ERROR, f"🚨 Сверка платежей: ЮKassa не отвечает или отказала ({exc}).",
                 throttle=timedelta(minutes=30),

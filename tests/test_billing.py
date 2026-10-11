@@ -1186,3 +1186,19 @@ def test_tour_has_a_feedback_step_and_starts_from_the_profile_link():
     assert ".collab-btn" in js and "Обратная связь" in js
     assert "ошибку" in js and "предложения" in js and "вопросы" in js
     assert "tour=1" in js  # запуск по ссылке из профиля
+
+
+async def test_reconcile_closes_a_payment_the_provider_does_not_know_without_alarm(
+    session, subscription_on, provider, sent_messages, owner_chat
+):
+    session.add(_driver())
+    await session.commit()
+    now = now_utc_naive()
+    session.add(Payment(telegram_id=777000111, provider="old-shop", provider_payment_id="from-old-shop", kind="sbp",
+                        amount_kop=100000, days=30, status="pending", created_at=now - timedelta(hours=2)))
+    await session.commit()  # у нового магазина такого платежа нет: провайдер ответит 404
+
+    await billing_flow.reconcile_pending(provider=provider, now=now)
+
+    assert (await session.execute(select(Payment))).scalars().one().status == PAYMENT_CANCELED
+    assert [text for chat, text in sent_messages if chat == 424242] == []  # ложной тревоги владельцу нет
