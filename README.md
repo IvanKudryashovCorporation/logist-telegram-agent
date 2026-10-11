@@ -9,8 +9,7 @@
 ## Стек
 
 Python 3.10+ · Telethon (юзербот-сессия, только чтение групп) · SQLAlchemy 2
-(async) + Alembic · PostgreSQL в проде, SQLite локально и в тестах (переключается
-строкой `DATABASE_URL`) · Z.ai (GLM-4.5-Flash) для разбора текста заявки · FastAPI —
+(async) + Alembic · PostgreSQL 16 (всегда: прод, разработка, тесты) · Z.ai (GLM-4.5-Flash) для разбора текста заявки · FastAPI —
 публичный сайт со списком заказов.
 
 ## Установка
@@ -84,16 +83,12 @@ copy .env.example .env
 
 С 2026-10-02 прод работает на PostgreSQL 16 на том же VPS (слушает только
 `127.0.0.1`, база `logist`, `DATABASE_URL=postgresql+asyncpg://logist:...@127.0.0.1/logist`).
-SQLite остаётся для разработки и тестов — код один и тот же.
+Для разработки и тестов тоже нужна PostgreSQL (локально или в Docker): другой БД в проекте нет.
 
 * **Новая база с нуля:** `python -m scripts.init_postgres` строит схему из моделей и
-  делает `alembic stamp head`. Цепочка старых миграций писалась под SQLite
-  (batch-режим, `= 1` для булевых) и на PostgreSQL не воспроизводится.
-* **Новые миграции** пишите переносимо (`sa.true()/sa.false()`, без SQLite-специфики) и
-  проверяйте на обоих движках.
-* **Перенос данных из SQLite** (агента и сайт остановить):
-  `python -m scripts.sqlite_to_postgres --sqlite ./logist.db [--truncate]` — копирует
-  все таблицы с теми же id, выставляет счётчики и сверяет количества строк.
+  делает `alembic stamp head`. Цепочка старых миграций с нуля
+  на PostgreSQL не воспроизводится.
+* **Новые миграции** пишите переносимо (`sa.true()/sa.false()`) и проверяйте на PostgreSQL.
 * **Бэкап:** `deploy/backup-db.sh` делает `pg_dump | gzip` в `/root/backups` и хранит
   14 дней; cron `15 3 * * *`. Восстановление: `gunzip -c файл.sql.gz | psql -d база`.
 * **Копия вне сервера:** `scripts/offsite_backup.py` (cron `30 3 * * *`) шифрует последний дамп
@@ -104,9 +99,9 @@ SQLite остаётся для разработки и тестов — код �
   `gpg --decrypt файл.gpg | gunzip | psql -d база`.
 * **Время** в БД везде наивное UTC: колонки `timestamp without time zone`, сессия
   с `timezone=UTC` (см. `app/db/base.py`).
-* **Тесты на PostgreSQL:** `TEST_DATABASE_URL=postgresql+asyncpg://user:pass@host/logist_test`
-  `python -m pytest` (пул отключается автоматически; 11 тестов исторической
-  SQLite-миграции пропускаются).
+* **Тесты** идут на PostgreSQL: по умолчанию `postgresql+asyncpg://postgres@127.0.0.1:54329/logist_test`,
+  другой адрес — через `TEST_DATABASE_URL`. База `logist_test` должна существовать. Пул отключается автоматически.
+  CI (`.github/workflows/tests.yml`) поднимает PostgreSQL сервисом и гоняет `ruff` и `pytest`.
 
 ## Запуск агента
 
@@ -282,14 +277,13 @@ python -m scripts.join_work_groups <файл> --limit 15   # вступить в
 проходит latin-1, а uvicorn способен импортировать `app.web.server:app`.
 Проверить уже запущенный сервер: `python -m scripts.smoke_web --url http://127.0.0.1:8000`.
 
-`check_schema` стоит запускать после каждого `alembic upgrade head`: на SQLite
-миграция идёт через batch-режим (пересоздание таблицы), и «успешный» выход не
+`check_schema` стоит запускать после каждого `alembic upgrade head`: «успешный» выход не
 гарантирует, что уникальное ограничение и индексы действительно на месте.
 
 ## Тесты и линтер
 
 ```bash
-python -m pytest          # отдельная БД tests/_test_logist.db (SQLite)
+python -m pytest          # PostgreSQL, база logist_test (см. раздел про PostgreSQL)
 python -m ruff check .    # правила — в ruff.toml
 ```
 

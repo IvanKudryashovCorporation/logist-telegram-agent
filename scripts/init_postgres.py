@@ -3,8 +3,8 @@
     DATABASE_URL=postgresql+asyncpg://user:pass@localhost/logist \
         python -m scripts.init_postgres
 
-Почему не ``alembic upgrade head``: цепочка миграций писалась под SQLite
-(batch-режим, ``= 1`` для булевых и т.п.) и на PostgreSQL не воспроизводится.
+Почему не ``alembic upgrade head``: старые миграции писались под прежнюю БД
+и с нуля на PostgreSQL не воспроизводятся.
 Схема здесь строится прямо из моделей, а ``alembic stamp head`` говорит Alembic,
 что она уже на последней ревизии. Новые миграции дальше пишутся переносимо.
 """

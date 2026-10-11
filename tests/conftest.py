@@ -5,24 +5,20 @@
 1. Переменные окружения выставляются ДО первого импорта ``app.*``. И ``settings``,
    и движок БД создаются один раз при импорте модуля, поэтому «подкрутить»
    конфиг внутри теста уже не получится.
-2. База — отдельный файл рядом с тестами, а не рабочий ``logist.db``: тесты
-   пересоздают схемы и пишут данные, портить боевую dev-базу нельзя.
+2. База — отдельная PostgreSQL ``logist_test``, а не рабочая: тесты пересоздают схему
+   и пишут данные, портить dev-базу нельзя. Адрес можно задать через TEST_DATABASE_URL.
 """
 
 import os
 from datetime import timedelta
 from decimal import Decimal
-from pathlib import Path
 
-TEST_DB_PATH = Path(__file__).resolve().parent / "_test_logist.db"
+TEST_DATABASE_URL = "postgresql+asyncpg://postgres@127.0.0.1:54329/logist_test"
 
 os.environ.update(
     {
-        # По умолчанию SQLite-файл; чтобы прогнать тесты на PostgreSQL:
-        # TEST_DATABASE_URL=postgresql+asyncpg://user:pass@localhost/logist_test
         "DB_NULL_POOL": "true",
-        "DATABASE_URL": os.environ.get("TEST_DATABASE_URL")
-        or f"sqlite+aiosqlite:///{TEST_DB_PATH.as_posix()}",
+        "DATABASE_URL": os.environ.get("TEST_DATABASE_URL") or TEST_DATABASE_URL,
         # Маленький размер страницы — тесты пагинации не должны создавать сотни строк.
         "WEB_PAGE_SIZE": "5",
         # id, под которым тесты входят через Telegram (см. tests/test_telegram_login.py)

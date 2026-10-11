@@ -93,7 +93,7 @@ class Settings(BaseSettings):
     queue_concurrency: int = 3
 
     # БД
-    database_url: str = "sqlite+aiosqlite:///./logist.db"
+    database_url: str = "postgresql+asyncpg://postgres@127.0.0.1:5432/logist"
     #: Без пула соединений (NullPool). Нужен тестам на PostgreSQL: у каждого
     #: теста свой event loop, а соединение asyncpg привязано к своему loop.
     db_null_pool: bool = False

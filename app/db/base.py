@@ -1,10 +1,9 @@
 """Подключение к БД и фабрика сессий.
 
-URL берётся из настроек: SQLite (``sqlite+aiosqlite:///./logist.db``) для
-разработки и тестов, PostgreSQL (``postgresql+asyncpg://user:pass@host/db``)
-на проде — переключение это замена DATABASE_URL в .env.
+URL берётся из настроек: PostgreSQL (``postgresql+asyncpg://user:pass@host/db``),
+задаётся в DATABASE_URL.
 
-Время в БД везде «наивное UTC» (см. app/timeutil.py), и на PostgreSQL это
+Время в БД везде «наивное UTC» (см. app/timeutil.py), и это
 обеспечивается явно: колонки ``timestamp without time zone`` и сессия с
 ``timezone=UTC`` — иначе ``now()`` отдавал бы время в поясе сервера.
 """
@@ -20,8 +19,6 @@ from app.config import settings
 
 
 def _engine_options(url: str) -> dict:
-    if not url.startswith("postgresql"):
-        return {}
     if settings.db_null_pool:
         return {
             "poolclass": NullPool,

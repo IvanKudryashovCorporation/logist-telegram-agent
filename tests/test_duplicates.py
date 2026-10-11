@@ -205,7 +205,7 @@ def test_migration_handles_asap_spellings_and_different_clients():
     assert _migration().duplicate_ids(rows) == [1661]
 
 
-def test_migration_works_with_iso_strings_from_sqlite():
+def test_migration_works_with_iso_strings():
     rows = [
         _row(1, 7, "d", "Элиста", "Ростов", "2026-10-04 20:00:00"),
         _row(2, 7, "d", "Элиста", "Ростов-на-Дону", "2026-10-04 20:00:00"),

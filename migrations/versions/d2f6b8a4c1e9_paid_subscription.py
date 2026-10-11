@@ -3,7 +3,7 @@
 ``drivers``: ``trial_ends_at``, ``paid_until``, ``auto_renew``, ``payment_method_id``, ``renew_failures``,
 ``reminded_for``. ``payments`` — платежи за подписку (``provider_payment_id`` уникален: начисление идемпотентно).
 У существующих водителей новые поля пустые: подписка выключена, пока не задан ``SUBSCRIPTION_LAUNCH_DATE``.
-Переносима: SQLite и PostgreSQL.
+Переносима.
 
 Revision ID: d2f6b8a4c1e9
 Revises: c9e5a1b3d7f2

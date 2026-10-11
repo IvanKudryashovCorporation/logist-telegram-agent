@@ -1,7 +1,7 @@
 """подписка: журнал событий
 
 ``billing_events`` — журнал платежей, уведомлений ЮKassa, возвратов, автосписаний и сбоев; его читает страница
-``/admin/billing``. Переносима: SQLite и PostgreSQL.
+``/admin/billing``. Переносима.
 
 Revision ID: f4b8d0c2e6a1
 Revises: e3a7c9b5d1f8

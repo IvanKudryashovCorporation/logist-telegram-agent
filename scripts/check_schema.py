@@ -3,9 +3,8 @@
     python -m scripts.check_schema
     python -m scripts.check_schema --fix   # починить повреждённые статусы
 
-Зачем отдельный скрипт: ``alembic upgrade head`` на SQLite выполняется через
-batch-режим (пересоздание таблицы), и «успешный» выход не гарантирует, что
-уникальное ограничение и все индексы действительно на месте. Перед выкладкой
+Зачем отдельный скрипт: «успешный» выход ``alembic upgrade head`` не гарантирует,
+что уникальное ограничение и все индексы действительно на месте. Перед выкладкой
 на прод стоит прогнать эту проверку — она отвечает на вопросы:
 
 * есть ли новые колонки ``orders`` (search_text и нормализованные ключи);
@@ -47,7 +46,8 @@ EXPECTED_INDEXES = (
 )
 
 EXPECTED_TABLES = ("orders", "pending_messages", "parse_stats", "work_groups", "action_logs", "drivers", "geo_places",
-                   "order_subscriptions", "subscription_notifications", "payments", "refunds", "billing_events", "notifications")
+                   "order_subscriptions", "subscription_notifications", "payments", "refunds", "billing_events",
+                   "notifications")
 
 
 async def _inspect_schema() -> tuple[list[str], set[str], set[str], set[str]]:
@@ -64,7 +64,6 @@ async def _inspect_schema() -> tuple[list[str], set[str], set[str], set[str]]:
                 if not index.get("name"):
                     continue
                 indexes.add(index["name"])
-                # SQLite выражает UNIQUE из CREATE TABLE автоиндексом.
                 if index.get("unique"):
                     uniques.add(index["name"])
             for unique in inspector.get_unique_constraints(table):
@@ -100,20 +99,8 @@ async def _backfill_coverage() -> dict[str, int]:
 
 
 async def _unique_source_ok(uniques: set[str]) -> bool:
-    """Есть ли уникальность источника. Часть диалектов не отдаёт имя ограничения
-    через инспектор, поэтому дополнительно смотрим DDL (для SQLite)."""
-    if "uq_orders_source" in uniques:
-        return True
-    try:
-        async with SessionLocal() as session:
-            raw = (
-                await session.execute(
-                    text("SELECT sql FROM sqlite_master WHERE type='table' AND name='orders'")
-                )
-            ).scalar_one_or_none()
-    except Exception:  # noqa: BLE001 — не SQLite, такого каталога просто нет
-        return False
-    return bool(raw and "uq_orders_source" in raw)
+    """Есть ли уникальность источника заявки."""
+    return "uq_orders_source" in uniques
 
 
 #: SQLAlchemy хранит enum по ИМЕНИ, поэтому корректны только имена.

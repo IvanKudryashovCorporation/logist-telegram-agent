@@ -2,7 +2,7 @@
 
 Таблицы ``order_subscriptions`` (одна подписка на водителя) и
 ``subscription_notifications`` (что уже отправлено). Миграция написана
-переносимо — работает и на SQLite, и на PostgreSQL.
+переносимо.
 
 Revision ID: d5b9a3c7e1f2
 Revises: c4a8e1d2f6b3

@@ -103,9 +103,8 @@ class Order(Base, TimestampMixin):
     # --- Поисковый индекс ---
     # Денормализованная строка для полнотекстового поиска на сайте: id, телефон,
     # имя, города, адреса, @username — всё в нижнем регистре, через пробел.
-    # Нужна именно отдельная колонка, а не LOWER(...) в запросе: lower() в SQLite
-    # работает только для ASCII и «СИМФЕРОПОЛЬ» != «симферополь», а Python-овский
-    # .lower() при записи обрабатывает кириллицу корректно.
+    # Нужна именно отдельная колонка, а не LOWER(...) в запросе: регистр приводим один раз
+    # при записи Python-овским .lower(), и «СИМФЕРОПОЛЬ» находится как «симферополь».
     # Пересчитывается в app/search.py при каждом сохранении заказа.
     search_text: Mapped[Optional[str]] = mapped_column(Text)
     # Нормализованные (lower + без «г.») города — чтобы фильтр «откуда/куда»
@@ -114,9 +113,7 @@ class Order(Base, TimestampMixin):
     from_city_key: Mapped[Optional[str]] = mapped_column(String(128), index=True)
     to_city_key: Mapped[Optional[str]] = mapped_column(String(128), index=True)
     # Час подачи строкой 'HH:MM' — нужен, чтобы фильтр «время подачи» работал
-    # в SQL. Извлекать время из datetime переносимо не получается: в SQLite
-    # CAST(x AS TIME) приводит к NUMERIC, в PostgreSQL — к TIME, а единого
-    # выражения нет. Сравнение строк 'HH:MM' работает одинаково везде.
+    # в SQL. Сравнение строк 'HH:MM' проще и быстрее, чем извлекать время из datetime.
     pickup_time_key: Mapped[Optional[str]] = mapped_column(String(5), index=True)
     # Координаты концов маршрута для фильтра радиуса. Заполняет фоновый
     # геокодер (app/geo.py), а не парсер заявок: если геокодер недоступен,
@@ -156,7 +153,7 @@ class Order(Base, TimestampMixin):
     # Сайт без логина: водителя различаем по анонимной cookie в браузере
     # (см. app/web/deps.py). Кто взял заказ первым — тот и взял; само взятие
     # делается атомарным UPDATE ... WHERE taken_by_token IS NULL, поэтому
-    # гонки нет ни на SQLite, ни на PostgreSQL.
+    # гонки нет.
     taken_by_token: Mapped[Optional[str]] = mapped_column(String(64), index=True)
     #: Наивный UTC (см. app/timeutil.py) — как и created_at.
     taken_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=False))

@@ -1,7 +1,7 @@
 """последние цифры и тип сохранённой карты
 
 ``drivers.card_last4`` и ``drivers.card_brand`` — чтобы показать водителю, какая карта привязана к автоплатежу.
-Переносима: SQLite и PostgreSQL.
+Переносима.
 
 Revision ID: b7e3a9c1d5f2
 Revises: a6d2f8b4c0e3

@@ -266,8 +266,7 @@ def feed_where(filters: Optional[Filters] = None, q: str = "", conditions: Optio
     q = (q or "").strip().lower()
     if q:
         # Ищем по подготовленной search_text (всё уже в нижнем регистре):
-        # LOWER() в SQLite не понимает кириллицу, поэтому приводить регистр
-        # нужно при записи, а не в запросе. autoescape — чтобы «%» в запросе
+        # Регистр приводим при записи, а не в запросе. autoescape — чтобы «%» в запросе
         # не превращался в wildcard.
         where.append(Order.search_text.contains(q, autoescape=True))
     return where
@@ -430,8 +429,7 @@ async def take_order(session: AsyncSession, order_id: int, token: str) -> Action
     второй водитель успевал сделать то же самое, и заказ доставался ОБОИМ
     (последний commit побеждал). Теперь присвоение — один
     ``UPDATE ... WHERE taken_by_token IS NULL``: если строку уже заняли,
-    условие не совпадёт и ``rowcount`` будет 0. Одинаково работает на SQLite
-    и PostgreSQL.
+    условие не совпадёт и ``rowcount`` будет 0.
     """
     result = await session.execute(
         update(Order)

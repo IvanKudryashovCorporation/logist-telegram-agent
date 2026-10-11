@@ -155,7 +155,7 @@ async def test_closed_and_taken_orders_never_in_feed(session, make_order):
 
 
 async def test_search_is_case_insensitive_for_cyrillic(session, make_order):
-    """Ради этого и нужен search_text: LOWER() в SQLite не знает кириллицу."""
+    """Ради этого и нужен search_text: поиск не зависит от регистра кириллицы."""
     order = await make_order(from_city="СИМФЕРОПОЛЬ", to_city="СОЧИ", client_name="ИВАН")
 
     for query in ("симферополь", "СИМФЕРОПОЛЬ", "иван", "Иван"):

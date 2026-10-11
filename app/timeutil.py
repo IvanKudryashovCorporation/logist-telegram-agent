@@ -8,8 +8,8 @@
    :func:`now_msk_naive`.
 
 2. ``created_at`` / ``updated_at`` / ``taken_at`` — служебные отметки в UTC.
-   ``created_at`` проставляет ``server_default=func.now()`` (в SQLite и
-   PostgreSQL ``CURRENT_TIMESTAMP`` — это UTC), ``taken_at`` пишем мы сами.
+   ``created_at`` проставляет ``server_default=func.now()`` (сессия БД
+   работает в UTC), ``taken_at`` пишем мы сами.
    Сравнивать их нужно с :func:`now_utc_naive`.
 
 ``datetime.utcnow()`` здесь намеренно не используется: она deprecated начиная

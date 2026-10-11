@@ -143,7 +143,7 @@ async def test_sort_by_date_ascending(session, make_order):
 
 
 async def test_sort_recent_is_stable_for_same_second(session, make_order):
-    """created_at в SQLite имеет разрешение в секунду — порядок обязан быть полным."""
+    """created_at у заказов может совпадать — порядок обязан быть полным."""
     orders = await _seed_many(make_order, 5)
 
     page = await queries.fetch_feed(session, sort="recent", page=1, page_size=50)

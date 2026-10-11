@@ -1,4 +1,5 @@
 """Живой smoke-тест сайта: поднимает uvicorn и проверяет маршруты по настоящему HTTP.
+Тестовая БД — SMOKE_DATABASE_URL (по умолчанию локальная logist_smoke, её нужно создать).
 
     python -m scripts.smoke_web                       # свой сервер на тестовой БД
     python -m scripts.smoke_web --url http://127.0.0.1:8000   # проверить уже запущенный
@@ -27,11 +28,10 @@ import sys
 import time
 from datetime import timedelta
 from decimal import Decimal
-from pathlib import Path
 
 # ВАЖНО: окружение выставляется до импорта app.* — settings и движок БД
 # создаются один раз при импорте модуля.
-_TEST_DB = Path(__file__).resolve().parent.parent / "_smoke_web.db"
+_TEST_DB_URL = os.environ.get("SMOKE_DATABASE_URL", "postgresql+asyncpg://postgres@127.0.0.1:54329/logist_smoke")
 
 
 def _free_port() -> int:
@@ -41,7 +41,7 @@ def _free_port() -> int:
 
 
 def _prepare_env(port: int) -> dict[str, str]:
-    os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TEST_DB.as_posix()}"
+    os.environ["DATABASE_URL"] = _TEST_DB_URL
     os.environ["WEB_HOST"] = "127.0.0.1"
     os.environ["WEB_PORT"] = str(port)
     os.environ["RATE_LIMIT_ENABLED"] = "false"
@@ -61,6 +61,7 @@ async def _seed() -> int:
     from app.timeutil import now_msk_naive
 
     async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
 
     pickup = now_msk_naive() + timedelta(days=1, hours=3)
@@ -245,13 +246,11 @@ def _finish(report: Report) -> int:
 
 async def _run_hosted(port: int) -> int:
     """Поднимает свой uvicorn на отдельной тестовой БД и прогоняет все проверки."""
-    if _TEST_DB.exists():
-        _TEST_DB.unlink()
     env = _prepare_env(port)
     base_url = f"http://127.0.0.1:{port}"
 
     order_id = await _seed()
-    print(f"Тестовая БД: {_TEST_DB.name}, заявка #{order_id}, адрес {base_url}")
+    print(f"Тестовая БД: {_TEST_DB_URL.rsplit('/', 1)[-1]}, заявка #{order_id}, адрес {base_url}")
 
     # Отдельный процесс, а не uvicorn в потоке: проверяется ровно то, что
     # запускается на сервере, включая импорт "app.web.server:app".
@@ -279,8 +278,6 @@ async def _run_hosted(port: int) -> int:
             process.wait(timeout=10)
         except subprocess.TimeoutExpired:
             process.kill()
-        if _TEST_DB.exists():
-            _TEST_DB.unlink()
     return _finish(report)
 
 
