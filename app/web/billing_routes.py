@@ -6,6 +6,7 @@
 """
 
 import logging
+from datetime import timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Request
@@ -36,7 +37,27 @@ router = APIRouter()
 
 #: Сколько последних платежей показываем и сверяем с провайдером при открытии страницы.
 _HISTORY_LIMIT = 10
-_PAYMENT_KINDS = {KIND_SBP: "СБП", KIND_CARD: "карта", "autorenew": "автопродление", "admin": "начислено вручную"}
+_PAYMENT_KINDS = {KIND_SBP: "СБП", KIND_CARD: "Картой", "autorenew": "Автопродление", "admin": "Начислено вручную"}
+
+
+def _banner(notice: Optional[str]) -> Optional[dict]:
+    """Всплывающее сообщение на странице подписки: по тексту flash определяем вид баннера."""
+    if not notice:
+        return None
+    if notice.startswith("ok:"):
+        return {"kind": "ok", "title": "Оплата получена", "text": f"Подписка продлена до {notice[3:]}.", "retry": ""}
+    if notice == "wait":
+        return {
+            "kind": "wait", "title": "Платёж ещё обрабатывается",
+            "text": "Обычно это занимает до минуты. Обновите страницу.", "retry": "",
+        }
+    if notice.startswith("err:"):
+        return {
+            "kind": "err", "title": "Не удалось создать платёж",
+            "text": "Деньги не списаны. Попробуйте ещё раз или выберите другой способ оплаты.",
+            "retry": notice[4:] if notice[4:] in (KIND_SBP, KIND_CARD) else KIND_SBP,
+        }
+    return {"kind": "wait", "title": notice, "text": "", "retry": ""}
 
 
 async def _reconcile_pending(telegram_id: int) -> Optional[billing_flow.Settlement]:
@@ -95,12 +116,15 @@ async def subscription_page(request: Request):
             )
         ).scalars().all()
 
+    sub = billing.describe(driver, telegram_id)
     html = templates.TemplateResponse(
         "subscription.html",
-        _base_context(request, counts, pop_flash(request))
+        _base_context(request, counts, None)
         | {
+            "banner": _banner(pop_flash(request)),
+            "next_charge": (sub.until - timedelta(days=1)) if sub.until else None,
             "driver": driver,
-            "sub": billing.describe(driver, telegram_id),
+            "sub": sub,
             "payments": payments,
             "kind_labels": _PAYMENT_KINDS,
             "price_rub": settings.subscription_price_rub,
@@ -138,9 +162,9 @@ async def subscription_pay(request: Request):
         )
     except PaymentError as exc:
         log.error("Не удалось создать платёж для tg:%s: %s", telegram_id, exc)
-        return _redirect("/subscription", new_token, "Не удалось создать платёж. Попробуйте ещё раз чуть позже.")
+        return _redirect("/subscription", new_token, f"err:{kind}")
     if not info.confirmation_url:
-        return _redirect("/subscription", new_token, "Не удалось создать платёж. Попробуйте ещё раз чуть позже.")
+        return _redirect("/subscription", new_token, f"err:{kind}")
 
     async with SessionLocal() as session:
         await billing.start_payment(
@@ -161,12 +185,9 @@ async def subscription_return(request: Request):
     settled = await _reconcile_pending(telegram_id)
     if settled is not None:
         await billing_flow.notify_paid(telegram_id, settled.until)
-        notice = f"Оплата получена. Подписка продлена до {settled.until:%d.%m.%Y}."
+        notice = f"ok:{settled.until:%d.%m.%Y}"
     else:
-        notice = (
-            "Платёж ещё обрабатывается. Подписка продлится сразу после подтверждения — "
-            "обновите страницу через минуту."
-        )
+        notice = "wait"
     return _redirect("/subscription", new_token, notice)
 
 

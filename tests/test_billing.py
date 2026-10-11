@@ -612,3 +612,80 @@ async def test_admin_can_open_payment_and_pay_for_a_check(client, session, subsc
 
     pay = await client.post("/subscription/pay", data={"kind": "sbp"})
     assert pay.status_code == 303 and pay.headers["location"] == "https://pay.test/fake-1"
+
+
+# --- Страница по макету: состояния и баннеры ----------------------------------------------------
+
+
+async def test_trial_page_shows_days_benefits_and_both_pay_buttons(
+    client, session, subscription_on, telegram_login_on, provider
+):
+    await _login(client)
+    await _set_driver(session, trial_ends_at=now_utc_naive() + timedelta(days=8, hours=5))
+
+    page = (await client.get("/subscription")).text
+
+    assert "Пробный период" in page and ">9<" in page  # крупное число дней
+    assert "Что даёт подписка" in page and "Платежей пока не было." in page
+    assert "Оплатить 1000 ₽ по СБП" in page and "Картой, продлевать автоматически" in page
+
+
+async def test_expired_page_lists_what_is_closed_and_what_stays_open(
+    client, session, subscription_on, telegram_login_on, provider
+):
+    await _login(client)
+    await _set_driver(session, trial_ends_at=now_utc_naive() - timedelta(days=2))
+
+    page = (await client.get("/subscription")).text
+
+    assert "Доступ ограничен" in page and "Закрыто" in page and "Остаётся открытым" in page
+    assert "Что даёт подписка" not in page
+
+
+async def test_paid_page_with_autorenew_hides_the_card_button(
+    client, session, subscription_on, telegram_login_on, provider
+):
+    await _login(client)
+    await _set_driver(session, trial_ends_at=now_utc_naive() - timedelta(days=9),
+                      paid_until=now_utc_naive() + timedelta(days=33, hours=1),
+                      auto_renew=True, payment_method_id="pm-1")
+
+    page = (await client.get("/subscription")).text
+
+    assert "Подписка оплачена" in page and "Автопродление включено" in page and "Отключить автопродление" in page
+    assert "Картой, продлевать автоматически" not in page and "Оплатить 1000 ₽ по СБП" in page
+    assert "Дни добавятся к остатку: будет 64" in page
+
+
+async def test_error_banner_with_retry_when_provider_fails(
+    client, session, subscription_on, telegram_login_on, provider, monkeypatch
+):
+    from app.services.payments import PaymentError
+
+    async def broken(**kwargs):
+        raise PaymentError("down")
+
+    monkeypatch.setattr(provider, "create_payment", broken)
+    await _login(client)
+
+    redirect = await client.post("/subscription/pay", data={"kind": "card"})
+    page = (await client.get("/subscription")).text
+
+    assert redirect.headers["location"] == "/subscription"
+    assert "Не удалось создать платёж" in page and "Деньги не списаны" in page and "Повторить" in page
+    assert 'name="kind" value="card"' in page  # «Повторить» повторяет тот же способ
+    assert "Не удалось создать платёж" not in (await client.get("/subscription")).text  # сообщение одноразовое
+
+
+async def test_success_banner_after_return_from_payment(
+    client, session, subscription_on, telegram_login_on, provider, sent_messages
+):
+    await _login(client)
+    await client.post("/subscription/pay", data={"kind": "sbp"})
+    provider.succeed("fake-1")
+
+    await client.get("/subscription/return")
+    page = (await client.get("/subscription")).text
+
+    assert "Оплата получена" in page and "Подписка продлена до" in page
+    assert "Подписка оплачена" in page and "Оплачен" in page  # и в истории платежей

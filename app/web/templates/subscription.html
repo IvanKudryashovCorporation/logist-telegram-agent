@@ -1,83 +1,205 @@
 {% extends "base.html" %}
 {% block title %}Подписка — Лента заказов{% endblock %}
 {% block content %}
+{% macro ic(name, small=false) -%}
+{%- set paths = {
+  "clock": '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  "check": '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+  "xcircle": '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6M9 9l6 6"/>',
+  "tick": '<path d="m5 12 5 5L20 7"/>',
+  "close": '<path d="M18 6 6 18M6 6l12 12"/>',
+  "shield": '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  "lock": '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  "unlock": '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/>',
+  "phone": '<rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18h2"/>',
+  "card": '<rect x="2" y="5" width="20" height="14" rx="3"/><path d="M2 10h20"/>',
+  "refresh": '<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/><path d="M3 12A9 9 0 0 1 18.5 5.8L21 8"/><path d="M21 3v5h-5"/>',
+  "warn": '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
+  "msg": '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>',
+  "task": '<rect x="3" y="3" width="18" height="18" rx="3"/><path d="m8 12 3 3 5-6"/>',
+  "bell": '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/>',
+  "spin": '<path d="M21 12a9 9 0 1 1-6.2-8.6"/>'
+} -%}
+<svg class="sb-ic{{ ' sb-ic-s' if small else '' }}{{ ' sb-spin' if name == 'spin' else '' }}" viewBox="0 0 24 24" aria-hidden="true">{{ paths[name] | safe }}</svg>
+{%- endmacro %}
+{% macro money(p) -%}{{ "%.0f"|format(p.amount_kop / 100) }} ₽{%- endmacro %}
+{% macro chip(status) -%}
+  {%- if status == 'succeeded' -%}<span class="sb-chip sb-c-ok">{{ ic('tick', true) }}Оплачен</span>
+  {%- elif status == 'pending' -%}<span class="sb-chip sb-c-wait">{{ ic('clock', true) }}Ожидает оплаты</span>
+  {%- else -%}<span class="sb-chip sb-c-no">{{ ic('close', true) }}Отменён</span>{%- endif -%}
+{%- endmacro %}
+{% macro pay_form(kind, label, icon, alt=false) -%}
+<form method="post" action="/subscription/pay" class="pay-form">
+  <input type="hidden" name="kind" value="{{ kind }}">
+  <button type="submit" class="sb-btn {{ 'sb-btn-alt' if alt else 'sb-btn-sbp' }}">{{ ic(icon) }}<span class="sb-btn-label">{{ label }}</span></button>
+</form>
+{%- endmacro %}
 
-<div class="detail-card profile-card sub-card">
-  <div class="hint">Подписка</div>
-  {% if sub.state == 'off' %}
-    <div class="sub-status">Подписка пока не включена</div>
-    <div class="hint">Все функции сайта работают бесплатно.</div>
-  {% elif sub.state == 'admin' %}
-    <div class="sub-status">Вы администратор</div>
-    <div class="hint">
-      Ограничения подписки на вас не распространяются. Оплатить можно для проверки: платёж пройдёт как обычный,
-      дни начислятся{% if driver.paid_until %} (оплачено до {{ driver.paid_until.strftime("%d.%m.%Y") }}){% endif %}.
-    </div>
-  {% elif sub.state == 'expired' %}
-    <div class="sub-status" style="color: var(--bad-text);">Подписка закончилась</div>
-    <div class="hint">
-      Лента и «Мои заказы» по-прежнему доступны. Чтобы снова писать диспетчерам, брать заказы и получать
-      уведомления в Telegram, продлите подписку.
-    </div>
-  {% else %}
-    <div class="sub-status">Дней подписки: {{ sub.days }}</div>
-    <div class="hint">
-      {% if sub.state == 'trial' %}Пробный период ({{ trial_days }} дней), полный доступ.{% else %}Подписка оплачена.{% endif %}
-      Действует до {{ sub.until.strftime("%d.%m.%Y") }}.
-    </div>
-  {% endif %}
+{% set autorenew = driver.auto_renew and sub.state in ('paid', 'trial') %}
 
-  {% if sub.state != 'off' %}
-    <div class="sub-price">{{ price_rub }} ₽ за {{ period_days }} дней. Оплаченные дни добавляются к остатку — ничего не сгорает.</div>
-    {% if can_pay %}
-      <div class="sub-actions">
-        <form method="post" action="/subscription/pay">
-          <input type="hidden" name="kind" value="sbp">
-          <button type="submit">Оплатить {{ price_rub }} ₽ по СБП</button>
-        </form>
-        <form method="post" action="/subscription/pay">
-          <input type="hidden" name="kind" value="card">
-          <button type="submit" class="btn-secondary">Картой, продлевать автоматически</button>
-        </form>
+<div class="sub-page">
+  <h1 class="sb-h1">Подписка</h1>
+
+  {% if banner %}
+    <div class="sb-ban sb-ban-{{ banner.kind }}" role="{{ 'alert' if banner.kind == 'err' else 'status' }}" data-banner>
+      {{ ic({'ok': 'check', 'wait': 'clock', 'err': 'warn'}[banner.kind]) }}
+      <div class="sb-bb">
+        <div class="sb-bti">{{ banner.title }}</div>
+        {% if banner.text %}<div class="sb-btx">{{ banner.text }}</div>{% endif %}
+        {% if banner.kind == 'err' and can_pay %}
+          <form method="post" action="/subscription/pay">
+            <input type="hidden" name="kind" value="{{ banner.retry }}">
+            <button type="submit" class="sb-retry">{{ ic('refresh', true) }}Повторить</button>
+          </form>
+        {% endif %}
       </div>
-      <div class="hint">СБП — разовая оплата без комиссии для вас. Картой — карта сохраняется, и подписка продлевается сама за сутки до конца.</div>
-    {% else %}
-      <div class="hint">Приём оплаты скоро появится.</div>
-    {% endif %}
-
-    {% if driver.auto_renew %}
-      <div class="hint" style="margin-top: 14px;">Автопродление картой включено.</div>
-      <form method="post" action="/subscription/autorenew/off" style="margin-top: 6px;">
-        <button type="submit" class="btn-secondary">Отключить автопродление</button>
-      </form>
-    {% endif %}
+      <button type="button" class="sb-x" aria-label="Закрыть уведомление" data-dismiss="[data-banner]">{{ ic('close') }}</button>
+    </div>
   {% endif %}
-</div>
 
-<div class="detail-card profile-card sub-card">
-  <div class="hint">Что даёт подписка</div>
-  <ul class="hint" style="margin: 8px 0 0 18px;">
-    <li>кнопки «Написать диспетчеру», «Договорился с диспетчером» и «Взять заказ»;</li>
-    <li>уведомления о новых заказах по вашим фильтрам в Telegram.</li>
-  </ul>
-  <div class="hint" style="margin-top: 8px;">Условия — в <a href="/offer">публичной оферте</a>.</div>
-</div>
+  {# ---- Статус ---- #}
+  {% if sub.state == 'off' %}
+    <section class="sb-card" aria-label="Статус подписки">
+      <div class="sb-e-title" style="color: var(--sb-text); margin-top: 0;">Подписка пока не включена</div>
+      <p class="sb-note">Все функции сайта работают бесплатно.</p>
+    </section>
+  {% elif sub.state == 'admin' %}
+    <section class="sb-card" aria-label="Статус подписки">
+      <span class="sb-tag sb-t-trial">{{ ic('shield', true) }}Администратор</span>
+      <div class="sb-lbl">Дней подписки</div>
+      <div class="sb-big">∞</div>
+      <p class="sb-note">
+        Подписка не требуется, ограничений нет. Оплатить можно для проверки
+        {%- if driver.paid_until %} (оплачено до {{ driver.paid_until.strftime("%d.%m.%Y") }}){% endif %}.
+      </p>
+    </section>
+  {% elif sub.state == 'expired' %}
+    <section class="sb-card sb-exp" aria-label="Статус подписки">
+      <span class="sb-tag sb-t-exp">{{ ic('lock', true) }}Доступ ограничен</span>
+      <div class="sb-e-title">Подписка закончилась</div>
+      {% if sub.until %}<div class="sb-e-date">Закончилась {{ sub.until.strftime("%d.%m.%Y") }}</div>{% endif %}
+      <p class="sb-note">Оплатите подписку, чтобы вернуть связь с диспетчерами. Лента и «Мои заказы» работают как раньше.</p>
+      <div class="sb-grp sb-closed">
+        <h3>{{ ic('lock', true) }}Закрыто</h3>
+        <ul>
+          <li>«Написать диспетчеру»</li>
+          <li>«Договорился с диспетчером» и «Взять заказ»</li>
+          <li>Уведомления о заказах в Telegram</li>
+        </ul>
+      </div>
+      <div class="sb-grp sb-open">
+        <h3>{{ ic('unlock', true) }}Остаётся открытым</h3>
+        <ul>
+          <li>Лента заказов</li>
+          <li>Мои заказы</li>
+        </ul>
+      </div>
+    </section>
+  {% elif sub.state == 'trial' %}
+    <section class="sb-card" aria-label="Статус подписки">
+      <span class="sb-tag sb-t-trial">{{ ic('clock', true) }}Пробный период</span>
+      <div class="sb-lbl">Дней подписки</div>
+      <div class="sb-big">{{ sub.days }}</div>
+      <div class="sb-until">Действует до <b>{{ sub.until.strftime("%d.%m.%Y") }}</b></div>
+      <p class="sb-note">Сейчас доступны все функции. После окончания закроются связь с диспетчером и уведомления в Telegram.</p>
+    </section>
+  {% else %}
+    <section class="sb-card" aria-label="Статус подписки">
+      <div class="sb-stat">
+        <div>
+          <span class="sb-tag sb-t-ok">{{ ic('check', true) }}Подписка оплачена</span>
+          <div class="sb-lbl">Дней подписки</div>
+          <div class="sb-big">{{ sub.days }}</div>
+          <div class="sb-until">Оплачено до <b>{{ sub.until.strftime("%d.%m.%Y") }}</b></div>
+          {% if not autorenew %}<p class="sb-note">Оплаченные дни добавляются к остатку, ничего не сгорает.</p>{% endif %}
+        </div>
+        {% if autorenew %}
+          <div class="sb-stat-r">
+            <span class="sb-auto">{{ ic('refresh', true) }}Автопродление включено</span>
+            <p class="sb-next">Следующее списание <b>{{ next_charge.strftime("%d.%m.%Y") }}</b>, {{ price_rub }} ₽ с сохранённой карты. Спишем за сутки до конца срока.</p>
+            <form method="post" action="/subscription/autorenew/off">
+              <button type="submit" class="sb-btn sb-btn-alt sb-btn-sm">Отключить автопродление</button>
+            </form>
+          </div>
+        {% endif %}
+      </div>
+    </section>
+  {% endif %}
 
-{% if payments %}
-  <div class="detail-card profile-card sub-card">
-    <div class="hint" style="margin-bottom: 8px;">Платежи</div>
-    <table class="sub-table">
-      <tr><th>Дата</th><th>Способ</th><th>Сумма</th><th>Статус</th></tr>
-      {% for p in payments %}
-        <tr>
-          <td>{{ (p.paid_at or p.created_at).strftime("%d.%m.%Y %H:%M") }}</td>
-          <td>{{ kind_labels.get(p.kind, p.kind) }}</td>
-          <td>{{ "%.0f"|format(p.amount_kop / 100) }} ₽ · {{ p.days }} дн.</td>
-          <td>{{ {"succeeded": "оплачен", "pending": "ожидает оплаты", "canceled": "отменён"}.get(p.status, p.status) }}</td>
-        </tr>
-      {% endfor %}
-    </table>
-  </div>
-{% endif %}
+  {# ---- Оплата ---- #}
+  {% if sub.state != 'off' %}
+    <section class="sb-card" aria-label="Оплата">
+      <div class="sb-price"><span class="sb-amt">{{ price_rub }} ₽</span><span class="sb-per">за {{ period_days }} дней</span></div>
+      {% if autorenew and sub.state == 'paid' %}
+        <p class="sb-note" style="margin-top: 6px;">Дни добавятся к остатку: будет {{ sub.days + period_days }}. Автопродление продолжит работать.</p>
+      {% else %}
+        <p class="sb-note" style="margin-top: 6px;">Оплаченные дни добавляются к остатку, ничего не сгорает.</p>
+      {% endif %}
+      {% if can_pay %}
+        <div class="sb-btns">
+          {{ pay_form('sbp', 'Оплатить ' ~ price_rub ~ ' ₽ по СБП', 'phone') }}
+          {% if not autorenew %}{{ pay_form('card', 'Картой, продлевать автоматически', 'card', true) }}{% endif %}
+        </div>
+        <ul class="sb-hints">
+          <li><b>СБП</b> — разовый платёж, карта не сохраняется.</li>
+          {% if not autorenew %}<li><b>Карта</b> — сохраняется в ЮKassa, списание за сутки до конца срока.</li>{% endif %}
+        </ul>
+      {% else %}
+        <p class="sb-note">Приём оплаты скоро появится.</p>
+      {% endif %}
+    </section>
+  {% endif %}
+
+  {# ---- Что даёт подписка (в пробный период) ---- #}
+  {% if sub.state == 'trial' %}
+    <section class="sb-card" aria-label="Что даёт подписка">
+      <h2 class="sb-h2">Что даёт подписка</h2>
+      <div class="sb-bl">
+        <div class="sb-bi"><span class="sb-ico">{{ ic('msg') }}</span><div><div class="sb-bt">Написать диспетчеру</div><div class="sb-bd">Прямая связь с диспетчером в Telegram</div></div></div>
+        <div class="sb-bi"><span class="sb-ico">{{ ic('task') }}</span><div><div class="sb-bt">Взять заказ</div><div class="sb-bd">Кнопки «Договорился с диспетчером» и «Взять заказ»</div></div></div>
+        <div class="sb-bi"><span class="sb-ico">{{ ic('bell') }}</span><div><div class="sb-bt">Уведомления в Telegram</div><div class="sb-bd">Новые заказы приходят вам в Telegram</div></div></div>
+      </div>
+    </section>
+  {% endif %}
+
+  {# ---- История платежей ---- #}
+  <section class="sb-card" aria-label="История платежей">
+    <h2 class="sb-h2">История платежей</h2>
+    {% if payments %}
+      <div class="sb-hist sb-hist-rows">
+        {% for p in payments %}
+          <div class="sb-hrow">
+            <div><div class="sb-hd">{{ (p.paid_at or p.created_at).strftime("%d.%m.%Y") }}</div><div class="sb-hs">{{ kind_labels.get(p.kind, p.kind) }}{% if p.days %} · {{ p.days }} дн.{% endif %}</div></div>
+            <div class="sb-hr"><div class="sb-hd">{{ money(p) }}</div>{{ chip(p.status) }}</div>
+          </div>
+        {% endfor %}
+      </div>
+      <div class="sb-table">
+        <table>
+          <thead><tr><th scope="col">Дата</th><th scope="col">Способ</th><th scope="col">Срок</th><th scope="col" class="r">Сумма</th><th scope="col" class="r">Статус</th></tr></thead>
+          <tbody>
+            {% for p in payments %}
+              <tr>
+                <td>{{ (p.paid_at or p.created_at).strftime("%d.%m.%Y") }}</td>
+                <td class="mut">{{ kind_labels.get(p.kind, p.kind) }}</td>
+                <td class="mut">{% if p.days %}{{ p.days }} дн.{% else %}—{% endif %}</td>
+                <td class="r">{{ money(p) }}</td>
+                <td class="r">{{ chip(p.status) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="sb-empty">Платежей пока не было.</p>
+    {% endif %}
+  </section>
+
+  <footer class="sb-foot">
+    <div class="sb-trust">{{ ic('shield', true) }}Оплата через ЮKassa</div>
+    <div class="sb-badges"><span class="sb-bdg">{{ ic('phone', true) }}СБП</span><span class="sb-bdg">{{ ic('card', true) }}Банковские карты</span></div>
+    <a class="sb-offer" href="/offer">Публичная оферта</a>
+  </footer>
+</div>
 
 {% endblock %}

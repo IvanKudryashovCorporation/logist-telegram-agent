@@ -448,3 +448,36 @@
       // если пользователь сам ещё никуда не прокрутил.
       window.addEventListener('load', function () { if (window.scrollY < 10) restore(); });
     })();
+
+// Страница подписки: закрытие баннера и состояние «Создаём платёж…» на кнопках оплаты.
+(function () {
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest ? e.target.closest('[data-dismiss]') : null;
+    if (!btn) return;
+    var target = document.querySelector(btn.getAttribute('data-dismiss'));
+    if (target) target.remove();
+  });
+
+  document.addEventListener('submit', function (e) {
+    var form = e.target;
+    if (!form.classList || !form.classList.contains('pay-form')) return;
+    var button = form.querySelector('button[type="submit"]');
+    if (!button || button.getAttribute('aria-busy') === 'true') return;
+    var label = button.querySelector('.sb-btn-label');
+    var icon = button.querySelector('svg');
+    if (label) label.textContent = 'Создаём платёж…';
+    if (icon) {
+      icon.classList.add('sb-spin');
+      icon.innerHTML = '<path d="M21 12a9 9 0 1 1-6.2-8.6"/>';
+    }
+    button.classList.add('sb-btn-load');
+    button.setAttribute('aria-busy', 'true');
+    // Блокируем уже после отправки формы, иначе браузер не пошлёт её данные.
+    setTimeout(function () { button.disabled = true; }, 0);
+  });
+
+  // Возврат кнопкой «назад» из банка: страница из кэша осталась в состоянии загрузки.
+  window.addEventListener('pageshow', function (e) {
+    if (e.persisted && document.querySelector('.pay-form [aria-busy="true"]')) location.reload();
+  });
+})();
