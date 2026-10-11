@@ -647,7 +647,7 @@ async def test_trial_page_shows_days_benefits_and_both_pay_buttons(
     assert "Что даёт подписка" in page and "Платежей пока не было." in page
     assert "Оплатить 1000 ₽ по СБП" in page and "Оплатить банковской картой" in page
     assert page.rindex("Настроить автоплатёж") > page.rindex("Оплатить банковской картой")  # автоплатёж в конце, мелко
-    assert "Другой способ оплаты" not in page
+    assert page.index("Оплатить банковской картой") < page.index("Другой способ оплаты") < page.rindex("Настроить автоплатёж")
 
 
 async def test_expired_page_lists_what_is_closed_and_what_stays_open(

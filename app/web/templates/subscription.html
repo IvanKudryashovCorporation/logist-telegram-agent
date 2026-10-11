@@ -139,10 +139,12 @@
         <div class="sb-btns">
           {{ pay_form('sbp', 'Оплатить ' ~ price_rub ~ ' ₽ по СБП', 'phone') }}
           {{ pay_form('card', 'Оплатить банковской картой', 'card', true) }}
+          {{ pay_form('any', 'Другой способ оплаты', 'card', true) }}
         </div>
         <ul class="sb-hints">
           <li><b>СБП</b> — разовый платёж, карта не сохраняется.</li>
           <li><b>Банковская карта</b> — разовый платёж, карта не сохраняется.</li>
+          <li><b>Другой способ</b> — SberPay, T-Pay и другие способы, подключённые в ЮKassa; разовый платёж.</li>
         </ul>
         {% if not autorenew %}
           <form method="post" action="/subscription/pay" class="pay-form sb-autopay">
