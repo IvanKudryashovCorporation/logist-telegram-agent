@@ -1,0 +1,74 @@
+{% extends "admin_base.html" %}
+{% block title %}Платежи — админка «Лента заказов»{% endblock %}
+
+{% block content %}
+<div class="metrics">
+  <div class="metric ok">
+    <div class="metric-value">{{ '{:,.0f}'.format(o.paid_kop / 100).replace(',', ' ') }} ₽</div>
+    <div class="metric-label">получено за {{ o.days }} дн. ({{ o.paid_count }} платежей)</div>
+  </div>
+  <div class="metric {{ 'warn' if o.refund_count else '' }}">
+    <div class="metric-value">{{ '{:,.0f}'.format(o.refund_kop / 100).replace(',', ' ') }} ₽</div>
+    <div class="metric-label">возвраты ({{ o.refund_count }}, снято {{ o.refund_days }} дн.)</div>
+  </div>
+  <div class="metric">
+    <div class="metric-value">{{ o.subscribers }}</div>
+    <div class="metric-label">с оплаченной подпиской</div>
+  </div>
+  <div class="metric">
+    <div class="metric-value">{{ o.autorenew }}</div>
+    <div class="metric-label">с автопродлением</div>
+  </div>
+  <div class="metric {{ 'warn' if o.pending else '' }}">
+    <div class="metric-value">{{ o.pending }}</div>
+    <div class="metric-label">ждут оплаты сейчас</div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Последние платежи</h2>
+  {% if o.payments %}
+    <table>
+      <thead><tr><th>Дата</th><th>Пользователь</th><th>Способ</th><th class="num">Сумма</th><th class="num">Дней</th><th>Статус</th><th>Платёж</th></tr></thead>
+      <tbody>
+        {% for p in o.payments %}
+          <tr>
+            <td class="nowrap">{{ (p.paid_at or p.created_at).strftime('%d.%m.%Y %H:%M') }}</td>
+            <td><a href="/admin/users/{{ p.telegram_id }}">{{ o.names.get(p.telegram_id, p.telegram_id) }}</a></td>
+            <td>{{ p.kind }}</td>
+            <td class="num">{{ '%.0f'|format(p.amount_kop / 100) }} ₽</td>
+            <td class="num">{{ p.days }}</td>
+            <td><span class="tag {{ 'ok' if p.status == 'succeeded' else ('warn' if p.status in ('pending', 'refunded') else 'info') }}">{{ p.status }}</span></td>
+            <td class="muted mono">{{ p.provider_payment_id[:18] }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">Платежей пока нет.</div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Журнал событий</h2>
+  <p class="muted">Всё, что происходит с оплатой: создание платежей, уведомления ЮKassa, начисления, возвраты, автосписания, сбои. Проблемы подсвечены.</p>
+  {% if o.events %}
+    <table>
+      <thead><tr><th>Время (UTC)</th><th>Событие</th><th>Пользователь</th><th class="num">Сумма</th><th>Подробности</th></tr></thead>
+      <tbody>
+        {% for e in o.events %}
+          <tr>
+            <td class="nowrap">{{ e.created_at.strftime('%d.%m %H:%M:%S') }}</td>
+            <td><span class="tag {{ 'warn' if e.kind in problem_kinds else 'info' }}">{{ kind_labels.get(e.kind, e.kind) }}</span></td>
+            <td>{% if e.telegram_id %}<a href="/admin/users/{{ e.telegram_id }}">{{ o.names.get(e.telegram_id, e.telegram_id) }}</a>{% else %}—{% endif %}</td>
+            <td class="num">{{ ('%.0f'|format(e.amount_kop / 100) ~ ' ₽') if e.amount_kop else '—' }}</td>
+            <td class="muted">{{ e.details }}{% if e.provider_id %} <span class="mono">{{ e.provider_id[:18] }}</span>{% endif %}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">Событий пока нет.</div>
+  {% endif %}
+</div>
+{% endblock %}

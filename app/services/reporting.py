@@ -392,6 +392,62 @@ async def user_detail(telegram_id: int, *, orders_limit: int = 50, actions_limit
     }
 
 
+async def billing_overview(*, days: int = 30, events_limit: int = 200) -> dict:
+    """Платежи и журнал подписки для страницы ``/admin/billing``."""
+    from app.models import BillingEvent, Payment, Refund
+    from app.models.payment import KIND_ADMIN, PAYMENT_PENDING, PAYMENT_REFUNDED, PAYMENT_SUCCEEDED
+
+    since = now_utc_naive() - timedelta(days=days)
+    async with SessionLocal() as session:
+        paid = (
+            await session.execute(
+                select(func.count(Payment.id), func.coalesce(func.sum(Payment.amount_kop), 0)).where(
+                    Payment.status.in_((PAYMENT_SUCCEEDED, PAYMENT_REFUNDED)), Payment.kind != KIND_ADMIN,
+                    Payment.paid_at >= since,
+                )
+            )
+        ).one()
+        refunded = (
+            await session.execute(
+                select(
+                    func.count(Refund.id),
+                    func.coalesce(func.sum(Refund.amount_kop), 0),
+                    func.coalesce(func.sum(Refund.days), 0),
+                ).where(Refund.created_at >= since)
+            )
+        ).one()
+        pending = (
+            await session.execute(select(func.count(Payment.id)).where(Payment.status == PAYMENT_PENDING))
+        ).scalar_one()
+        subscribers = (
+            await session.execute(select(func.count(Driver.id)).where(Driver.paid_until > now_utc_naive()))
+        ).scalar_one()
+        autorenew = (
+            await session.execute(select(func.count(Driver.id)).where(Driver.auto_renew.is_(True)))
+        ).scalar_one()
+        events = list(
+            (
+                await session.execute(select(BillingEvent).order_by(BillingEvent.id.desc()).limit(events_limit))
+            ).scalars().all()
+        )
+        payments = list(
+            (await session.execute(select(Payment).order_by(Payment.id.desc()).limit(30))).scalars().all()
+        )
+    names = {}
+    ids = {e.telegram_id for e in events if e.telegram_id} | {p.telegram_id for p in payments}
+    if ids:
+        async with SessionLocal() as session:
+            for driver in (await session.execute(select(Driver).where(Driver.telegram_id.in_(ids)))).scalars().all():
+                names[driver.telegram_id] = driver.display_name
+    return {
+        "days": days,
+        "paid_count": int(paid[0]), "paid_kop": int(paid[1]),
+        "refund_count": int(refunded[0]), "refund_kop": int(refunded[1]), "refund_days": int(refunded[2]),
+        "pending": int(pending), "subscribers": int(subscribers), "autorenew": int(autorenew),
+        "events": events, "payments": payments, "names": names,
+    }
+
+
 async def parse_summary(days: int = 7) -> dict:
     """Качество разбора за период.
 

@@ -18,6 +18,7 @@ from app.db.base import SessionLocal
 from app.models import Payment
 from app.models.payment import KIND_ANY, KIND_AUTOPAY, KIND_CARD, KIND_SBP, PAYMENT_PENDING
 from app.services import billing, billing_flow
+from app.services import billing_events as events
 from app.services.payments import PaymentError, get_provider
 from app.timeutil import now_utc_naive
 from app.web import queries
@@ -70,6 +71,8 @@ async def _reconcile_pending(telegram_id: int) -> Optional[billing_flow.Settleme
     Страница сама себя лечит: если вебхук потерялся, оплата всё равно засчитается при открытии страницы."""
     provider = get_provider()
     if provider is None:
+        async with SessionLocal() as session:
+            await billing.expire_stale_pending(session, telegram_id=telegram_id)
         return None
     async with SessionLocal() as session:
         pending = (
@@ -89,6 +92,14 @@ async def _reconcile_pending(telegram_id: int) -> Optional[billing_flow.Settleme
             continue
         if result.credited:
             last = result
+    # Платежи, которые не оплатили за 10 минут, перестают висеть «в ожидании».
+    async with SessionLocal() as session:
+        expired = await billing.expire_stale_pending(session, telegram_id=telegram_id)
+    for payment in expired:
+        await events.record(
+            events.PAYMENT_CANCELED, telegram_id=telegram_id, provider_id=payment.provider_payment_id,
+            amount_kop=payment.amount_kop, details="не оплачен за 10 минут",
+        )
     return last
 
 
@@ -167,8 +178,17 @@ async def subscription_pay(request: Request):
         )
     except PaymentError as exc:
         log.error("Не удалось создать платёж для tg:%s: %s", telegram_id, exc)
+        await events.alert(
+            events.PAYMENT_CREATE_FAILED,
+            f"🚨 Не удалось создать платёж ({kind}) для {await events.who(telegram_id)}: {exc}",
+            telegram_id=telegram_id, throttle=timedelta(minutes=10),
+        )
         return _redirect("/subscription", new_token, f"err:{kind}")
     if not info.confirmation_url:
+        await events.alert(
+            events.PAYMENT_CREATE_FAILED, f"🚨 ЮKassa создала платёж {info.id}, но не вернула ссылку на оплату.",
+            telegram_id=telegram_id, provider_id=info.id, throttle=timedelta(minutes=10),
+        )
         return _redirect("/subscription", new_token, f"err:{kind}")
 
     async with SessionLocal() as session:
@@ -176,6 +196,10 @@ async def subscription_pay(request: Request):
             session, telegram_id=telegram_id, provider=provider.name, provider_payment_id=info.id,
             kind=kind, amount_kop=amount, days=days,
         )
+    await events.record(
+        events.PAYMENT_CREATED, telegram_id=telegram_id, provider_id=info.id, amount_kop=amount,
+        details=f"способ: {kind}",
+    )
     return _redirect(info.confirmation_url, new_token)
 
 
@@ -209,6 +233,7 @@ async def subscription_autorenew_off(request: Request):
             driver.auto_renew = False
             driver.payment_method_id = None
             await session.commit()
+    await events.record(events.AUTORENEW_OFF, telegram_id=telegram_id, details="водитель отключил автопродление")
     return _redirect("/subscription", new_token, "Автопродление выключено.")
 
 
@@ -218,6 +243,11 @@ async def _handle_refund(provider, refund_id: str) -> JSONResponse:
         result = await billing_flow.settle_refund(provider, refund_id)
     except PaymentError as exc:
         log.warning("Вебхук: сверка возврата %s не удалась: %s", refund_id, exc)
+        await events.alert(
+            events.WEBHOOK_ERROR if exc.permanent else events.PROVIDER_ERROR,
+            f"🚨 Уведомление ЮKassa о возврате {refund_id}: сверка не удалась ({exc}).",
+            provider_id=refund_id, throttle=timedelta(minutes=10),
+        )
         # Нет такого возврата у магазина (4xx): повторять нечего. Сеть и 5xx — пусть ЮKassa повторит позже.
         return JSONResponse({"ok": exc.permanent}, status_code=200 if exc.permanent else 502)
     if result.applied and result.telegram_id is not None:
@@ -243,6 +273,7 @@ async def yookassa_webhook(request: Request):
         payment_id = str((payload.get("object") or {}).get("id") or "")
     except Exception:  # noqa: BLE001 — не JSON: просто игнорируем
         return JSONResponse({"ok": True})
+    await events.record(events.WEBHOOK_RECEIVED, provider_id=payment_id or None, details=f"событие: {event or '—'}")
     if payment_id and event == "refund.succeeded":
         return await _handle_refund(provider, payment_id)
     # Дальше только события платежа (payment.succeeded / canceled / waiting_for_capture). Привязка способа оплаты
@@ -253,6 +284,12 @@ async def yookassa_webhook(request: Request):
         result = await billing_flow.settle(provider, payment_id)
     except PaymentError as exc:
         log.warning("Вебхук: сверка платежа %s не удалась: %s", payment_id, exc)
+        await events.alert(
+            events.WEBHOOK_ERROR if exc.permanent else events.PROVIDER_ERROR,
+            f"🚨 Уведомление ЮKassa по платежу {payment_id}: сверка не удалась ({exc}). "
+            + ("Такого платежа у магазина нет." if exc.permanent else "ЮKassa повторит запрос позже."),
+            provider_id=payment_id, throttle=timedelta(minutes=10),
+        )
         # Нет такого платежа у магазина (4xx): повторять нечего. Сеть и 5xx — пусть ЮKassa повторит позже.
         return JSONResponse({"ok": exc.permanent}, status_code=200 if exc.permanent else 502)
     if result.credited and result.telegram_id is not None:

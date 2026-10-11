@@ -948,3 +948,241 @@ async def test_webhook_asks_to_retry_on_provider_outage(client, subscription_on,
     response = await client.post("/payments/yookassa", json={"event": "payment.succeeded", "object": {"id": "p"}})
 
     assert response.status_code == 502  # временный сбой — пусть ЮKassa повторит позже
+
+
+# --- Ожидание оплаты истекает через 10 минут ------------------------------------------------------
+
+
+async def _backdate(session, minutes):
+    from sqlalchemy import update
+
+    await session.execute(update(Payment).values(created_at=now_utc_naive() - timedelta(minutes=minutes)))
+    await session.commit()
+
+
+async def test_unpaid_payment_stops_waiting_after_ten_minutes(
+    client, session, subscription_on, telegram_login_on, provider
+):
+    await _login(client)
+    await client.post("/subscription/pay", data={"kind": "sbp"})
+
+    await _backdate(session, 5)
+    fresh = (await client.get("/subscription")).text
+    await _backdate(session, 11)
+    stale = (await client.get("/subscription")).text
+
+    assert "Ожидает оплаты" in fresh  # пять минут — ещё ждём
+    assert "Ожидает оплаты" not in stale and "Отменён" in stale  # одиннадцать — ожидание спало
+    assert (await session.execute(select(Payment))).scalars().one().status == PAYMENT_CANCELED
+
+
+async def test_payment_made_after_the_wait_expired_is_still_credited(
+    client, session, subscription_on, telegram_login_on, provider, sent_messages
+):
+    await _login(client)
+    await client.post("/subscription/pay", data={"kind": "sbp"})
+    await _backdate(session, 15)
+    await client.get("/subscription")  # ожидание спало: платёж помечен неоплаченным
+    provider.succeed("fake-1")  # а водитель всё же оплатил
+
+    await client.post("/payments/yookassa", json={"event": "payment.succeeded", "object": {"id": "fake-1"}})
+
+    driver = await billing.get_driver(session, int(USER))
+    await session.refresh(driver)
+    assert driver.paid_until is not None  # дни начислены
+    assert (await session.execute(select(Payment))).scalars().one().status == PAYMENT_SUCCEEDED
+
+
+async def test_reconcile_settles_paid_and_expires_unpaid(session, subscription_on, provider, sent_messages):
+    session.add(_driver(trial_ends_at=now_utc_naive() - timedelta(days=1)))
+    await session.commit()
+    now = now_utc_naive()
+    old = now - timedelta(minutes=30)
+    for pid in ("fake-paid", "fake-unpaid"):
+        session.add(Payment(telegram_id=777000111, provider="fake", provider_payment_id=pid, kind="sbp",
+                            amount_kop=100000, days=30, status="pending", created_at=old))
+    await session.commit()
+    provider.payments["fake-paid"] = ProviderPayment(
+        id="fake-paid", status=STATUS_SUCCEEDED, amount_kop=100000, telegram_id=777000111, kind="sbp", days=30)
+    provider.payments["fake-unpaid"] = ProviderPayment(
+        id="fake-unpaid", status=STATUS_PENDING, amount_kop=100000, telegram_id=777000111, kind="sbp", days=30)
+
+    credited = await billing_flow.reconcile_pending(provider=provider, now=now)
+
+    assert credited == 1
+    statuses = {p.provider_payment_id: p.status for p in (await session.execute(select(Payment))).scalars().all()}
+    assert statuses == {"fake-paid": PAYMENT_SUCCEEDED, "fake-unpaid": PAYMENT_CANCELED}
+    assert any("Подписка продлена" in text for _, text in sent_messages)  # водителю пришло сообщение
+
+
+# --- Уведомления владельцу и журнал событий -------------------------------------------------------
+
+
+@pytest.fixture
+def owner_chat(monkeypatch):
+    monkeypatch.setattr(settings, "alert_chat_id", "424242")
+
+
+async def _events(session):
+    from app.models import BillingEvent
+
+    session.expire_all()
+    return [e.kind for e in (await session.execute(select(BillingEvent).order_by(BillingEvent.id))).scalars().all()]
+
+
+async def test_owner_gets_a_message_and_a_journal_entry_for_every_payment(
+    client, session, subscription_on, telegram_login_on, provider, sent_messages, owner_chat
+):
+    await _login(client)
+    await client.post("/subscription/pay", data={"kind": "sbp"})
+    provider.succeed("fake-1")
+
+    await client.post("/payments/yookassa", json={"event": "payment.succeeded", "object": {"id": "fake-1"}})
+    await client.post("/payments/yookassa", json={"event": "payment.succeeded", "object": {"id": "fake-1"}})  # повтор
+
+    to_owner = [text for chat, text in sent_messages if chat == 424242]
+    assert len(to_owner) == 1  # повтор уведомления владельца не дёргает
+    assert "💰 Оплата подписки" in to_owner[0] and "1000 ₽" in to_owner[0] and "СБП" in to_owner[0]
+    assert USER in to_owner[0]
+    kinds = await _events(session)
+    assert kinds.count("payment_created") == 1 and kinds.count("payment_succeeded") == 1
+    assert kinds.count("payment_duplicate") == 1 and kinds.count("webhook_received") == 2
+
+
+async def test_owner_gets_a_message_about_a_refund(
+    client, session, subscription_on, telegram_login_on, provider, sent_messages, owner_chat
+):
+    await _login(client)
+    await client.post("/subscription/pay", data={"kind": "sbp"})
+    provider.succeed("fake-1")
+    await client.post("/payments/yookassa", json={"event": "payment.succeeded", "object": {"id": "fake-1"}})
+    sent_messages.clear()
+    provider.refund("ref-1", "fake-1", 100000)
+
+    await client.post("/payments/yookassa", json={"event": "refund.succeeded", "object": {"id": "ref-1"}})
+
+    to_owner = [text for chat, text in sent_messages if chat == 424242]
+    assert len(to_owner) == 1 and "↩️ Возврат платежа" in to_owner[0] and "снято 30 дн." in to_owner[0]
+    assert "refund_succeeded" in await _events(session)
+
+
+async def test_suspicious_payments_alert_the_owner(session, subscription_on, sent_messages, owner_chat):
+    session.add(_driver())
+    await session.commit()
+    cheap = ProviderPayment(id="p-cheap", status=STATUS_SUCCEEDED, amount_kop=100, telegram_id=777000111,
+                            kind="sbp", days=30)
+    nobody = ProviderPayment(id="p-nobody", status=STATUS_SUCCEEDED, amount_kop=100000, telegram_id=None,
+                             kind="sbp", days=30)
+    ghost = ProviderPayment(id="p-ghost", status=STATUS_SUCCEEDED, amount_kop=100000, telegram_id=1,
+                            kind="sbp", days=30)
+
+    for info in (cheap, nobody, ghost):
+        await billing_flow.apply_payment(session, "fake", info)
+
+    texts = [text for chat, text in sent_messages if chat == 424242]
+    assert len(texts) == 3 and all(text.startswith("🚨") for text in texts)
+    assert (await _events(session)).count("payment_anomaly") == 3
+
+
+async def test_refund_of_an_unknown_payment_alerts_the_owner(session, subscription_on, sent_messages, owner_chat):
+    from app.services.payments.base import ProviderRefund
+
+    await billing_flow.apply_refund(
+        session, ProviderRefund(id="r-x", status=STATUS_SUCCEEDED, payment_id="never-seen", amount_kop=100000)
+    )
+
+    texts = [text for chat, text in sent_messages if chat == 424242]
+    assert len(texts) == 1 and "дни не списаны" in texts[0]
+
+
+async def test_provider_failures_alert_the_owner_but_not_every_minute(
+    client, session, subscription_on, telegram_login_on, provider, sent_messages, owner_chat, monkeypatch
+):
+    from app.services.payments import PaymentError
+
+    async def down(**kwargs):
+        raise PaymentError("нет связи")
+
+    monkeypatch.setattr(provider, "create_payment", down)
+    await _login(client)
+
+    for _ in range(3):
+        await client.post("/subscription/pay", data={"kind": "sbp"})
+
+    texts = [text for chat, text in sent_messages if chat == 424242]
+    assert len(texts) == 1 and "Не удалось создать платёж" in texts[0]  # throttle: лежащая ЮKassa не заваливает чат
+    assert (await _events(session)).count("payment_create_failed") == 3  # а в журнале видно каждый сбой
+
+
+async def test_without_owner_chat_nothing_is_sent_but_the_journal_still_works(
+    client, session, subscription_on, telegram_login_on, provider, sent_messages, monkeypatch
+):
+    monkeypatch.setattr(settings, "alert_chat_id", "")
+    await _login(client)
+    await client.post("/subscription/pay", data={"kind": "sbp"})
+    provider.succeed("fake-1")
+
+    await client.post("/payments/yookassa", json={"event": "payment.succeeded", "object": {"id": "fake-1"}})
+
+    assert [chat for chat, _ in sent_messages] == [int(USER)]  # только водителю
+    assert "payment_succeeded" in await _events(session)
+
+
+async def test_autorenew_failure_alerts_the_owner(session, subscription_on, provider, sent_messages, owner_chat):
+    provider.charge_status = STATUS_CANCELED
+    session.add(Driver(telegram_id=3030, trial_ends_at=NOW - timedelta(days=5), paid_until=NOW + timedelta(hours=5),
+                       auto_renew=True, payment_method_id="pm-bad"))
+    await session.commit()
+
+    await billing_flow.autorenew_due(provider=provider, send=Messages(), now=NOW)
+
+    texts = [text for chat, text in sent_messages if chat == 424242]
+    assert len(texts) == 1 and "Автосписание не прошло" in texts[0]
+    assert "autorenew_failed" in await _events(session)
+
+
+# --- Админка: платежи и журнал ---------------------------------------------------------------------
+
+
+async def test_admin_billing_page_shows_payments_events_and_refunds(
+    client, session, subscription_on, telegram_login_on, provider, sent_messages
+):
+    session.add(Driver(telegram_id=8802, first_name="Платящий", username="payer", trial_ends_at=now_utc_naive()))
+    await session.commit()
+    info = ProviderPayment(id="adm-1", status=STATUS_SUCCEEDED, amount_kop=100000, telegram_id=8802, kind="sbp", days=30)
+    await billing_flow.apply_payment(session, "fake", info)
+    await client.get("/auth/telegram", params=_signed_params())  # тестовый админ
+
+    page = await client.get("/admin/billing")
+
+    assert page.status_code == 200
+    assert "Журнал событий" in page.text and "оплата получена" in page.text and "adm-1" in page.text
+    assert "@payer" in page.text and "1000 ₽" in page.text
+
+
+async def test_admin_billing_page_is_hidden_from_non_admins(client, subscription_on, telegram_login_on):
+    await _login(client)
+    assert (await client.get("/admin/billing")).status_code == 404
+
+
+# --- Подсказки: иконка в профиле, третий шаг про обратную связь --------------------------------------
+
+
+async def test_tour_button_lives_in_the_profile_not_in_the_header(client, session, subscription_on, telegram_login_on):
+    await _login(client)
+
+    feed = (await client.get("/")).text
+    profile = (await client.get("/profile")).text
+
+    assert 'id="tourBtn"' not in feed  # из шапки на главном экране убрана
+    assert 'href="/?tour=1"' in profile and "Показать подсказки" in profile
+
+
+def test_tour_has_a_feedback_step_and_starts_from_the_profile_link():
+    from pathlib import Path
+
+    js = (Path(__file__).resolve().parent.parent / "app" / "web" / "static" / "tour.js").read_text(encoding="utf-8")
+
+    assert ".collab-btn" in js and "Обратная связь" in js
+    assert "ошибку" in js and "предложения" in js and "вопросы" in js
+    assert "tour=1" in js  # запуск по ссылке из профиля

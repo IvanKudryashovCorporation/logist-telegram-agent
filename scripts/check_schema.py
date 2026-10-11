@@ -47,7 +47,7 @@ EXPECTED_INDEXES = (
 )
 
 EXPECTED_TABLES = ("orders", "pending_messages", "parse_stats", "work_groups", "action_logs", "drivers", "geo_places",
-                   "order_subscriptions", "subscription_notifications", "payments", "refunds")
+                   "order_subscriptions", "subscription_notifications", "payments", "refunds", "billing_events")
 
 
 async def _inspect_schema() -> tuple[list[str], set[str], set[str], set[str]]:

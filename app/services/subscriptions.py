@@ -622,8 +622,9 @@ async def _billing_tick() -> None:
 
     reminded = await billing_flow.remind_expiring(send=send_message, now=now)
     charged = await billing_flow.autorenew_due(send=send_message, now=now)
-    if reminded or charged:
-        log.info("Подписка: напоминаний %s, автосписаний %s", reminded, charged)
+    settled = await billing_flow.reconcile_pending(now=now)
+    if reminded or charged or settled:
+        log.info("Подписка: напоминаний %s, автосписаний %s, досверено платежей %s", reminded, charged, settled)
 
 
 async def run_subscription_worker(stop_event: asyncio.Event) -> None:

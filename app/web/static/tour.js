@@ -1,13 +1,15 @@
 // Обучение для новых водителей: затемнение, подсветка элемента и подсказка.
-// Два шага: что это за сайт и где главный инструмент (фильтр). Показывается один раз
-// (флаг в localStorage), повторно — по кнопке «?» в шапке.
+// Три шага: что это за сайт, где главный инструмент (фильтр) и куда писать с вопросами. Показывается один раз
+// (флаг в localStorage), повторно — по кнопке «Показать подсказки» в профиле (ссылка /?tour=1).
 (function () {
   var KEY = 'tourDone';
   var steps = [
     { title: 'Добро пожаловать!',
       text: 'Сайт для диспетчеров и водителей Telegram-групп.' },
     { sel: '#filtersDetails > summary', title: 'Фильтр заказов',
-      text: 'Главный инструмент — фильтр заказов. Находите подходящие заказы, не тратя время на сотни лишних.' }
+      text: 'Главный инструмент — фильтр заказов. Находите подходящие заказы, не тратя время на сотни лишних.' },
+    { sel: '.collab-btn', title: 'Обратная связь',
+      text: 'Обращайтесь, если заметите ошибку, появятся предложения или вопросы: прочитаем и ответим.' }
   ];
 
   function done() { try { localStorage.setItem(KEY, '1'); } catch (e) { /* ignore */ } }
@@ -147,10 +149,12 @@
     }
   }
 
-  var btn = document.getElementById('tourBtn');
-  if (btn) btn.addEventListener('click', start);
-  // Автозапуск — только на ленте (там есть что показывать) и только впервые.
-  if (location.pathname === '/' && !seen()) {
+  // Запуск — только на ленте (там есть что показывать): впервые или по ссылке «Показать подсказки» из профиля (?tour=1).
+  var requested = /[?&]tour=1(&|$)/.test(location.search);
+  if (location.pathname === '/' && (requested || !seen())) {
+    if (requested && window.history && history.replaceState) {
+      history.replaceState(null, '', location.pathname + location.search.replace(/([?&])tour=1(&|$)/, '$1').replace(/[?&]$/, '') + location.hash);
+    }
     window.addEventListener('load', function () { setTimeout(start, 400); });
   }
 })();

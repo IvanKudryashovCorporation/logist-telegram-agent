@@ -16,8 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.db.base import SessionLocal
 from app.models import Driver, Payment
-from app.models.payment import KIND_AUTORENEW
+from app.models.payment import KIND_ADMIN, KIND_AUTORENEW, PAYMENT_PENDING
 from app.services import billing
+from app.services import billing_events as events
 from app.services.payments import PaymentProvider, ProviderPayment
 from app.services.payments.base import STATUS_CANCELED, STATUS_SUCCEEDED, ProviderRefund
 from app.timeutil import now_utc_naive
@@ -28,6 +29,9 @@ log = logging.getLogger("billing")
 REMIND_DAYS = 3
 #: Автосписание делаем, когда до конца осталось не больше этого.
 RENEW_AHEAD = timedelta(days=1)
+#: Сверка зависших платежей: не раньше чем через RECONCILE_AFTER, не дольше RECONCILE_WINDOW после создания.
+RECONCILE_AFTER = timedelta(minutes=2)
+RECONCILE_WINDOW = timedelta(days=3)
 #: После стольких неудач подряд автопродление выключаем.
 MAX_RENEW_FAILURES = 3
 #: Не чаще одной попытки автосписания за это время.
@@ -49,32 +53,78 @@ def _plan_days(info: ProviderPayment) -> int:
 
 
 async def apply_payment(session: AsyncSession, provider_name: str, info: ProviderPayment) -> Settlement:
-    """Применяет состояние платежа от провайдера: оплачен — продлевает подписку, отменён — закрывает запись."""
+    """Применяет состояние платежа от провайдера: оплачен — продлевает подписку, отменён — закрывает запись.
+
+    Все исходы пишутся в журнал, а оплата и любые подозрительные случаи уходят владельцу в Telegram."""
     if info.status == STATUS_CANCELED:
         await billing.mark_canceled(session, info.id)
+        await events.record(
+            events.PAYMENT_CANCELED, telegram_id=info.telegram_id, provider_id=info.id, amount_kop=info.amount_kop,
+            details=f"способ: {info.kind or '—'}",
+        )
         return Settlement(False, info.telegram_id)
     if info.status != STATUS_SUCCEEDED:
         return Settlement(False, info.telegram_id)
     if info.telegram_id is None:
         log.error("Платёж %s оплачен, но без telegram_id в metadata — не начисляем", info.id)
+        await events.alert(
+            events.PAYMENT_ANOMALY,
+            f"🚨 Платёж {info.id} на {info.amount_kop / 100:.0f} ₽ оплачен, но в нём нет пользователя: "
+            "дни не начислены, разберите вручную.",
+            provider_id=info.id, amount_kop=info.amount_kop,
+        )
         return Settlement(False)
     if info.amount_kop < settings.subscription_price_rub * 100:
         # Мы создаём платежи только на полную цену; меньшая сумма — чужой или подменённый платёж.
         log.error("Платёж %s на %s коп. меньше цены подписки — не начисляем", info.id, info.amount_kop)
+        await events.alert(
+            events.PAYMENT_ANOMALY,
+            f"🚨 Платёж {info.id} на {info.amount_kop / 100:.0f} ₽ меньше цены подписки "
+            f"({settings.subscription_price_rub} ₽): дни не начислены.",
+            telegram_id=info.telegram_id, provider_id=info.id, amount_kop=info.amount_kop,
+        )
         return Settlement(False, info.telegram_id)
 
-    _payment, credited = await billing.record_success(
+    days = _plan_days(info)
+    payment, credited = await billing.record_success(
         session,
         telegram_id=info.telegram_id,
         provider=provider_name,
         provider_payment_id=info.id,
         kind=info.kind or "sbp",
         amount_kop=info.amount_kop,
-        days=_plan_days(info),
+        days=days,
         payment_method_id=info.payment_method_id,
     )
+    if payment is None:
+        await events.alert(
+            events.PAYMENT_ANOMALY,
+            f"🚨 Платёж {info.id} на {info.amount_kop / 100:.0f} ₽ оплачен, но пользователя id {info.telegram_id} "
+            "нет в базе: дни не начислены.",
+            telegram_id=info.telegram_id, provider_id=info.id, amount_kop=info.amount_kop,
+        )
+        return Settlement(False, info.telegram_id)
+
     driver = await billing.get_driver(session, info.telegram_id)
-    return Settlement(credited, info.telegram_id, driver.paid_until if driver else None)
+    until = driver.paid_until if driver else None
+    await session.commit()  # закрываем чтение: журнал пишет в своей сессии
+    if credited:
+        kind = info.kind or "sbp"
+        await events.alert(
+            events.AUTORENEW_CHARGED if kind == "autorenew" else events.PAYMENT_SUCCEEDED,
+            await events.payment_message(
+                telegram_id=info.telegram_id, kind=kind, amount_kop=info.amount_kop, days=days, until=until,
+                payment_id=info.id,
+            ),
+            telegram_id=info.telegram_id, provider_id=info.id, amount_kop=info.amount_kop,
+            details=f"+{days} дн., оплачено до {until:%d.%m.%Y}" if until else f"+{days} дн.",
+        )
+    else:
+        await events.record(
+            events.PAYMENT_DUPLICATE, telegram_id=info.telegram_id, provider_id=info.id, amount_kop=info.amount_kop,
+            details="платёж уже был засчитан, дни не добавлены",
+        )
+    return Settlement(credited, info.telegram_id, until)
 
 
 @dataclass(frozen=True)
@@ -94,10 +144,31 @@ async def apply_refund(session: AsyncSession, info: ProviderRefund) -> RefundSet
     refund, days = await billing.record_refund(
         session, provider_refund_id=info.id, provider_payment_id=info.payment_id, amount_kop=info.amount_kop,
     )
-    if refund is None or not days:
-        return RefundSettlement(False, refund.telegram_id if refund else None)
+    if refund is None:
+        await events.alert(
+            events.REFUND_IGNORED,
+            f"⚠️ Возврат {info.id} на {info.amount_kop / 100:.0f} ₽ по платежу {info.payment_id}, которого нет среди "
+            "засчитанных у нас: дни не списаны, проверьте вручную.",
+            provider_id=info.id, amount_kop=info.amount_kop,
+        )
+        return RefundSettlement(False)
     driver = await billing.get_driver(session, refund.telegram_id)
-    return RefundSettlement(True, refund.telegram_id, days, driver.paid_until if driver else None)
+    until = driver.paid_until if driver else None
+    await session.commit()  # закрываем чтение: журнал пишет в своей сессии
+    if not days:
+        await events.record(
+            events.REFUND_DUPLICATE, telegram_id=refund.telegram_id, provider_id=info.id, amount_kop=info.amount_kop,
+            details="возврат уже учтён или снимать нечего",
+        )
+        return RefundSettlement(False, refund.telegram_id)
+    await events.alert(
+        events.REFUND_SUCCEEDED,
+        await events.refund_message(
+            telegram_id=refund.telegram_id, amount_kop=info.amount_kop, days=days, until=until, refund_id=info.id,
+        ),
+        telegram_id=refund.telegram_id, provider_id=info.id, amount_kop=info.amount_kop, details=f"-{days} дн.",
+    )
+    return RefundSettlement(True, refund.telegram_id, days, until)
 
 
 async def settle_refund(provider: PaymentProvider, refund_id: str) -> RefundSettlement:
@@ -180,6 +251,9 @@ async def remind_expiring(*, send=None, now: Optional[datetime] = None) -> int:
                 continue
             outcome = await send(driver.telegram_id, text, _pay_markup())
             driver.reminded_for = marker  # BLOCKED тоже запоминаем: повторять бессмысленно
+            await events.record(
+                events.REMINDER_SENT, telegram_id=driver.telegram_id, details=text[:80], session=session,
+            )
             if outcome != BLOCKED:
                 sent += 1
         await session.commit()
@@ -203,6 +277,7 @@ async def autorenew_due(
         return 0
 
     charged = 0
+    problems: list[tuple] = []
     async with SessionLocal() as session:
         drivers = (
             await session.execute(
@@ -240,6 +315,8 @@ async def autorenew_due(
                 )
             except Exception as exc:  # noqa: BLE001 — сеть/провайдер: попробуем в следующий раз
                 log.warning("Автосписание tg:%s не вышло: %s", driver.telegram_id, exc)
+                problems.append((events.AUTORENEW_ERROR, f"🚨 Автосписание не удалось из-за сбоя ЮKassa: {exc}",
+                                 driver.telegram_id, None, timedelta(minutes=30)))
                 continue
 
             await billing.start_payment(
@@ -257,6 +334,12 @@ async def autorenew_due(
                 if driver.renew_failures >= MAX_RENEW_FAILURES:
                     driver.auto_renew = False
                 await session.commit()
+                problems.append((
+                    events.AUTORENEW_FAILED,
+                    f"⚠️ Автосписание не прошло: {await events.who(driver.telegram_id)}, неудач подряд: "
+                    f"{driver.renew_failures}" + (" (автопродление выключено)" if not driver.auto_renew else ""),
+                    driver.telegram_id, info.id, None,
+                ))
                 await send(
                     driver.telegram_id,
                     "⚠️ Не удалось списать оплату подписки с сохранённой карты. "
@@ -264,4 +347,55 @@ async def autorenew_due(
                     _pay_markup(),
                 )
             # pending: итог придёт вебхуком или сверкой
+    for kind, text, telegram_id, provider_id, throttle in problems:
+        await events.alert(kind, text, telegram_id=telegram_id, provider_id=provider_id, throttle=throttle)
     return charged
+
+
+async def reconcile_pending(*, provider: Optional[PaymentProvider] = None, now: Optional[datetime] = None) -> int:
+    """Сверяет с ЮKassa платежи, по которым ждём оплаты: вебхук мог потеряться, а водитель на сайт не вернуться.
+
+    Оплаченные засчитываются (владельцу и водителю уходят сообщения), а платёж, который висит «в ожидании» дольше
+    ``PENDING_TTL`` (10 минут), перестаёт «ждать оплаты» и помечается неоплаченным."""
+    from app.services.payments import PaymentError, get_provider
+
+    provider = provider or get_provider()
+    now = now or now_utc_naive()
+    if provider is None or not billing.enabled():
+        return 0
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(Payment.provider_payment_id, Payment.telegram_id, Payment.created_at).where(
+                    Payment.status == PAYMENT_PENDING,
+                    Payment.kind != KIND_ADMIN,
+                    Payment.created_at > now - RECONCILE_WINDOW,
+                    Payment.created_at < now - RECONCILE_AFTER,
+                )
+            )
+        ).all()
+
+    credited = 0
+    for payment_id, _telegram_id, _created_at in rows:
+        try:
+            result = await settle(provider, payment_id)
+        except PaymentError as exc:
+            await events.alert(
+                events.PROVIDER_ERROR, f"🚨 Сверка платежей: ЮKassa не отвечает или отказала ({exc}).",
+                throttle=timedelta(minutes=30),
+            )
+            continue
+        if result.credited:
+            credited += 1
+            if result.telegram_id is not None:
+                await notify_paid(result.telegram_id, result.until)
+            continue
+    async with SessionLocal() as session:
+        expired = await billing.expire_stale_pending(session, now=now)
+    for payment in expired:
+        await events.record(
+            events.PAYMENT_CANCELED, telegram_id=payment.telegram_id, provider_id=payment.provider_payment_id,
+            amount_kop=payment.amount_kop,
+            details=f"не оплачен за {int(billing.PENDING_TTL.total_seconds() // 60)} минут",
+        )
+    return credited

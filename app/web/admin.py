@@ -37,6 +37,7 @@ from app.models import (
 )
 from app.parsing.llm_parser import cache_stats
 from app.services import billing, geo_health, reporting
+from app.services import billing_events as events
 from app.services.subscriptions import describe_filters, set_subscription_active
 from app.timeutil import now_utc_naive
 from app.web import queries
@@ -284,6 +285,20 @@ async def user_filter(request: Request, telegram_id: int, sub_id: int, action: s
     return RedirectResponse(url=f"/admin/users/{telegram_id}", status_code=303)
 
 
+@router.get("/billing", response_class=HTMLResponse)
+async def billing_page(request: Request, days: int = 30):
+    """Платежи и журнал подписки: что пришло, что вернули, что пошло не так."""
+    denied = _guard(request)
+    if denied is not None:
+        return denied
+
+    overview = await reporting.billing_overview(days=max(1, min(days, 365)))
+    return await _render(
+        request, "admin_billing.html", o=overview, kind_labels=events.KIND_LABELS,
+        problem_kinds=events.PROBLEM_KINDS, section="billing",
+    )
+
+
 @router.post("/users/{telegram_id}/subscription/{action}")
 async def user_subscription(request: Request, telegram_id: int, action: str):
     """Подписка пользователя вручную: добавить дни (подарок, компенсация) или обнулить доступ."""
@@ -303,9 +318,11 @@ async def user_subscription(request: Request, telegram_id: int, action: str):
             if days:
                 until = await billing.grant_days(session, telegram_id, days)
                 log.info("Админ добавил %s дн. подписки tg:%s (до %s)", days, telegram_id, until)
+                await events.record(events.ADMIN_GRANT, telegram_id=telegram_id, details=f"+{days} дн., до {until}")
         else:
             await billing.reset_access(session, telegram_id)
             log.info("Админ обнулил доступ по подписке у tg:%s", telegram_id)
+            await events.record(events.ADMIN_RESET, telegram_id=telegram_id, details="доступ обнулён")
     return RedirectResponse(url=f"/admin/users/{telegram_id}", status_code=303)
 
 

@@ -7,7 +7,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, DateTime, Integer, String
+from sqlalchemy import BigInteger, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin
@@ -63,3 +63,20 @@ class Refund(Base, TimestampMixin):
 
     def __repr__(self) -> str:
         return f"<Refund {self.provider_refund_id} payment={self.provider_payment_id} -{self.days}d>"
+
+
+class BillingEvent(Base, TimestampMixin):
+    """Журнал событий подписки: платежи, уведомления ЮKassa, возвраты, автосписания, сбои (см. billing_events)."""
+
+    __tablename__ = "billing_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    telegram_id: Mapped[Optional[int]] = mapped_column(BigInteger, index=True)
+    #: Идентификатор платежа или возврата у провайдера.
+    provider_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    amount_kop: Mapped[Optional[int]] = mapped_column(Integer)
+    details: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    def __repr__(self) -> str:
+        return f"<BillingEvent {self.kind} tg:{self.telegram_id} {self.provider_id}>"

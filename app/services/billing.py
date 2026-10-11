@@ -23,7 +23,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import Driver, Payment, Refund
-from app.models.payment import PAYMENT_CANCELED, PAYMENT_PENDING, PAYMENT_REFUNDED, PAYMENT_SUCCEEDED
+from app.models.payment import (
+    KIND_ADMIN,
+    PAYMENT_CANCELED,
+    PAYMENT_PENDING,
+    PAYMENT_REFUNDED,
+    PAYMENT_SUCCEEDED,
+)
 from app.timeutil import now_utc_naive
 
 STATE_OFF = "off"
@@ -263,6 +269,29 @@ async def record_refund(
         driver.paid_until = driver.paid_until - timedelta(days=days)
     await session.commit()
     return refund, days
+
+
+#: Сколько платёж ждёт оплаты. Не оплатили за это время — в истории он перестаёт висеть «в ожидании»
+#: (если водитель всё-таки оплатит позже, вебхук или сверка зачтёт платёж как обычно).
+PENDING_TTL = timedelta(minutes=10)
+
+
+async def expire_stale_pending(
+    session: AsyncSession, *, telegram_id: Optional[int] = None, now: Optional[datetime] = None
+) -> list[Payment]:
+    """Помечает неоплаченными платежи, которые ждут оплаты дольше ``PENDING_TTL``. Возвращает их список."""
+    cutoff = (now or now_utc_naive()) - PENDING_TTL
+    query = select(Payment).where(
+        Payment.status == PAYMENT_PENDING, Payment.created_at < cutoff, Payment.kind != KIND_ADMIN
+    )
+    if telegram_id is not None:
+        query = query.where(Payment.telegram_id == telegram_id)
+    stale = list((await session.execute(query)).scalars().all())
+    for payment in stale:
+        payment.status = PAYMENT_CANCELED
+    if stale:
+        await session.commit()
+    return stale
 
 
 async def mark_canceled(session: AsyncSession, provider_payment_id: str) -> None:
