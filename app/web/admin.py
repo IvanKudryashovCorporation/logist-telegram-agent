@@ -303,9 +303,11 @@ async def billing_page(request: Request, days: int = 30):
     if denied is not None:
         return denied
 
-    overview = await reporting.billing_overview(days=max(1, min(days, 365)))
+    days = max(1, min(days, 365))
+    overview = await reporting.billing_overview(days=days)
+    funnel = await reporting.subscription_metrics(days=days)
     return await _render(
-        request, "admin_billing.html", o=overview, kind_labels=events.KIND_LABELS,
+        request, "admin_billing.html", o=overview, f=funnel, kind_labels=events.KIND_LABELS,
         problem_kinds=events.PROBLEM_KINDS, section="billing",
     )
 

@@ -600,3 +600,62 @@ async def group_stats(days: int = 7) -> dict:
     totals = {k: sum(r[k] for r in rows) for k in ("orders", "duplicates", "spam", "messages")}
     totals["spam_share"] = (totals["spam"] / totals["messages"]) if totals["messages"] else 0.0
     return {"days": days, "rows": rows, "totals": totals}
+
+
+async def subscription_metrics(*, days: int = 30) -> dict:
+    """Воронка подписки: сколько водителей на пробном периоде, сколько платят и сколько ушло.
+
+    «Ушли без оплаты» — пробный период закончился, ни одного платежа не было. «Ушли после оплаты» — платили,
+    но срок вышел. Конверсия считается среди тех, у кого пробный период уже закончился. Админы не учитываются."""
+    from app.models.payment import KIND_ADMIN, PAYMENT_REFUNDED, PAYMENT_SUCCEEDED
+
+    now = now_utc_naive()
+    since = now - timedelta(days=max(1, days))
+    async with SessionLocal() as session:
+        drivers = (await session.execute(select(Driver))).scalars().all()
+        payers = set(
+            (
+                await session.execute(
+                    select(Payment.telegram_id)
+                    .where(Payment.status.in_((PAYMENT_SUCCEEDED, PAYMENT_REFUNDED)), Payment.kind != KIND_ADMIN)
+                    .distinct()
+                )
+            ).scalars().all()
+        )
+        new_paying = set(
+            (
+                await session.execute(
+                    select(Payment.telegram_id)
+                    .where(
+                        Payment.status.in_((PAYMENT_SUCCEEDED, PAYMENT_REFUNDED)), Payment.kind != KIND_ADMIN,
+                        Payment.paid_at >= since,
+                    )
+                    .distinct()
+                )
+            ).scalars().all()
+        )
+
+    trial = paid = left_unpaid = left_paid = total = new = counted_payers = 0
+    for driver in drivers:
+        state = billing.describe(driver, now=now).state
+        if state in (billing.STATE_ADMIN, billing.STATE_OFF):
+            continue
+        total += 1
+        counted_payers += driver.telegram_id in payers
+        if driver.created_at >= since:
+            new += 1
+        if state == billing.STATE_TRIAL:
+            trial += 1
+        elif state == billing.STATE_PAID:
+            paid += 1
+        elif state == billing.STATE_EXPIRED:
+            if driver.telegram_id in payers:
+                left_paid += 1
+            else:
+                left_unpaid += 1
+    finished = left_unpaid + counted_payers
+    return {
+        "days": days, "total": total, "new": new, "trial": trial, "paid": paid,
+        "left_unpaid": left_unpaid, "left_paid": left_paid, "new_paying": len(new_paying),
+        "conversion": (counted_payers / finished) if finished else None,
+    }

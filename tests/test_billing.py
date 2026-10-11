@@ -1400,3 +1400,29 @@ def test_yookassa_parse_extracts_card_digits():
                           "payment_method": {"id": "pm", "saved": True, "card": {"last4": "1234", "card_type": "MasterCard"}}})
     assert (info.card_last4, info.card_brand) == ("1234", "MasterCard")
     assert parse_payment({"id": "p", "payment_method": {"card": {"last4": "12"}}}).card_last4 is None
+
+
+async def test_subscription_metrics_split_trial_paid_and_churned(session, subscription_on):
+    from app.models import Payment
+    from app.services import reporting
+
+    now = now_utc_naive()
+    old = now - timedelta(days=60)
+    session.add_all([
+        Driver(telegram_id=7001, created_at=now - timedelta(days=2), trial_ends_at=now + timedelta(days=12)),  # пробный
+        Driver(telegram_id=7002, created_at=old, trial_ends_at=old + timedelta(days=14),
+               paid_until=now + timedelta(days=10)),  # платит
+        Driver(telegram_id=7003, created_at=old, trial_ends_at=old + timedelta(days=14)),  # ушёл без оплаты
+        Driver(telegram_id=7004, created_at=old, trial_ends_at=old + timedelta(days=14),
+               paid_until=now - timedelta(days=3)),  # ушёл после оплаты
+    ])
+    for tg in (7002, 7004):
+        session.add(Payment(telegram_id=tg, provider="y", provider_payment_id=f"m-{tg}", kind="sbp",
+                            amount_kop=99000, days=30, status="succeeded", paid_at=now - timedelta(days=5)))
+    await session.commit()
+
+    m = await reporting.subscription_metrics(days=30)
+
+    assert (m["total"], m["new"], m["trial"], m["paid"]) == (4, 1, 1, 1)
+    assert (m["left_unpaid"], m["left_paid"], m["new_paying"]) == (1, 1, 2)
+    assert m["conversion"] == pytest.approx(2 / 3)  # из троих, чей пробный период кончился, заплатили двое

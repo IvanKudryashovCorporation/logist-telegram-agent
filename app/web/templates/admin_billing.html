@@ -26,6 +26,20 @@
 </div>
 
 <div class="card">
+  <h2>Водители и подписка</h2>
+  <p class="muted">Без админов. «Ушли без оплаты» — пробный период закончился, платежей не было. «Ушли после оплаты» — платили, но срок вышел.
+    Конверсия — доля заплативших среди тех, у кого пробный период уже закончился.</p>
+  <div class="metrics">
+    <div class="metric"><div class="metric-value">{{ f.total }}</div><div class="metric-label">всего водителей (+{{ f.new }} за {{ f.days }} дн.)</div></div>
+    <div class="metric"><div class="metric-value">{{ f.trial }}</div><div class="metric-label">на пробном периоде</div></div>
+    <div class="metric ok"><div class="metric-value">{{ f.paid }}</div><div class="metric-label">платят сейчас (новых плательщиков за {{ f.days }} дн.: {{ f.new_paying }})</div></div>
+    <div class="metric {{ 'warn' if f.left_unpaid else '' }}"><div class="metric-value">{{ f.left_unpaid }}</div><div class="metric-label">ушли без оплаты</div></div>
+    <div class="metric {{ 'warn' if f.left_paid else '' }}"><div class="metric-value">{{ f.left_paid }}</div><div class="metric-label">ушли после оплаты</div></div>
+    <div class="metric"><div class="metric-value">{% if f.conversion is not none %}{{ '%.0f'|format(f.conversion * 100) }}%{% else %}—{% endif %}</div><div class="metric-label">конверсия пробный → оплата</div></div>
+  </div>
+</div>
+
+<div class="card">
   <h2>Последние платежи</h2>
   {% if o.payments %}
     <table>
