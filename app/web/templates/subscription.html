@@ -163,15 +163,27 @@
   {# ---- Сохранённая карта и автоплатёж: блок виден всегда, отвязать карту можно в один клик ---- #}
   {% if sub.state != 'off' %}
     {% set card_saved = driver.payment_method_id or driver.auto_renew %}
+    {% set card_title = ((driver.card_brand or 'карту') ~ ' •••• ' ~ driver.card_last4) if driver.card_last4 else 'карту' %}
     <section class="sb-card" aria-label="Сохранённая карта и автоплатёж" id="card-autopay">
       <h2 class="sb-h2">Сохранённая карта и автоплатёж</h2>
       <p class="sb-note">
-        {% if card_saved %}Карта привязана, подписка продлевается автоматически за сутки до конца срока ({{ price_rub }} ₽ за {{ period_days }} дней).
+        {% if card_saved %}Карта привязана{% if driver.card_last4 %}: <b>{{ driver.card_brand or 'Карта' }} •••• {{ driver.card_last4 }}</b>{% endif %}, подписка продлевается автоматически за сутки до конца срока ({{ price_rub }} ₽ за {{ period_days }} дней).
         {% else %}Карта не привязана, автоплатёж выключен. Привязать карту можно ссылкой «Настроить автоплатёж» в блоке оплаты выше.{% endif %}
       </p>
-      <form method="post" action="/subscription/autorenew/off">
-        <button type="submit" class="sb-btn sb-btn-alt sb-btn-sm" {% if not card_saved %}disabled{% endif %}>Отвязать карту и отключить автоплатёж</button>
-      </form>
+      {% if card_saved %}
+        <details class="sb-confirm">
+          <summary class="sb-btn sb-btn-alt sb-btn-sm">Отвязать карту и отключить автоплатёж</summary>
+          <div class="sb-confirm-box" role="alertdialog" aria-label="Подтверждение отвязки карты">
+            <p><b>Отвязать {{ card_title }}?</b> Автоплатёж отключится, списаний больше не будет. Оплаченные дни сохранятся.</p>
+            <form method="post" action="/subscription/autorenew/off">
+              <button type="submit" class="sb-btn sb-btn-sm sb-btn-danger">Да, отвязать карту</button>
+            </form>
+            <p class="sb-fine">Передумали? Просто закройте это окно — ничего не изменится.</p>
+          </div>
+        </details>
+      {% else %}
+        <button type="button" class="sb-btn sb-btn-alt sb-btn-sm" disabled>Отвязать карту и отключить автоплатёж</button>
+      {% endif %}
       <p class="sb-fine" style="margin-top:10px;">Данные карты хранятся в ЮKassa, на нашем сайте их нет. После отвязки списаний больше не будет; оплаченные дни сохраняются.</p>
     </section>
   {% endif %}

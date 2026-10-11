@@ -1086,3 +1086,10 @@ input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), select, t
 
 .sb-btn[disabled] { opacity:.5; cursor:not-allowed; }
 #card-autopay .sb-h2 { margin-bottom:6px; }
+
+.sb-confirm summary { list-style:none; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
+.sb-confirm summary::-webkit-details-marker { display:none; }
+.sb-confirm[open] summary { display:none; }
+.sb-confirm-box { margin-top:6px; padding:14px; border:1px solid var(--sb-line); border-radius:12px; }
+.sb-confirm-box p { margin:0 0 10px; }
+.sb-btn-danger { background:#dc2626; color:#fff; border-color:#dc2626; }

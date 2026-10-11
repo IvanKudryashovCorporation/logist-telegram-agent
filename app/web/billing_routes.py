@@ -232,6 +232,7 @@ async def subscription_autorenew_off(request: Request):
         if driver is not None:
             driver.auto_renew = False
             driver.payment_method_id = None
+            driver.card_last4 = driver.card_brand = None
             await session.commit()
     await events.record(events.AUTORENEW_OFF, telegram_id=telegram_id, details="водитель отключил автопродление")
     return _redirect("/subscription", new_token, "Автопродление выключено.")

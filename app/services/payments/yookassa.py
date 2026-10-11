@@ -48,6 +48,8 @@ def parse_payment(data: dict[str, Any]) -> ProviderPayment:
     meta = data.get("metadata") or {}
     method = data.get("payment_method") or {}
     amount = data.get("amount") or {}
+    card = method.get("card") or {}
+    last4 = str(card.get("last4") or "")
     try:
         amount_kop = round(float(amount.get("value", "0")) * 100)
     except (TypeError, ValueError):
@@ -69,6 +71,8 @@ def parse_payment(data: dict[str, Any]) -> ProviderPayment:
         days=days,
         confirmation_url=str((data.get("confirmation") or {}).get("confirmation_url", "")),
         payment_method_id=str(method["id"]) if method.get("saved") and method.get("id") else None,
+        card_last4=last4 if last4.isdigit() and len(last4) == 4 else None,
+        card_brand=str(card.get("card_type") or "")[:24] or None,
     )
 
 

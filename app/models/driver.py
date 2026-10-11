@@ -47,6 +47,9 @@ class Driver(Base, TimestampMixin):
     #: Продлевать картой автоматически и способ оплаты, сохранённый у провайдера.
     auto_renew: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
     payment_method_id: Mapped[Optional[str]] = mapped_column(String(64))
+    #: Какая карта сохранена: последние 4 цифры и тип (Visa, Mir...) — только для показа водителю.
+    card_last4: Mapped[Optional[str]] = mapped_column(String(4))
+    card_brand: Mapped[Optional[str]] = mapped_column(String(24))
     #: Подряд неудачных автосписаний; после трёх автопродление выключается.
     renew_failures: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     #: Когда водитель последний раз открывал колокольчик: уведомления новее — непрочитанные.

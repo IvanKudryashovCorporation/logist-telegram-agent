@@ -349,11 +349,11 @@ class FakeProvider:
 
         self.refunds[refund_id] = ProviderRefund(id=refund_id, status=status, payment_id=payment_id, amount_kop=amount_kop)
 
-    def succeed(self, payment_id, method_id=None):
+    def succeed(self, payment_id, method_id=None, card_last4=None, card_brand=None):
         old = self.payments[payment_id]
         self.payments[payment_id] = ProviderPayment(
             id=old.id, status=STATUS_SUCCEEDED, amount_kop=old.amount_kop, telegram_id=old.telegram_id,
-            kind=old.kind, days=old.days, payment_method_id=method_id,
+            kind=old.kind, days=old.days, payment_method_id=method_id, card_last4=card_last4, card_brand=card_brand,
         )
 
 
@@ -1371,3 +1371,32 @@ async def test_subscription_page_always_shows_card_unbinding_block(client, sessi
     page = (await client.get("/subscription")).text
     assert "Карта привязана" in page
     assert "disabled" not in page.split("Отвязать карту")[0].rsplit("<button", 1)[1]
+
+
+async def test_card_last4_is_saved_from_payment_and_shown_with_confirmation(
+    client, session, subscription_on, telegram_login_on, provider
+):
+    await _login(client)
+    await client.post("/subscription/pay", data={"kind": "autopay"})
+    provider.succeed("fake-1", method_id="pm-42", card_last4="4242", card_brand="Visa")
+    await client.post("/payments/yookassa", json={"event": "payment.succeeded", "object": {"id": "fake-1"}})
+
+    page = (await client.get("/subscription")).text
+
+    assert "Visa •••• 4242" in page and "Да, отвязать карту" in page  # сначала подтверждение, потом отвязка
+    assert "Передумали?" in page
+
+    await client.post("/subscription/autorenew/off")
+    driver = (await session.execute(select(Driver).where(Driver.telegram_id == int(USER)))).scalar_one()
+    await session.refresh(driver)
+    assert driver.card_last4 is None and driver.payment_method_id is None
+    assert "4242" not in (await client.get("/subscription")).text
+
+
+def test_yookassa_parse_extracts_card_digits():
+    from app.services.payments.yookassa import parse_payment
+
+    info = parse_payment({"id": "p", "status": "succeeded", "amount": {"value": "990.00"},
+                          "payment_method": {"id": "pm", "saved": True, "card": {"last4": "1234", "card_type": "MasterCard"}}})
+    assert (info.card_last4, info.card_brand) == ("1234", "MasterCard")
+    assert parse_payment({"id": "p", "payment_method": {"card": {"last4": "12"}}}).card_last4 is None

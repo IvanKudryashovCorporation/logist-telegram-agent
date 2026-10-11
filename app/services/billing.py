@@ -192,6 +192,7 @@ async def start_payment(
 async def record_success(
     session: AsyncSession, *, telegram_id: int, provider: str, provider_payment_id: str, kind: str,
     amount_kop: int, days: int, payment_method_id: Optional[str] = None, now: Optional[datetime] = None,
+    card_last4: Optional[str] = None, card_brand: Optional[str] = None,
 ) -> tuple[Optional[Payment], bool]:
     """Засчитывает оплату и продлевает подписку. Идемпотентно по ``provider_payment_id``.
 
@@ -222,6 +223,8 @@ async def record_success(
     if payment_method_id and kind in ("autopay", "autorenew"):
         driver.payment_method_id = payment_method_id
         driver.auto_renew = True
+        if card_last4:
+            driver.card_last4, driver.card_brand = card_last4, card_brand
     await session.commit()
     return payment, True
 

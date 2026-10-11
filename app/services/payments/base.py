@@ -26,6 +26,9 @@ class ProviderPayment:
     confirmation_url: str = ""
     #: Способ оплаты, сохранённый у провайдера для автосписаний.
     payment_method_id: Optional[str] = None
+    #: Последние цифры и тип карты, если оплата картой (для показа водителю).
+    card_last4: Optional[str] = None
+    card_brand: Optional[str] = None
 
 
 @dataclass(frozen=True)

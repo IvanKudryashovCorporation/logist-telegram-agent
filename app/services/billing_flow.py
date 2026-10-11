@@ -95,6 +95,8 @@ async def apply_payment(session: AsyncSession, provider_name: str, info: Provide
         amount_kop=info.amount_kop,
         days=days,
         payment_method_id=info.payment_method_id,
+        card_last4=info.card_last4,
+        card_brand=info.card_brand,
     )
     if payment is None:
         await events.alert(
