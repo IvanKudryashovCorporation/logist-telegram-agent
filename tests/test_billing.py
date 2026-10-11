@@ -689,3 +689,53 @@ async def test_success_banner_after_return_from_payment(
 
     assert "Оплата получена" in page and "Подписка продлена до" in page
     assert "Подписка оплачена" in page and "Оплачен" in page  # и в истории платежей
+
+
+async def test_any_method_button_creates_a_payment_without_forcing_the_method(
+    client, session, subscription_on, telegram_login_on, provider
+):
+    await _login(client)
+
+    page = (await client.get("/subscription")).text
+    response = await client.post("/subscription/pay", data={"kind": "any"})
+
+    assert "Другой способ оплаты" in page
+    assert response.headers["location"] == "https://pay.test/fake-1"
+    assert provider.created[0]["kind"] == "any"
+    assert (await session.execute(select(Payment))).scalars().one().kind == "any"
+
+
+async def test_any_method_payment_does_not_turn_autorenew_on(session, subscription_on):
+    session.add(_driver())
+    await session.commit()
+
+    await billing.record_success(
+        session, telegram_id=777000111, provider="yookassa", provider_payment_id="pay-any", kind="any",
+        amount_kop=99000, days=30, payment_method_id="pm-z", now=NOW,
+    )
+
+    assert (await billing.get_driver(session, 777000111)).auto_renew is False
+
+
+def test_yookassa_any_kind_leaves_the_method_unset(monkeypatch):
+    import asyncio
+
+    from app.services.payments.yookassa import YooKassa
+
+    sent = {}
+
+    async def fake_request(self, method, url, *, json=None, idempotence_key=None):
+        sent.update(json)
+        return {"id": "p", "status": "pending", "amount": {"value": "990.00"}, "confirmation": {"confirmation_url": "u"}}
+
+    monkeypatch.setattr(YooKassa, "_request", fake_request)
+    provider = YooKassa("1", "k")
+    for kind in ("sbp", "card", "any"):
+        sent.clear()
+        asyncio.run(provider.create_payment(telegram_id=1, kind=kind, amount_kop=99000, days=30, return_url="r", description="d"))
+        if kind == "any":
+            assert "payment_method_data" not in sent and "save_payment_method" not in sent
+        elif kind == "card":
+            assert sent["payment_method_data"] == {"type": "bank_card"} and sent["save_payment_method"] is True
+        else:
+            assert sent["payment_method_data"] == {"type": "sbp"}

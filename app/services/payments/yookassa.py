@@ -102,9 +102,11 @@ class YooKassa:
         }
         if kind == "sbp":
             body["payment_method_data"] = {"type": "sbp"}
-        else:
+        elif kind == "card":
             body["payment_method_data"] = {"type": "bank_card"}
             body["save_payment_method"] = True
+        # kind == "any": способ не задаём, на странице ЮKassa водитель выберет из подключённых в магазине
+        # (карта, SberPay, T-Pay, ЮMoney и др.). Автопродление для такого платежа не включается.
         return parse_payment(await self._request("POST", API_URL, json=body))
 
     async def charge_saved(

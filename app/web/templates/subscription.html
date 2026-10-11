@@ -139,10 +139,12 @@
         <div class="sb-btns">
           {{ pay_form('sbp', 'Оплатить ' ~ price_rub ~ ' ₽ по СБП', 'phone') }}
           {% if not autorenew %}{{ pay_form('card', 'Картой, продлевать автоматически', 'card', true) }}{% endif %}
+          {{ pay_form('any', 'Другой способ оплаты', 'card', true) }}
         </div>
         <ul class="sb-hints">
           <li><b>СБП</b> — разовый платёж, карта не сохраняется.</li>
           {% if not autorenew %}<li><b>Карта</b> — сохраняется в ЮKassa, списание за сутки до конца срока.</li>{% endif %}
+          <li><b>Другой способ</b> — SberPay, T-Pay и другие способы, подключённые в ЮKassa; разовый платёж без автопродления.</li>
         </ul>
       {% else %}
         <p class="sb-note">Приём оплаты скоро появится.</p>
