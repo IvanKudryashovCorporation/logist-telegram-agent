@@ -823,3 +823,23 @@ async def test_guest_and_pages_with_params_are_not_redirected(client):
     await client.get("/?from_city=Керчь")
 
     assert (await client.get("/?page=2")).status_code == 200  # есть параметры — ничего не подменяем
+
+
+async def test_groups_page_hides_deleted_and_disabled_groups(session, make_order):
+    from app.models import ParseOutcome, ParseStat, WorkGroup
+    from app.services import reporting
+
+    session.add_all([
+        WorkGroup(tg_chat_id=-1001, title="Живая", is_active=True),
+        WorkGroup(tg_chat_id=-1002, title="Выключенная", is_active=False),
+    ])
+    session.add_all([
+        ParseStat(chat_id=-1001, outcome=ParseOutcome.NOT_ORDER),
+        ParseStat(chat_id=-1002, outcome=ParseOutcome.NOT_ORDER),
+        ParseStat(chat_id=-1003, outcome=ParseOutcome.NOT_ORDER),  # группы уже нет в базе
+    ])
+    await session.commit()
+
+    stats = await reporting.group_stats(days=7)
+
+    assert [r["title"] for r in stats["rows"]] == ["Живая"]

@@ -577,8 +577,8 @@ async def group_stats(days: int = 7) -> dict:
     rows = []
     for chat_id in sorted(set(titles) | set(orders) | set(spam) | set(duplicates)):
         group = titles.get(chat_id)
-        if group is not None and not group.is_active and chat_id not in orders and chat_id not in spam:
-            continue  # отключённая группа без активности за период только шумит
+        if group is None or not group.is_active:
+            continue  # удалённые и отключённые группы в статистике не показываем
         o, s, d = int(orders.get(chat_id, 0)), spam.get(chat_id, 0), duplicates.get(chat_id, 0)
         total = o + s + d
         rows.append(
@@ -586,7 +586,7 @@ async def group_stats(days: int = 7) -> dict:
                 "chat_id": chat_id,
                 "title": group.title if group else str(chat_id),
                 "username": group.username if group else None,
-                "active": bool(group.is_active) if group else False,
+                "active": True,
                 "watch_only": bool(group.watch_only) if group else False,
                 "orders": o,
                 "duplicates": d,
