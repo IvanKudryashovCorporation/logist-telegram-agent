@@ -36,7 +36,7 @@ def test_ordinary_phrases_do_not_close_an_order(text):
 @pytest.mark.parametrize(
     "text",
     ["Симферополь - Керчь, запрос цены", "цена по запросу", "Цена договорная", "предлагайте свою цену", "Торг уместен",
-     "Ваша цена?", "сколько возьмёте"],
+     "Ваша цена?", "сколько возьмёте", "Зея - Благовещенск по цене сами 10%", "по вашей цене"],
 )
 def test_price_request_phrases(text):
     assert has_price_request(text)
