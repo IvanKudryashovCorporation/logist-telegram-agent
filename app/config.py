@@ -251,6 +251,8 @@ class Settings(BaseSettings):
     #: (договорился / в работе / выполнен) не удаляются никогда: это их история
     #: и заработок в профиле.
     closed_orders_retention_days: int = 30
+    #: Не публиковать заявки, где диспетчеру нельзя написать (нет @username и id автора, группа закрытая).
+    skip_unreachable_orders: bool = True
     #: Сколько дней хранить строки parse_stats (0 — не удалять).
     stats_retention_days: int = 30
 

@@ -36,6 +36,8 @@ os.environ.update(
         "PREFILTER_ENABLED": "true",
         "PARSE_STATS_ENABLED": "false",
         "EXPIRE_GRACE_HOURS": "6",
+        # Большинство тестов шлёт заявки без автора; правило «нельзя написать» проверяют отдельные тесты.
+        "SKIP_UNREACHABLE_ORDERS": "false",
         # Ключа нет — тесты не должны ходить в реальную LLM.
         "LLM_API_KEY": "",
     }

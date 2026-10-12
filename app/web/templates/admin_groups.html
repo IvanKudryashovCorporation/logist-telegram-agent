@@ -11,6 +11,10 @@
     <div class="metric-value">{{ g.totals.duplicates }}</div>
     <div class="metric-label">дублей (не попали в ленту)</div>
   </div>
+  <div class="metric {{ 'warn' if g.totals.no_contact else '' }}">
+    <div class="metric-value">{{ g.totals.no_contact }}</div>
+    <div class="metric-label">без контакта диспетчера (отсеяно)</div>
+  </div>
   <div class="metric {{ 'warn' if g.totals.spam_share > 0.7 else '' }}">
     <div class="metric-value">{{ g.totals.spam }}</div>
     <div class="metric-label">спама ({{ '%.0f'|format(g.totals.spam_share * 100) }}% сообщений)</div>
@@ -28,7 +32,7 @@
   {% if g.rows %}
     <table>
       <thead><tr>
-        <th>Группа</th><th class="num">Сообщений</th><th class="num">Заказов</th><th class="num">Дублей</th>
+        <th>Группа</th><th class="num">Сообщений</th><th class="num">Заказов</th><th class="num">Дублей</th><th class="num" title="Заявки, где диспетчеру нельзя написать: нет @username и автор скрыт, а группа закрытая">Без контакта</th>
         <th class="num">Спам</th><th class="num">Спам, %</th><th class="num">Спам на заказ</th>
       </tr></thead>
       <tbody>
@@ -42,6 +46,7 @@
             <td class="num">{{ r.messages }}</td>
             <td class="num"><b>{{ r.orders }}</b></td>
             <td class="num">{{ r.duplicates }}</td>
+            <td class="num">{% if r.no_contact %}<span class="tag warn">{{ r.no_contact }}</span>{% else %}0{% endif %}</td>
             <td class="num">{{ r.spam }}</td>
             <td class="num">
               {% if r.messages %}<span class="tag {{ 'bad' if r.spam_share > 0.9 else ('warn' if r.spam_share > 0.7 else 'ok') }}">{{ '%.0f'|format(r.spam_share * 100) }}%</span>{% else %}—{% endif %}

@@ -42,11 +42,12 @@ from app.models import (
     Order,
     OrderStatus,
     ParseOutcome,
+    WorkGroup,
 )
 from app.parsing import stats as parse_stats
 from app.parsing.closed import ACTION_CLOSED_LOCK, has_closed_lock
 from app.parsing.llm_parser import parse_orders, text_hash, text_key
-from app.parsing.order_builder import apply_parsed_fields, resolve_pickup_at
+from app.parsing.order_builder import apply_parsed_fields, extract_contact_username, resolve_pickup_at
 from app.parsing.prefilter import PrefilterDecision, prefilter
 from app.parsing.price import has_price_request
 from app.parsing.schema import ParsedOrder
@@ -499,8 +500,26 @@ async def upsert_order_text(
         return result_ids
 
 
+#: Причина отсева (parse_stats.error) и действие журнала: диспетчеру нельзя написать.
+NO_CONTACT = "no_contact"
+ACTION_NO_CONTACT = "cancelled_no_contact"
+
 #: Действие журнала: заявку сняли, потому что в ней нет цены.
 ACTION_NO_PRICE = "cancelled_no_price"
+
+
+async def _unreachable(
+    db, chat_id: int, text: str, dispatcher_tg_id: Optional[int], dispatcher_username: Optional[str]
+) -> bool:
+    """Диспетчеру не написать: нет @username (ни у автора, ни «писать @…» в тексте), нет id автора, группа закрытая."""
+    if not settings.skip_unreachable_orders:
+        return False
+    if dispatcher_username or dispatcher_tg_id or extract_contact_username(text):
+        return False
+    public = (
+        await db.execute(select(WorkGroup.username).where(WorkGroup.tg_chat_id == chat_id))
+    ).scalar_one_or_none()
+    return not public
 
 
 def _is_closed(parsed: ParsedOrder, text: str, count: int) -> bool:
@@ -558,6 +577,17 @@ async def _save_orders(
             if existing is not None and not existing.taken_by_token:
                 await _cancel_orders(db, [existing], dispatcher_tg_id, action=ACTION_NO_PRICE)
             log.info("Заявка без цены пропущена (chat=%s msg=%s sub=%s)", chat_id, message_id, index)
+            continue
+
+        if is_new_order and await _unreachable(
+            db, chat_id, _order_raw_text(parsed, text), dispatcher_tg_id, dispatcher_username
+        ):
+            # Написать диспетчеру нельзя: нет ни @username, ни номера аккаунта, а группа закрытая. Такая заявка
+            # в ленте бесполезна — водитель упрётся в «Вы не состоите в чате».
+            await parse_stats.record(
+                db, ParseOutcome.PREFILTERED, chat_id=chat_id, message_id=message_id, error=NO_CONTACT,
+            )
+            log.info("Заявка без контакта диспетчера пропущена (chat=%s msg=%s sub=%s)", chat_id, message_id, index)
             continue
 
         if is_new_order and not (parsed.from_city or parsed.to_city):

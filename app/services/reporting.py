@@ -532,7 +532,19 @@ async def queue_summary() -> dict[str, int]:
 
 
 #: Причины отсева, которые не говорят о качестве группы: старое сообщение и правка с замком.
-_NOT_SPAM_REASONS = ("stale", "closed_lock")
+_NOT_SPAM_REASONS = ("stale", "closed_lock", "no_contact")
+
+
+async def _no_contact_counts(since) -> list:
+    """Сколько заявок по группам отсеяно, потому что диспетчеру нельзя написать."""
+    async with SessionLocal() as session:
+        return (
+            await session.execute(
+                select(ParseStat.chat_id, func.count(ParseStat.id))
+                .where(ParseStat.created_at >= since, ParseStat.error == "no_contact", ParseStat.chat_id.is_not(None))
+                .group_by(ParseStat.chat_id)
+            )
+        ).all()
 
 
 async def group_stats(days: int = 7) -> dict:
@@ -569,13 +581,19 @@ async def group_stats(days: int = 7) -> dict:
 
     spam: dict[int, int] = {}
     duplicates: dict[int, int] = {}
+    no_contact = {
+        chat_id: int(count)
+        for chat_id, count in (
+            await _no_contact_counts(since)
+        )
+    }
     for chat_id, outcome, count in outcome_rows:
         target = duplicates if outcome == ParseOutcome.DUPLICATE else spam
         target[chat_id] = target.get(chat_id, 0) + int(count)
 
     titles = {g.tg_chat_id: g for g in groups}
     rows = []
-    for chat_id in sorted(set(titles) | set(orders) | set(spam) | set(duplicates)):
+    for chat_id in sorted(set(titles) | set(orders) | set(spam) | set(duplicates) | set(no_contact)):
         group = titles.get(chat_id)
         if group is None or not group.is_active:
             continue  # удалённые и отключённые группы в статистике не показываем
@@ -590,6 +608,7 @@ async def group_stats(days: int = 7) -> dict:
                 "watch_only": bool(group.watch_only) if group else False,
                 "orders": o,
                 "duplicates": d,
+                "no_contact": no_contact.get(chat_id, 0),
                 "spam": s,
                 "messages": total,
                 "spam_share": (s / total) if total else 0.0,
@@ -597,7 +616,7 @@ async def group_stats(days: int = 7) -> dict:
             }
         )
     rows.sort(key=lambda r: (-r["orders"], -r["spam"], r["title"]))
-    totals = {k: sum(r[k] for r in rows) for k in ("orders", "duplicates", "spam", "messages")}
+    totals = {k: sum(r[k] for r in rows) for k in ("orders", "duplicates", "spam", "messages", "no_contact")}
     totals["spam_share"] = (totals["spam"] / totals["messages"]) if totals["messages"] else 0.0
     return {"days": days, "rows": rows, "totals": totals}
 

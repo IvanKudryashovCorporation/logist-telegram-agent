@@ -413,3 +413,75 @@ async def test_cleanup_removes_open_orders_without_price_and_closed_marks(sessio
     status = {name: (await session.get(Order, order_id)).status for name, order_id in ids.items()}
     assert status["no_price"] == OrderStatus.CANCELLED and status["closed"] == OrderStatus.CANCELLED
     assert status["asking"] != OrderStatus.CANCELLED and status["normal"] != OrderStatus.CANCELLED
+
+
+# --- Заявки, где диспетчеру нельзя написать --------------------------------------------------------------
+
+
+@pytest.fixture
+def skip_unreachable(monkeypatch):
+    monkeypatch.setattr(work_group.settings, "skip_unreachable_orders", True)
+
+
+async def _post_anonymous(message_id, text="Пермь - Аэропорт 13500", chat_id=-100555):
+    return await work_group.upsert_order_text(
+        chat_id=chat_id, message_id=message_id, text=text, dispatcher_tg_id=None, dispatcher_username=None
+    )
+
+
+async def test_order_nobody_can_write_about_is_skipped_and_counted(session, monkeypatch, skip_unreachable):
+    from app.models import ParseStat
+
+    monkeypatch.setattr(work_group.settings, "parse_stats_enabled", True)
+    _parse(monkeypatch, {**ROUTE, "via_points": []})
+
+    await _post_anonymous(1)
+
+    assert await _orders(session) == []
+    stats = (await session.execute(select(ParseStat.chat_id, ParseStat.error))).all()
+    assert (-100555, "no_contact") in stats
+
+
+async def test_order_is_kept_when_there_is_some_way_to_write(session, monkeypatch, skip_unreachable):
+    from app.models import WorkGroup
+
+    _parse(monkeypatch, {**ROUTE, "via_points": [], "client_price": 11000})
+    await _post_anonymous(1, text="Пермь - Аэропорт 11000, писать @dispatcher_x")  # «писать @…» в тексте
+    session.add(WorkGroup(tg_chat_id=-100666, title="Публичная", username="public_group"))
+    await session.commit()
+    _parse(monkeypatch, {**ROUTE, "via_points": [], "client_price": 12000, "from_city": "Казань", "to_city": "Уфа"})
+    await _post_anonymous(2, chat_id=-100666)  # публичная группа: ссылка на сообщение открывается у всех
+    _parse(monkeypatch, {**ROUTE, "via_points": [], "client_price": 14000, "from_city": "Омск", "to_city": "Тюмень"})
+    await work_group.upsert_order_text(  # у автора есть номер аккаунта
+        chat_id=-100555, message_id=3, text="Омск - Тюмень 14000", dispatcher_tg_id=77, dispatcher_username=None
+    )
+
+    assert len(await _orders(session)) == 3
+
+
+async def test_cleanup_removes_open_orders_without_any_contact_and_counts_them(session, make_order, monkeypatch):
+    from app.services import cleanup
+
+    monkeypatch.setattr(cleanup.settings, "skip_unreachable_orders", True)
+    from app.models import ParseStat, WorkGroup
+    from app.services.cleanup import cancel_non_orders
+
+    session.add(WorkGroup(tg_chat_id=-1001234567890 - 1, title="Публичная", username="pub"))
+    nobody = await make_order(dispatcher_username=None)
+    nobody.dispatcher_tg_id = None
+    nobody.contact_username = None
+    reachable = await make_order()
+    in_public = await make_order(dispatcher_username=None)
+    in_public.dispatcher_tg_id = None
+    in_public.source_chat_id = -1001234567890 - 1
+    session.add_all([nobody, in_public])
+    await session.commit()
+    ids = {"nobody": nobody.id, "reachable": reachable.id, "in_public": in_public.id}
+
+    await cancel_non_orders()
+
+    session.expire_all()
+    status = {name: (await session.get(Order, order_id)).status for name, order_id in ids.items()}
+    assert status["nobody"] == OrderStatus.CANCELLED
+    assert status["reachable"] != OrderStatus.CANCELLED and status["in_public"] != OrderStatus.CANCELLED
+    assert (await session.execute(select(ParseStat.error))).scalars().all() == ["no_contact"]
