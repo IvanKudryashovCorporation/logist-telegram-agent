@@ -37,6 +37,7 @@ from app.models import (
 from app.parsing.closed import has_closed_lock
 from app.parsing.not_orders import non_order_reason
 from app.parsing.order_builder import FAR_FUTURE, correct_far_year, has_critical_gaps
+from app.parsing.price import has_price_request
 from app.services.dedupe import cancel_duplicate_orders
 from app.timeutil import now_msk_naive, now_utc_naive
 
@@ -370,17 +371,19 @@ async def cancel_non_orders() -> int:
     async with SessionLocal() as session:
         rows = (
             await session.execute(
-                select(Order.id, Order.raw_text).where(
+                select(Order.id, Order.raw_text, Order.client_price).where(
                     Order.status.in_(OPEN_STATUSES),
                     Order.taken_by_token.is_(None),
                     Order.raw_text.is_not(None),
                 )
             )
         ).all()
-        for order_id, raw_text in rows:
+        for order_id, raw_text, client_price in rows:
             # Закрытый замок 🔒 снимает заказ всегда: так диспетчер помечает «взяли». Живой разбор делает то же при
             # правке, но заказы, закрытые до появления этого правила, добираем здесь.
             reason = non_order_reason(raw_text) or ("closed_lock" if has_closed_lock(raw_text) else None)
+            if reason is None and client_price is None and not has_price_request(raw_text):
+                reason = "no_price"  # без цены в ленте не держим, пока в тексте нет «запроса цены»
             if reason is None:
                 continue
             await session.execute(update(Order).where(Order.id == order_id).values(status=OrderStatus.CANCELLED))

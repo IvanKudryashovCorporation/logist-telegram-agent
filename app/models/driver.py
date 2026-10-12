@@ -15,7 +15,7 @@ driver_token). Она никуда не делась: у водителя БЕЗ
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, Integer, String, false
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Integer, String, Text, false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin
@@ -50,6 +50,8 @@ class Driver(Base, TimestampMixin):
     #: Какая карта сохранена: последние 4 цифры и тип (Visa, Mir...) — только для показа водителю.
     card_last4: Mapped[Optional[str]] = mapped_column(String(4))
     card_brand: Mapped[Optional[str]] = mapped_column(String(24))
+    #: Последний применённый фильтр ленты (JSON): при заходе без параметров открываем ленту с ним.
+    saved_filter: Mapped[Optional[str]] = mapped_column(Text)
     #: Подряд неудачных автосписаний; после трёх автопродление выключается.
     renew_failures: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     #: Когда водитель последний раз открывал колокольчик: уведомления новее — непрочитанные.

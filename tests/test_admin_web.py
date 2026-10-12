@@ -785,3 +785,41 @@ async def test_groups_page_is_hidden_from_non_admins(client):
     assert (await client.get("/admin/groups")).status_code == 404
     await _login(client, STRANGER_ID)
     assert (await client.get("/admin/groups")).status_code == 404
+
+
+# --- Фильтр запоминается между заходами -------------------------------------------------------------------
+
+
+async def test_last_filter_is_restored_on_the_next_visit_without_params(client, session):
+    from app.models import Driver
+
+    await _login(client)
+    page = await client.get("/?from_city=Симферополь&to_city=Ялта&price_min=3000")
+    assert page.status_code == 200
+
+    repeat = await client.get("/")  # «зашёл заново» без параметров
+
+    assert repeat.status_code == 303
+    location = repeat.headers["location"]
+    assert "from_city=" in location and "price_min=3000" in location
+    driver = (await session.execute(select(Driver).where(Driver.telegram_id == OWNER_ID))).scalar_one()
+    await session.refresh(driver)
+    assert driver.saved_filter and "Симферополь" in driver.saved_filter
+
+
+async def test_applying_the_filter_form_remembers_it_and_empty_apply_forgets_it(client):
+    await _login(client)
+    await client.post("/filter", data={"from_city": "Керчь", "price_max": "5000"})
+    assert "from_city=" in (await client.get("/")).headers.get("location", "")
+
+    await client.post("/filter", data={})  # очистил поля и нажал «Применить»
+
+    assert (await client.get("/")).status_code == 200  # фильтра нет, редиректа нет
+
+
+async def test_guest_and_pages_with_params_are_not_redirected(client):
+    assert (await client.get("/")).status_code == 200  # гость
+    await _login(client)
+    await client.get("/?from_city=Керчь")
+
+    assert (await client.get("/?page=2")).status_code == 200  # есть параметры — ничего не подменяем

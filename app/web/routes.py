@@ -5,6 +5,7 @@
 отдельно, без поднятия HTTP.
 """
 
+import json
 import logging
 from typing import Optional
 from urllib.parse import quote, urlencode
@@ -145,6 +146,15 @@ async def feed(
     page: int = 1,
 ):
     token, new_token = driver_token(request)
+    telegram_id = logged_in_telegram_id(request)
+    if telegram_id is not None and not request.query_params:
+        # Вошёл заново без параметров — открываем ленту с его последним фильтром.
+        saved = await _saved_filter(telegram_id)
+        if saved:
+            return _redirect(
+                f"/?{urlencode(saved)}", new_token,
+                "Показан ваш последний фильтр. Чтобы сбросить его, очистите поля и нажмите «Применить».",
+            )
     filters = Filters(
         from_city=from_city, to_city=to_city, vehicle=vehicle,
         date_from=date_from, date_to=date_to, time_from=time_from, time_to=time_to,
@@ -154,6 +164,14 @@ async def feed(
         sort = queries.DEFAULT_SORT
     direction = queries.effective_direction(sort, dir)
     coords = _parse_coords(lat, lon) if sort == "distance" else None
+    if telegram_id is not None and any(value for value in filters.as_dict().values()):
+        # Фильтр задан ссылкой (а не формой) — тоже запоминаем.
+        view = {key: value for key, value in filters.as_dict().items() if value}
+        if request.query_params.get("sort") in queries.SORT_LABELS:
+            view["sort"] = request.query_params["sort"]
+            if request.query_params.get("dir") in queries.DIRECTION_LABELS:
+                view["dir"] = request.query_params["dir"]
+        await _remember_filter(telegram_id, view)
 
     async with SessionLocal() as session:
         await _attach_radius_centers(session, filters)
@@ -262,6 +280,50 @@ _FILTER_FIELDS = (
 )
 
 
+_SAVED_KEYS = frozenset(_FILTER_FIELDS) | {"sort", "dir"}
+
+
+async def _remember_filter(telegram_id: Optional[int], view: dict) -> None:
+    """Запоминает последний фильтр ленты вошедшего водителя (пустой — забывает)."""
+    if telegram_id is None:
+        return
+    saved = {key: value for key, value in view.items() if key in _SAVED_KEYS and value}
+    if not any(saved.get(name) for name in _FILTER_FIELDS):
+        saved = {}
+    async with SessionLocal() as session:
+        driver = (
+            await session.execute(select(Driver).where(Driver.telegram_id == telegram_id))
+        ).scalar_one_or_none()
+        if driver is None:
+            return
+        value = json.dumps(saved, ensure_ascii=False) if saved else None
+        if driver.saved_filter != value:
+            driver.saved_filter = value
+            await session.commit()
+
+
+async def _saved_filter(telegram_id: Optional[int]) -> dict:
+    """Последний фильтр ленты водителя, прогнанный через те же проверки, что и обычный фильтр."""
+    if telegram_id is None:
+        return {}
+    async with SessionLocal() as session:
+        raw = (
+            await session.execute(select(Driver.saved_filter).where(Driver.telegram_id == telegram_id))
+        ).scalar_one_or_none()
+    try:
+        data = json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    params = {k: v for k, v in Filters(**{n: str(data.get(n) or "") for n in _FILTER_FIELDS}).as_dict().items() if v}
+    if str(data.get("sort") or "") in queries.SORT_LABELS:
+        params["sort"] = str(data["sort"])
+        if str(data.get("dir") or "") in queries.DIRECTION_LABELS:
+            params["dir"] = str(data["dir"])
+    return params
+
+
 @router.post("/filter")
 async def apply_filter(request: Request):
     """«Применить» у вошедшего водителя: показывает ленту по фильтру и, если стоит
@@ -287,6 +349,8 @@ async def apply_filter(request: Request):
     _token, new_token, login_required = resolve_driver(request)
     if login_required:
         return _login_redirect(request, target)
+
+    await _remember_filter(logged_in_telegram_id(request), view)
 
     notice = ""
     if form.get("notify") and not await _has_subscription(request):

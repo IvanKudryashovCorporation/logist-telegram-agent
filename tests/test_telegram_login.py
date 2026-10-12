@@ -351,3 +351,4 @@ async def test_guest_header_has_no_profile_link(client, telegram_login_on):
 
     assert 'href="/profile"' not in feed
     assert "Войти" in feed
+

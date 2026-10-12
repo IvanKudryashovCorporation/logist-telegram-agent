@@ -48,6 +48,7 @@ from app.parsing.closed import ACTION_CLOSED_LOCK, has_closed_lock
 from app.parsing.llm_parser import parse_orders, text_hash, text_key
 from app.parsing.order_builder import apply_parsed_fields, resolve_pickup_at
 from app.parsing.prefilter import PrefilterDecision, prefilter
+from app.parsing.price import has_price_request
 from app.parsing.schema import ParsedOrder
 from app.parsing.stale import is_stale
 from app.telegram import pending as pending_queue
@@ -498,6 +499,10 @@ async def upsert_order_text(
         return result_ids
 
 
+#: Действие журнала: заявку сняли, потому что в ней нет цены.
+ACTION_NO_PRICE = "cancelled_no_price"
+
+
 def _is_closed(parsed: ParsedOrder, text: str, count: int) -> bool:
     """Закрытый замок относится к этой заявке: к её фрагменту текста, а у одиночной — ко всему тексту.
 
@@ -545,6 +550,14 @@ async def _save_orders(
             if existing is not None and not existing.taken_by_token:
                 await _cancel_orders(db, [existing], dispatcher_tg_id, action=ACTION_CLOSED_LOCK)
             log.info("Заявка с закрытым замком пропущена (chat=%s msg=%s sub=%s)", chat_id, message_id, index)
+            continue
+
+        if parsed.client_price is None and not has_price_request(_order_raw_text(parsed, text)):
+            # Без цены заявка в ленту не попадает: когда диспетчер убирает цену, заказ неактуален. Исключение —
+            # «запрос цены» и подобное: тогда цену называет сам водитель.
+            if existing is not None and not existing.taken_by_token:
+                await _cancel_orders(db, [existing], dispatcher_tg_id, action=ACTION_NO_PRICE)
+            log.info("Заявка без цены пропущена (chat=%s msg=%s sub=%s)", chat_id, message_id, index)
             continue
 
         if is_new_order and not (parsed.from_city or parsed.to_city):

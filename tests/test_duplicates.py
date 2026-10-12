@@ -10,6 +10,7 @@
 
 import importlib.util
 from datetime import datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -219,7 +220,8 @@ def test_migration_works_with_iso_strings():
 
 async def test_identical_text_from_another_group_is_a_repost_even_without_a_dispatcher(session, monkeypatch):
     """«Сатка → село Париж» без цены: у одного сообщения диспетчер не определился."""
-    _parse(monkeypatch, from_city="Сатка (Челябинская область)", to_city="село Париж (Челябинская область)")
+    _parse(monkeypatch, from_city="Сатка (Челябинская область)", to_city="село Париж (Челябинская область)",
+           client_price=Decimal("2500"))
     text = "Сейчас +-один час\n\nОткуда Сатка Челябинская область\n\nКуда село Париж Челябинская область"
     first = await _post(-100111, 1, text=text)
     second = await _post(-100222, 4, text=text, dispatcher_tg_id=3, dispatcher_username="MYRAZ888_123_rus")
@@ -229,8 +231,9 @@ async def test_identical_text_from_another_group_is_a_repost_even_without_a_disp
 
 
 async def test_different_text_without_a_dispatcher_is_not_merged(session, monkeypatch):
-    _parse(monkeypatch, from_city="Гагра", to_city="Сочи")
+    _parse(monkeypatch, from_city="Гагра", to_city="Сочи", client_price=Decimal("1800"))
     await _post(-100111, 1, text="Гагра Сочи срочно, багаж большой, кто на месте")
+    _parse(monkeypatch, from_city="Гагра", to_city="Сочи", client_price=Decimal("2700"))
     await _post(-100222, 2, text="Гагра Сочи сейчас, нужен комфорт, два пассажира")
 
     assert await _count(session) == 2

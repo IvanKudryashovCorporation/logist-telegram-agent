@@ -337,7 +337,7 @@ async def test_filter_without_a_city_can_be_saved(client, session, telegram_logi
     assert response.status_code == 303 and "price_min=5000" in response.headers["location"]
     sub = (await session.execute(select(OrderSubscription))).scalar_one()
     assert sub.is_active and sub.params["price_min"] == "5000" and sub.params["vehicle"] == "minivan"
-    assert "добавлен в «Мои фильтры»" in (await client.get("/")).text
+    assert "добавлен в «Мои фильтры»" in (await client.get("/?page=1")).text
     page = (await client.get("/filters")).text
     assert "Цена: от 5000 до ∞ ₽" in page and "Тип авто: минивэн" in page
 
@@ -349,7 +349,7 @@ async def test_empty_filter_is_applied_but_not_saved(client, session, telegram_l
 
     assert response.status_code == 303
     assert (await session.execute(select(OrderSubscription))).scalars().all() == []
-    assert "хотя бы одно условие" in (await client.get("/")).text
+    assert "хотя бы одно условие" in (await client.get("/?page=1")).text
 
 
 async def test_a_filter_without_a_city_catches_matching_orders_in_any_city(session, make_order):
@@ -577,7 +577,7 @@ async def test_each_filter_with_the_box_is_added_next_to_the_others(client, sess
     assert [r.params["from_city"] or r.params["to_city"] for r in rows] == ["Ялта", "Керчь"]
     assert all(r.is_active for r in rows)
     assert first.status_code == 303
-    assert "добавлен в «Мои фильтры»" in (await client.get("/")).text
+    assert "добавлен в «Мои фильтры»" in (await client.get("/?page=1")).text
 
 
 async def test_the_same_filter_is_not_saved_twice_it_is_switched_back_on(client, session, telegram_login_on):
@@ -590,7 +590,7 @@ async def test_the_same_filter_is_not_saved_twice_it_is_switched_back_on(client,
 
     rows = await _my_filters(session)
     assert len(rows) == 1 and rows[0].is_active
-    assert "уже есть в «Мои фильтры»" in (await client.get("/")).text
+    assert "уже есть в «Мои фильтры»" in (await client.get("/?page=1")).text
 
 
 async def test_filter_limit_is_enforced(client, session, telegram_login_on, monkeypatch):
@@ -600,23 +600,23 @@ async def test_filter_limit_is_enforced(client, session, telegram_login_on, monk
         await client.post("/filter", data={"from_city": city, "notify": "on"})
 
     assert len(await _my_filters(session)) == 2
-    assert "максимум" in (await client.get("/")).text
+    assert "максимум" in (await client.get("/?page=1")).text
 
 
 async def test_filter_form_shows_the_my_filters_button_with_the_count(client, telegram_login_on):
-    guest = (await client.get("/")).text
+    guest = (await client.get("/?page=1")).text
     assert 'method="get" action="/"' in guest and 'name="notify"' not in guest
     assert "Войдите, чтобы получать новые заказы" in guest and "Мои фильтры" not in guest
 
     await _login(client)
-    empty = (await client.get("/")).text
+    empty = (await client.get("/?page=1")).text
     assert 'method="post" action="/filter"' in empty
     assert 'href="/filters"' in empty and "Мои фильтры (0)" in empty
     assert 'name="notify" checked' not in empty  # галочка по умолчанию снята
 
     await client.post("/filter", data={"from_city": "Ялта", "notify": "on"})
     await client.post("/filter", data={"to_city": "Керчь", "notify": "on"})
-    assert "Мои фильтры (2)" in (await client.get("/")).text
+    assert "Мои фильтры (2)" in (await client.get("/?page=1")).text
 
 
 async def test_my_filters_page_lists_filters_with_actions(client, session, telegram_login_on):
@@ -655,7 +655,7 @@ async def test_filters_can_be_switched_off_on_and_deleted_one_by_one(client, ses
     await client.post(f"/filters/{first.id}/delete")
     rows = await _my_filters(session)
     assert [r.id for r in rows] == [second.id]
-    assert "Мои фильтры (1)" in (await client.get("/")).text
+    assert "Мои фильтры (1)" in (await client.get("/?page=1")).text
 
 
 async def test_one_driver_cannot_touch_another_drivers_filter(client, session, telegram_login_on):

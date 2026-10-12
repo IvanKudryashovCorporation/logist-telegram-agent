@@ -329,8 +329,8 @@ async def test_vague_details_no_longer_make_an_order_unclear(session, monkeypatc
     assert (await _orders(session))[0].status == OrderStatus.NEW
 
 
-@pytest.mark.parametrize("gap", [{"client_price": None}, {"to_city": None}, {"from_city": None}])
-async def test_missing_route_or_price_still_needs_clarification(session, monkeypatch, gap):
+@pytest.mark.parametrize("gap", [{"to_city": None}, {"from_city": None}])
+async def test_missing_route_still_needs_clarification(session, monkeypatch, gap):
     _parse(monkeypatch, {**ROUTE, "via_points": [], **gap})
 
     await _post(1)
@@ -349,3 +349,67 @@ async def test_cleanup_clears_the_badge_on_orders_that_have_route_and_price(sess
 
     by_id = {o.id: o.status for o in await _orders(session)}
     assert by_id[usable.id] == OrderStatus.NEW and by_id[no_price.id] == OrderStatus.NEEDS_CLARIFICATION
+
+
+# --- Без цены в ленту не попадает; слова «Отдан ✅» закрывают заказ ---------------------------------------
+
+
+async def test_order_without_price_is_not_published(session, monkeypatch):
+    _parse(monkeypatch, {**ROUTE, "via_points": [], "client_price": None})
+
+    await _post(1, text="Пермь - Аэропорт, 11:00, 3 чел.")
+
+    assert await _orders(session) == []
+
+
+async def test_order_with_price_request_is_published_without_price(session, monkeypatch):
+    _parse(monkeypatch, {**ROUTE, "via_points": [], "client_price": None})
+
+    await _post(1, text="Пермь - Аэропорт, 11:00, 3 чел. Запрос цены")
+
+    orders = await _orders(session)
+    assert len(orders) == 1 and orders[0].client_price is None and orders[0].status != OrderStatus.CANCELLED
+
+
+async def test_removing_the_price_in_an_edit_takes_the_order_off_the_feed(session, monkeypatch):
+    _parse(monkeypatch, {**ROUTE, "via_points": []})
+    await _post(1, text="Пермь - Аэропорт 13500")
+    assert (await _orders(session))[0].status != OrderStatus.CANCELLED
+
+    _parse(monkeypatch, {**ROUTE, "via_points": [], "client_price": None})
+    await _post(1, text="Пермь - Аэропорт", is_edit=True)
+
+    order = (await _orders(session))[0]
+    assert order.status == OrderStatus.CANCELLED
+    logged = (await session.execute(select(ActionLog.action).where(ActionLog.order_id == order.id))).scalars().all()
+    assert "cancelled_no_price" in logged
+
+
+async def test_otdan_mark_in_an_edit_takes_the_order_off_the_feed(session, monkeypatch):
+    _parse(monkeypatch, {**ROUTE, "via_points": []})
+    await _post(1, text="Пермь - Аэропорт 13500")
+
+    await _post(1, text="Пермь - Аэропорт 13500\nОтдан ✅", is_edit=True)
+
+    assert (await _orders(session))[0].status == OrderStatus.CANCELLED
+
+
+async def test_cleanup_removes_open_orders_without_price_and_closed_marks(session, make_order):
+    from app.services.cleanup import cancel_non_orders
+
+    no_price = await make_order(price="")
+    no_price.client_price = None
+    asking = await make_order(price="", raw_text="Симферополь - Ялта, цена по запросу")
+    asking.client_price = None
+    closed = await make_order(raw_text="Симферополь - Керчь 4 чел.\nОтдан ✅")
+    normal = await make_order()
+    session.add_all([no_price, asking])
+    await session.commit()
+    ids = {"no_price": no_price.id, "asking": asking.id, "closed": closed.id, "normal": normal.id}
+
+    await cancel_non_orders()
+
+    session.expire_all()
+    status = {name: (await session.get(Order, order_id)).status for name, order_id in ids.items()}
+    assert status["no_price"] == OrderStatus.CANCELLED and status["closed"] == OrderStatus.CANCELLED
+    assert status["asking"] != OrderStatus.CANCELLED and status["normal"] != OrderStatus.CANCELLED
