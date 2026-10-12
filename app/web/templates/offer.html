@@ -1,5 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Публичная оферта — Лента заказов{% endblock %}
+{% block seo %}
+  <meta name="description" content="Публичная оферта сервиса «Лента заказов»: условия платной подписки, оплата, возвраты.">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="{{ base_url }}/offer">
+{% endblock %}
 {% block content %}
 {% set who = (seller ~ (', ИНН ' ~ seller_inn if seller_inn else '')) if seller else 'владелец сервиса «Лента заказов»' %}
 

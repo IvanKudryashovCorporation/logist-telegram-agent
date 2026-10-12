@@ -5,6 +5,7 @@
 автосписания, и оно идемпотентно.
 """
 
+import json
 import logging
 from datetime import timedelta
 from typing import Optional
@@ -299,6 +300,54 @@ async def yookassa_webhook(request: Request):
     return JSONResponse({"ok": True})
 
 
+_FAQ = (
+    ("Откуда берутся заказы?", "Из Telegram-групп диспетчеров такси и межгорода. Сервис читает свежие сообщения, "
+     "отбирает настоящие заявки и показывает их в одной ленте."),
+    ("Сколько это стоит?", "Первые {trial} дней бесплатно, потом {price} ₽ за {period} дней. Оплата по СБП или картой, "
+     "автоплатёж включается по желанию и отключается в один клик."),
+    ("Можно ли писать диспетчеру прямо с сайта?",
+     "Да: у каждого заказа есть кнопка «Написать диспетчеру», она открывает чат в Telegram с готовым текстом."),
+    ("Как приходят уведомления?", "Сохраните фильтр (города, радиус, тип авто, время, цена), и новые подходящие "
+     "заказы будут приходить вам в Telegram."),
+    ("Нужна ли регистрация?", "Нет, достаточно войти через Telegram."),
+)
+
+
+def _about_context() -> dict:
+    base = settings.public_base_url.rstrip("/")
+    price, period, trial = settings.subscription_price_rub, settings.subscription_period_days, settings.trial_days
+    faq = [(q, a.format(trial=trial, price=price, period=period)) for q, a in _FAQ]
+    ld = {
+        "@context": "https://schema.org",
+        "@graph": [
+            {
+                "@type": "WebApplication", "name": "Лента заказов", "url": f"{base}/about", "inLanguage": "ru",
+                "applicationCategory": "BusinessApplication",
+                "description": "Заявки такси и межгорода из Telegram-групп диспетчеров в одной ленте для водителей.",
+                "offers": {"@type": "Offer", "price": str(price), "priceCurrency": "RUB"},
+            },
+            {
+                "@type": "FAQPage",
+                "mainEntity": [
+                    {"@type": "Question", "name": q, "acceptedAnswer": {"@type": "Answer", "text": a}} for q, a in faq
+                ],
+            },
+        ],
+    }
+    return {
+        "base_url": base, "faq": faq, "price_rub": price, "period_days": period, "trial_days": trial,
+        "ld_json": json.dumps(ld, ensure_ascii=False).replace("</", "<\\/"),
+    }
+
+
+@router.get("/about", response_class=HTMLResponse)
+async def about_page(request: Request):
+    """Публичная страница о сервисе: единственная (кроме оферты), которую можно индексировать поисковикам."""
+    async with SessionLocal() as session:
+        counts = await queries.header_counts(session, "")
+    return templates.TemplateResponse("about.html", _base_context(request, counts) | _about_context())
+
+
 @router.get("/offer", response_class=HTMLResponse)
 async def offer_page(request: Request):
     """Публичная оферта: условия платной подписки (нужна платёжному провайдеру и покупателю)."""
@@ -314,5 +363,6 @@ async def offer_page(request: Request):
             "seller": settings.offer_seller_name.strip(),
             "seller_inn": settings.offer_seller_inn.strip(),
             "today": now_utc_naive(),
+            "base_url": settings.public_base_url.rstrip("/"),
         },
     )

@@ -409,7 +409,7 @@ async def test_healthz_reports_database_ok(client):
     assert "admin_enabled" not in payload
 
 
-async def test_robots_txt_forbids_indexing(client):
+async def test_robots_txt_forbids_indexing_except_public_pages(client):
     response = await client.get("/robots.txt")
 
     assert response.status_code == 200

@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Лента заказов — заказы такси и межгорода для водителей из Telegram-групп{% endblock %}
+{% block seo %}
+  <meta name="description" content="Лента заказов — сайт для водителей такси и межгорода: свежие заявки из десятков Telegram-групп диспетчеров в одной ленте, фильтры по городам и радиусу, уведомления в Telegram. {{ trial_days }} дней бесплатно.">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="{{ base_url }}/about">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Лента заказов">
+  <meta property="og:title" content="Лента заказов — заказы для водителей из Telegram-групп">
+  <meta property="og:description" content="Свежие заявки такси и межгорода из десятков групп диспетчеров в одной ленте. Фильтры, радиус, уведомления в Telegram.">
+  <meta property="og:url" content="{{ base_url }}/about">
+  <meta property="og:image" content="{{ base_url }}/static/logo.png">
+  <script type="application/ld+json">{{ ld_json | safe }}</script>
+{% endblock %}
+{% block content %}
+<div class="sub-page">
+  <h1 class="sb-h1">Лента заказов: заявки такси и межгорода для водителей</h1>
+
+  <section class="sb-card">
+    <p class="sb-note">
+      Диспетчеры публикуют заказы в сотнях Telegram-групп, и водителю приходится листать их все. «Лента заказов» собирает
+      свежие заявки из групп в одну ленту: маршрут, время подачи, цена и кнопка «Написать диспетчеру» — в одном месте,
+      без чужих сообщений и повторов.
+    </p>
+    <div class="sb-btns">
+      <a class="sb-btn sb-btn-sbp" href="/">Открыть ленту заказов</a>
+    </div>
+    <p class="sb-fine">Вход через Telegram. Первые {{ trial_days }} дней бесплатно, дальше {{ price_rub }} ₽ за {{ period_days }} дней.</p>
+  </section>
+
+  <section class="sb-card">
+    <h2 class="sb-h2">Что вы получаете</h2>
+    <ul class="sb-hints">
+      <li><b>Одна лента вместо сотен групп.</b> Заказы такси, трансферы и межгород из Telegram-групп диспетчеров по всей России.</li>
+      <li><b>Только настоящие заказы.</b> Реклама, предложения водителей, заявки без цены и без возможности написать диспетчеру в ленту не попадают.</li>
+      <li><b>Без дублей.</b> Один заказ, опубликованный в нескольких группах, показывается один раз.</li>
+      <li><b>Фильтры.</b> Город отправления и назначения, радиус до 500 км, тип авто, дата и время, цена.</li>
+      <li><b>Уведомления в Telegram.</b> Новые заказы по вашему фильтру приходят в личные сообщения, берите заказ в один тап.</li>
+      <li><b>Заказ сразу снимается.</b> Когда диспетчер отдал заказ или отметил его закрытым, он пропадает из ленты.</li>
+    </ul>
+  </section>
+
+  <section class="sb-card">
+    <h2 class="sb-h2">Как это работает</h2>
+    <ol class="sb-hints">
+      <li>Войдите через Telegram, регистрация не нужна.</li>
+      <li>Задайте маршрут и фильтры: откуда, куда, радиус, класс авто.</li>
+      <li>Смотрите свежие заказы и нажмите «Написать диспетчеру».</li>
+      <li>Договорились — отметьте заказ, и он попадёт в «Мои заказы».</li>
+    </ol>
+  </section>
+
+  <section class="sb-card" id="faq">
+    <h2 class="sb-h2">Частые вопросы</h2>
+    {% for q, a in faq %}
+      <details class="sb-faq"><summary>{{ q }}</summary><p>{{ a }}</p></details>
+    {% endfor %}
+    <p class="sb-fine"><a href="/offer">Публичная оферта</a></p>
+  </section>
+</div>
+{% endblock %}

@@ -39,9 +39,25 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 #: тем более.
 _DOCS_DISABLED = {"docs_url": None, "redoc_url": None, "openapi_url": None}
 
-_ROBOTS_TXT = """User-agent: *
-Disallow: /
-"""
+#: Закрыто всё, кроме страницы о сервисе и оферты: в ленте телефоны клиентов и аккаунты диспетчеров.
+_PUBLIC_PAGES = ("/about", "/offer")
+
+
+def _robots_txt() -> str:
+    allow = "".join(f"Allow: {path}$\n" for path in _PUBLIC_PAGES)
+    return (
+        "User-agent: *\n" + allow + "Disallow: /\n\n"
+        f"Sitemap: {settings.public_base_url.rstrip('/')}/sitemap.xml\n"
+    )
+
+
+def _sitemap_xml() -> str:
+    base = settings.public_base_url.rstrip("/")
+    urls = "".join(f"<url><loc>{base}{path}</loc></url>" for path in _PUBLIC_PAGES)
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{urls}</urlset>'
+    )
 
 
 class SecurityHeadersMiddleware:
@@ -140,12 +156,16 @@ def create_app() -> FastAPI:
 
     @application.get("/robots.txt", response_class=PlainTextResponse)
     async def robots_txt() -> str:
-        """Запрещаем индексацию целиком.
+        """Индексировать можно только /about и /offer.
 
         Лента содержит телефоны клиентов и аккаунты диспетчеров; поисковику
         там делать нечего, а вот скрейперам — очень даже.
         """
-        return _ROBOTS_TXT
+        return _robots_txt()
+
+    @application.get("/sitemap.xml")
+    async def sitemap_xml() -> Response:
+        return Response(_sitemap_xml(), media_type="application/xml")
 
     @application.exception_handler(Exception)
     async def unhandled_exception(request: Request, exc: Exception) -> Response:

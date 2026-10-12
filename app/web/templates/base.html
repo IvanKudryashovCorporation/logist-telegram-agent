@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Лента заказов — заказы для водителей{% endblock %}</title>
+  {# По умолчанию страницы закрыты от индексации: в ленте телефоны клиентов. Публичные страницы переопределяют блок. #}
+  {% block seo %}<meta name="robots" content="noindex, nofollow">{% endblock %}
   {% block head_extra %}{% endblock %}
   <link rel="icon" type="image/png" sizes="64x64" href="{{ static_url('favicon.png') }}">
   <link rel="apple-touch-icon" href="{{ static_url('apple-touch-icon.png') }}">

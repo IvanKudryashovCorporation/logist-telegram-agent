@@ -1426,3 +1426,23 @@ async def test_subscription_metrics_split_trial_paid_and_churned(session, subscr
     assert (m["total"], m["new"], m["trial"], m["paid"]) == (4, 1, 1, 1)
     assert (m["left_unpaid"], m["left_paid"], m["new_paying"]) == (1, 1, 2)
     assert m["conversion"] == pytest.approx(2 / 3)  # из троих, чей пробный период кончился, заплатили двое
+
+
+async def test_about_page_is_public_and_indexable_but_the_feed_is_not(client):
+    about = await client.get("/about")
+
+    assert about.status_code == 200
+    assert 'content="index, follow"' in about.text and 'rel="canonical"' in about.text
+    assert "application/ld+json" in about.text and "FAQPage" in about.text
+    assert 'content="noindex, nofollow"' in (await client.get("/")).text  # лента и карточки закрыты
+    assert 'content="index, follow"' in (await client.get("/offer")).text
+
+
+async def test_robots_and_sitemap_open_only_public_pages(client):
+    robots = (await client.get("/robots.txt")).text
+    sitemap = await client.get("/sitemap.xml")
+
+    assert "Allow: /about$" in robots and "Allow: /offer$" in robots and "Disallow: /\n" in robots
+    assert "Sitemap: " in robots and robots.rstrip().endswith("/sitemap.xml")
+    assert sitemap.status_code == 200 and "/about</loc>" in sitemap.text and "/offer</loc>" in sitemap.text
+    assert "/my" not in sitemap.text and "/admin" not in sitemap.text
