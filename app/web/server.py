@@ -44,7 +44,7 @@ _PUBLIC_PAGES = ("/about", "/offer")
 
 
 def _robots_txt() -> str:
-    allow = "".join(f"Allow: {path}$\n" for path in _PUBLIC_PAGES)
+    allow = "".join(f"Allow: {path}$\n" for path in (*_PUBLIC_PAGES, "/sitemap.xml"))
     return (
         "User-agent: *\n" + allow + "Disallow: /\n\n"
         f"Sitemap: {settings.public_base_url.rstrip('/')}/sitemap.xml\n"
@@ -168,7 +168,7 @@ def create_app() -> FastAPI:
         """Файл подтверждения владения сайтом для Google Search Console."""
         return "google-site-verification: googleeebeef890b012038.html"
 
-    @application.get("/sitemap.xml")
+    @application.api_route("/sitemap.xml", methods=["GET", "HEAD"])
     async def sitemap_xml() -> Response:
         return Response(_sitemap_xml(), media_type="application/xml")
 
