@@ -199,6 +199,22 @@ def text_key(text: str) -> str:
     return hashlib.sha256(cache_text(text).encode("utf-8")).hexdigest()[:32]
 
 
+#: Контакты и ссылки: у одной заявки в разных группах подпись диспетчера разная, а содержимое то же.
+_CONTACT_RE = re.compile(r"@\w+|(?:https?://)?t\.me/\S+|https?://\S+")
+#: Слова-пометки без смысла для заказа. Всё остальное (города, цифры, время, телефон, порядок слов) сохраняется:
+#: «Симферополь Ялта» и «Ялта Симферополь» — разные заказы.
+_NOISE_WORDS = frozenset({"срочно", "актуально", "актуален"})
+
+
+def content_key(text: str) -> str:
+    """Отпечаток содержимого заявки: как :func:`text_key`, но без подписи (@username, ссылки) и пометок «срочно».
+
+    Слова остаются в том же порядке, поэтому обратный маршрут или другая цифра дают другой ключ."""
+    body = _CONTACT_RE.sub(" ", cache_text(text))
+    tokens = [token for token in re.findall(r"\w+", body) if token not in _NOISE_WORDS]
+    return hashlib.sha256(" ".join(tokens).encode("utf-8")).hexdigest()[:32]
+
+
 class _ParseCache:
     """LRU-кэш успешных разборов.
 

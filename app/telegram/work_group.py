@@ -46,7 +46,7 @@ from app.models import (
 )
 from app.parsing import stats as parse_stats
 from app.parsing.closed import ACTION_CLOSED_LOCK, has_closed_lock
-from app.parsing.llm_parser import parse_orders, text_hash, text_key
+from app.parsing.llm_parser import content_key, parse_orders, text_hash, text_key
 from app.parsing.order_builder import apply_parsed_fields, extract_contact_username, resolve_pickup_at
 from app.parsing.prefilter import PrefilterDecision, prefilter
 from app.parsing.price import has_price_request
@@ -302,8 +302,10 @@ async def _find_duplicate(
 _TEXT_DUPLICATE_WINDOW = timedelta(hours=12)
 
 
-async def _find_text_duplicate(db, text: str) -> Optional[Order]:
-    """Живой заказ, уже созданный из точно такого же текста (кроме регистра, эмодзи и пробелов)."""
+async def _find_text_duplicate(db, text: str, *, by_content: bool = False) -> Optional[Order]:
+    """Живой заказ, уже созданный из точно такого же текста (кроме регистра, эмодзи и пробелов).
+
+    ``by_content`` — сравнивать без подписи диспетчера (@username, ссылки) и пометок «срочно»."""
     now = now_utc_naive()
     moscow_midnight = now_msk_naive().replace(hour=0, minute=0, second=0, microsecond=0)
     since = max(now - _TEXT_DUPLICATE_WINDOW, moscow_midnight - timedelta(hours=3))
@@ -311,7 +313,7 @@ async def _find_text_duplicate(db, text: str) -> Optional[Order]:
         await db.execute(
             select(Order)
             .where(
-                Order.text_key == text_key(text),
+                (Order.content_key == content_key(text)) if by_content else (Order.text_key == text_key(text)),
                 Order.created_at >= since,
                 Order.status.notin_((OrderStatus.CANCELLED, OrderStatus.AGREED, OrderStatus.EXPIRED)),
             )
@@ -437,6 +439,27 @@ async def upsert_order_text(
                 log.info("Копия текста пропущена без LLM: заказ #%s (chat=%s msg=%s)", twin.id, chat_id, message_id)
                 return [twin.id]
 
+        shadow_twin: Optional[Order] = None
+        if not is_edit and not existing_by_index and settings.content_dedup_mode in ("shadow", "on"):
+            twin = await _find_text_duplicate(db, text, by_content=True)
+            if twin is not None and settings.content_dedup_mode == "on":
+                # То же содержимое, что у живого заказа (другая подпись): LLM признал бы это дублем.
+                db.add(
+                    ActionLog(
+                        order_id=twin.id, actor=ActorType.DISPATCHER, actor_tg_id=dispatcher_tg_id,
+                        action="duplicate_skipped", details=f"chat={chat_id} msg={message_id} content_match",
+                    )
+                )
+                await parse_stats.record(
+                    db, ParseOutcome.DUPLICATE, chat_id=chat_id, message_id=message_id,
+                    text_hash=text_hash(text), orders_found=1, error=f"content_duplicate_of={twin.id}",
+                )
+                await db.commit()
+                log.info("Повтор по содержимому пропущен без LLM: заказ #%s (chat=%s msg=%s)",
+                         twin.id, chat_id, message_id)
+                return [twin.id]
+            shadow_twin = twin
+
         # Несрочное (из очереди) сообщение при лимите провайдера ждёт, а не уходит в платный резерв.
         parse_result = await (parse_orders(text) if urgent else parse_orders(text, urgent=False))
         parsed_list = parse_result.orders
@@ -454,6 +477,9 @@ async def upsert_order_text(
                 result=parse_result,
             )
             await db.commit()
+            # Пример того, что предфильтр пропустил, а LLM отвергла: по ним видно, какие правила добавить до LLM.
+            log.info("LLM не заказ chat=%s msg=%s: %s", chat_id, message_id, text[:160].replace("\n", " | "))
+            _report_shadow(shadow_twin, [], text, chat_id, message_id)
             return []
 
         if not existing_by_index and not any(p.from_city or p.to_city for p in parsed_list):
@@ -469,6 +495,7 @@ async def upsert_order_text(
                 error="no_route",
             )
             await db.commit()
+            _report_shadow(shadow_twin, [], text, chat_id, message_id)
             return []
 
         missing_total = sum(len(p.missing_fields) for p in parsed_list)
@@ -497,6 +524,7 @@ async def upsert_order_text(
                 missing_fields=missing_total,
             )
             await db.commit()
+        _report_shadow(shadow_twin, result_ids, text, chat_id, message_id)
         return result_ids
 
 
@@ -520,6 +548,23 @@ async def _unreachable(
         await db.execute(select(WorkGroup.username).where(WorkGroup.tg_chat_id == chat_id))
     ).scalar_one_or_none()
     return not public
+
+
+def _report_shadow(twin: Optional[Order], result_ids: list[int], text: str, chat_id: int, message_id: int) -> None:
+    """Теневая проверка отсева по содержимому: совпало ли решение с тем, что в итоге решил LLM.
+
+    «ok» — LLM тоже признал сообщение повтором того же заказа; «miss» — нет (тогда отсев по содержимому
+    принял бы разные заказы за один), такие случаи пишем с текстами. Работает только в режиме shadow."""
+    if twin is None or settings.content_dedup_mode != "shadow":
+        return
+    if twin.id in result_ids:
+        log.info("content_dedup shadow ok: заказ #%s (chat=%s msg=%s)", twin.id, chat_id, message_id)
+        return
+    log.warning(
+        "content_dedup shadow MISS: заказ #%s, LLM вернул %s (chat=%s msg=%s)\n  было: %s\n  пришло: %s",
+        twin.id, result_ids, chat_id, message_id,
+        (twin.raw_text or "")[:200].replace("\n", " | "), text[:200].replace("\n", " | "),
+    )
 
 
 def _is_closed(parsed: ParsedOrder, text: str, count: int) -> bool:
@@ -656,12 +701,14 @@ async def _save_orders(
                 dispatcher_username=dispatcher_username,
                 raw_text=_order_raw_text(parsed, text),
                 text_key=text_key(text),
+                content_key=content_key(text),
             )
             db.add(order)
         else:
             order = existing
             order.raw_text = _order_raw_text(parsed, text)
             order.text_key = text_key(text)
+            order.content_key = content_key(text)
 
         apply_parsed_fields(order, parsed)
         try:

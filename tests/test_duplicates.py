@@ -345,3 +345,76 @@ async def test_edit_to_a_different_client_stays_a_separate_order(session, monkey
     await _edit(-100111, 2, **DISPATCHER)
 
     assert await _live_ids(session) == {first, second}
+
+
+# --- Повтор по содержимому (другая подпись диспетчера) ----------------------------------------------------
+
+
+def test_content_key_ignores_signature_and_urgency_marks_but_not_content():
+    from app.parsing.llm_parser import content_key
+
+    base = "12.10 в 15:00\nСимферополь - Керчь\n4 чел. Комфорт. 5000р"
+
+    assert content_key(base + "\n@dispatcher_a") == content_key(base + "\n@dispatcher_b")
+    assert content_key(base) == content_key("🔥 СРОЧНО " + base + "\nhttps://t.me/someone")
+    assert content_key(base) != content_key(base.replace("Симферополь - Керчь", "Керчь - Симферополь"))  # обратный
+    assert content_key(base) != content_key(base.replace("5000р", "5500р"))
+    assert content_key(base) != content_key(base.replace("15:00", "16:00"))
+    assert content_key(base) != content_key(base.replace("4 чел", "3 чел"))
+
+
+async def test_content_dedup_skips_llm_for_a_repost_with_another_signature(session, monkeypatch):
+    calls = []
+
+    async def fake_parse_orders(text: str, **kwargs) -> ParseResult:
+        calls.append(text)
+        return ParseResult(orders=[ParsedOrder(from_city="Гагра", to_city="Сочи", client_price=Decimal("2500"))])
+
+    monkeypatch.setattr(work_group, "parse_orders", fake_parse_orders)
+    monkeypatch.setattr(work_group.settings, "prefilter_enabled", False)
+    monkeypatch.setattr(work_group.settings, "content_dedup_mode", "on")
+    body = "Гагра - Сочи 15:00, 2 чел, 2500р"
+    first = await _post(-100111, 1, text=body + "\nписать @disp_one")
+
+    second = await _post(-100222, 2, text=body + "\nписать @disp_two")
+
+    assert second == first and await _count(session) == 1
+    assert len(calls) == 1  # вторую копию LLM уже не видел
+
+
+async def test_content_dedup_does_not_merge_different_orders(session, monkeypatch):
+    calls = []
+
+    async def fake_parse_orders(text: str, **kwargs) -> ParseResult:
+        calls.append(text)
+        city = "Сочи" if "Сочи" in text.split("-")[1] else "Гагра"
+        return ParseResult(orders=[ParsedOrder(
+            from_city="Гагра" if city == "Сочи" else "Сочи", to_city=city, client_price=Decimal(2500 + len(calls)),
+        )])
+
+    monkeypatch.setattr(work_group, "parse_orders", fake_parse_orders)
+    monkeypatch.setattr(work_group.settings, "prefilter_enabled", False)
+    monkeypatch.setattr(work_group.settings, "content_dedup_mode", "on")
+    await _post(-100111, 1, text="Гагра - Сочи 15:00, 2 чел, 2500р\n@a")
+
+    await _post(-100222, 2, text="Сочи - Гагра 15:00, 2 чел, 2500р\n@a")  # обратное направление
+
+    assert await _count(session) == 2 and len(calls) == 2
+
+
+async def test_content_dedup_shadow_mode_still_calls_llm_and_logs_agreement(session, monkeypatch, caplog):
+    import logging
+
+    async def fake_parse_orders(text: str, **kwargs) -> ParseResult:
+        return ParseResult(orders=[ParsedOrder(from_city="Гагра", to_city="Сочи", client_price=Decimal("2500"))])
+
+    monkeypatch.setattr(work_group, "parse_orders", fake_parse_orders)
+    monkeypatch.setattr(work_group.settings, "prefilter_enabled", False)
+    monkeypatch.setattr(work_group.settings, "content_dedup_mode", "shadow")
+    body = "Гагра - Сочи 15:00, 2 чел, 2500р"
+    await _post(-100111, 1, text=body + "\nписать @disp_one")
+
+    with caplog.at_level(logging.INFO, logger=work_group.log.name):
+        await _post(-100222, 2, text=body + "\nписать @disp_two")
+
+    assert "content_dedup shadow ok" in caplog.text and await _count(session) == 1

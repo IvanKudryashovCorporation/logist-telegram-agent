@@ -99,6 +99,8 @@ class Order(Base, TimestampMixin):
     # Ключ нормализованного текста сообщения, из которого создан заказ: по нему точные копии
     # заявки (из других групп, повторные публикации) находятся без вызова LLM.
     text_key: Mapped[Optional[str]] = mapped_column(String(32), index=True)
+    #: Отпечаток содержимого без подписи диспетчера (app.parsing.llm_parser.content_key): отсев повторов до LLM.
+    content_key: Mapped[Optional[str]] = mapped_column(String(32), index=True)
 
     # --- Поисковый индекс ---
     # Денормализованная строка для полнотекстового поиска на сайте: id, телефон,
