@@ -1446,3 +1446,10 @@ async def test_robots_and_sitemap_open_only_public_pages(client):
     assert "Sitemap: " in robots and robots.rstrip().endswith("/sitemap.xml")
     assert sitemap.status_code == 200 and "/about</loc>" in sitemap.text and "/offer</loc>" in sitemap.text
     assert "/my" not in sitemap.text and "/admin" not in sitemap.text
+
+
+async def test_google_verification_file_is_served(client):
+    response = await client.get("/googleeebeef890b012038.html")
+
+    assert response.status_code == 200
+    assert response.text == "google-site-verification: googleeebeef890b012038.html"

@@ -163,6 +163,11 @@ def create_app() -> FastAPI:
         """
         return _robots_txt()
 
+    @application.get("/googleeebeef890b012038.html", response_class=PlainTextResponse)
+    async def google_site_verification() -> str:
+        """Файл подтверждения владения сайтом для Google Search Console."""
+        return "google-site-verification: googleeebeef890b012038.html"
+
     @application.get("/sitemap.xml")
     async def sitemap_xml() -> Response:
         return Response(_sitemap_xml(), media_type="application/xml")
