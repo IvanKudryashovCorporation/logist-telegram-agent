@@ -11,6 +11,7 @@
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from typing import Optional
 
 from sqlalchemy import func, or_, select
 
@@ -535,6 +536,16 @@ async def queue_summary() -> dict[str, int]:
 _NOT_SPAM_REASONS = ("stale", "closed_lock", "no_contact")
 
 
+def _group_link(chat_id: int, username) -> Optional[str]:
+    """Ссылка на группу: публичная по имени, закрытая (куда вступили) — по номеру чата, откроется у участников."""
+    if username:
+        return f"https://t.me/{username.lstrip('@')}"
+    digits = str(abs(int(chat_id)))
+    if int(chat_id) < 0 and digits.startswith("100") and len(digits) > 3:
+        return f"https://t.me/c/{digits[3:]}"
+    return None
+
+
 async def _no_contact_counts(since) -> list:
     """Сколько заявок по группам отсеяно, потому что диспетчеру нельзя написать."""
     async with SessionLocal() as session:
@@ -604,6 +615,7 @@ async def group_stats(days: int = 7) -> dict:
                 "chat_id": chat_id,
                 "title": group.title if group else str(chat_id),
                 "username": group.username if group else None,
+                "link": _group_link(chat_id, group.username if group else None),
                 "active": True,
                 "watch_only": bool(group.watch_only) if group else False,
                 "orders": o,

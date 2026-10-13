@@ -856,3 +856,22 @@ async def test_reset_button_forgets_the_saved_filter_and_shows_the_full_feed(cli
     assert (await client.get("/")).status_code == 200  # дальше лента без фильтра, редиректа нет
     page = (await client.get("/?page=1")).text
     assert "/?reset=1" in page  # кнопка «Сбросить» ведёт на сброс
+
+
+async def test_groups_page_links_public_and_joined_private_groups(session):
+    from app.models import ParseOutcome, ParseStat, WorkGroup
+    from app.services import reporting
+
+    session.add_all([
+        WorkGroup(tg_chat_id=-1001111111111, title="Публичная", username="pub_group", is_active=True),
+        WorkGroup(tg_chat_id=-1002222222222, title="Закрытая", is_active=True),
+        WorkGroup(tg_chat_id=-5555, title="Обычная группа", is_active=True),
+    ])
+    session.add_all([ParseStat(chat_id=c, outcome=ParseOutcome.NOT_ORDER) for c in (-1001111111111, -1002222222222, -5555)])
+    await session.commit()
+
+    rows = {r["title"]: r["link"] for r in (await reporting.group_stats(days=7))["rows"]}
+
+    assert rows["Публичная"] == "https://t.me/pub_group"
+    assert rows["Закрытая"] == "https://t.me/c/2222222222"
+    assert rows["Обычная группа"] is None

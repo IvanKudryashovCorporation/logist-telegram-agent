@@ -39,7 +39,7 @@
         {% for r in g.rows %}
           <tr>
             <td>
-              {% if r.username %}<a href="https://t.me/{{ r.username }}" target="_blank" rel="noopener">{{ r.title }}</a>{% else %}{{ r.title }}{% endif %}
+              {% if r.link %}<a href="{{ r.link }}" target="_blank" rel="noopener">{{ r.title }}</a>{% else %}{{ r.title }}{% endif %}
               {% if r.watch_only %}<span class="tag info">без вступления</span>{% endif %}
               {% if not r.active %}<span class="tag warn">отключена</span>{% endif %}
             </td>
