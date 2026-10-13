@@ -40,8 +40,21 @@ NEW_LIMIT = 300
 EDIT_WINDOW = 40
 #: Сколько последних кругов считается «недавней правкой».
 EDIT_POLLS = 3
-#: Пауза между группами одного аккаунта, секунд: не частим запросами.
-GROUP_GAP = 1.0
+#: Пауза после опроса группы, секунд: не частим запросами (групп опрашивается несколько одновременно).
+GROUP_GAP = 0.15
+
+#: Определённые чаты по (клиент, группа): имя в Telegram определяем один раз, а не на каждом круге.
+#: Запрос имени (ResolveUsername) — самый дорогой и первым упирается в лимит Telegram.
+_ENTITIES: dict[tuple[int, int], object] = {}
+
+
+async def _entity(client, group: "WatchGroup"):
+    key = (id(client), group.id)
+    entity = _ENTITIES.get(key)
+    if entity is None:
+        entity = await client.get_entity(group.username or group.tg_chat_id)
+        _ENTITIES[key] = entity
+    return entity
 
 
 @dataclass(frozen=True)
@@ -109,7 +122,7 @@ async def poll_group(
     ``check_changes=False`` — только новые сообщения: правки и удаления при сотне групп
     проверяются реже (каждый ``WATCH_SLOW_EVERY``-й круг), чтобы не плодить запросы."""
     now = now or datetime.now(timezone.utc)
-    entity = await client.get_entity(group.username or group.tg_chat_id)
+    entity = await _entity(client, group)
     last = group.last_message_id
 
     if last is None:
@@ -168,21 +181,35 @@ def split_by_session(groups: list[WatchGroup]) -> dict[Optional[str], list[Watch
 
 
 async def _poll_session(client, groups: list[WatchGroup], cycle: int, stop_event: asyncio.Event) -> None:
-    """Один круг по группам одного аккаунта: по очереди, с паузой между группами."""
+    """Один круг по группам одного аккаунта: по ``watch_concurrency`` групп одновременно.
+
+    Лимит Telegram (FloodWait) касается всего аккаунта: остальные группы ждут вместе с той, где он случился."""
     check_changes = cycle % max(1, settings.watch_slow_every) == 0
-    for group in groups:
+    gate = asyncio.Semaphore(max(1, settings.watch_concurrency))
+    loop = asyncio.get_running_loop()
+    blocked_until = 0.0
+
+    async def poll_one(group: WatchGroup) -> None:
+        nonlocal blocked_until
         if stop_event.is_set():
             return
-        try:
-            counts = await poll_group(client, group, check_changes=check_changes)
-            if any(counts.values()):
-                log.info("«%s»: %s", group.title, counts)
-        except FloodWaitError as exc:
-            log.warning("FloodWait %s с на «%s» — этот аккаунт ждёт", exc.seconds, group.title)
-            await asyncio.sleep(exc.seconds + 1)
-        except Exception:
-            log.exception("Ошибка опроса группы «%s»", group.title)
-        await asyncio.sleep(GROUP_GAP)
+        async with gate:
+            wait = blocked_until - loop.time()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            try:
+                counts = await poll_group(client, group, check_changes=check_changes)
+                if any(counts.values()):
+                    log.info("«%s»: %s", group.title, counts)
+            except FloodWaitError as exc:
+                log.warning("FloodWait %s с на «%s» — этот аккаунт ждёт", exc.seconds, group.title)
+                blocked_until = max(blocked_until, loop.time() + exc.seconds + 1)
+            except Exception:
+                _ENTITIES.pop((id(client), group.id), None)  # вдруг сменилось имя или доступ: определим заново
+                log.exception("Ошибка опроса группы «%s»", group.title)
+            await asyncio.sleep(GROUP_GAP)
+
+    await asyncio.gather(*(poll_one(group) for group in groups))
 
 
 async def run_watch_worker(clients: dict, stop_event: asyncio.Event) -> None:
@@ -207,7 +234,10 @@ async def run_watch_worker(clients: dict, stop_event: asyncio.Event) -> None:
         if queues:
             await asyncio.gather(*queues)
         cycle += 1
-        pause = max(0.0, interval - (asyncio.get_running_loop().time() - started))
+        spent = asyncio.get_running_loop().time() - started
+        if spent > interval * 2 or cycle % 90 == 0:
+            log.info("Круг опроса №%s: %s групп за %.1f с (интервал %s с)", cycle, len(groups), spent, interval)
+        pause = max(0.0, interval - spent)
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=pause)
         except asyncio.TimeoutError:

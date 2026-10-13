@@ -75,7 +75,7 @@ async def test_slow_cycle_also_checks_edits(session):
 
 
 async def test_accounts_are_polled_concurrently(monkeypatch):
-    """Две очереди по две группы по ~0.2 с: параллельно это ~0.4 с, а не ~0.8 с."""
+    """Две очереди по две группы по ~0.2 с: параллельно это ~0.2 с, а не ~0.8 с."""
     monkeypatch.setattr(watcher, "GROUP_GAP", 0)
     active = 0
     peak = 0
@@ -99,8 +99,8 @@ async def test_accounts_are_polled_concurrently(monkeypatch):
     await asyncio.gather(*queues)
     elapsed = asyncio.get_running_loop().time() - started
 
-    assert peak == 2  # по одной группе на аккаунт одновременно
-    assert elapsed < 0.7
+    assert peak == 4  # группы опрашиваются одновременно (до watch_concurrency на аккаунт)
+    assert elapsed < 0.5
 
 
 async def test_one_failing_group_does_not_stop_the_queue(monkeypatch):
@@ -122,3 +122,34 @@ async def test_one_failing_group_does_not_stop_the_queue(monkeypatch):
 
 def test_chat_constant_is_the_probe_group():
     assert CHAT == -1003362257200
+
+
+async def test_group_is_resolved_once_and_then_taken_from_the_cache():
+    from tests.test_watcher import FakeClient
+
+    client = FakeClient([])
+    group = _group(id=77)
+    await watcher._poll_session(client, [group], 1, asyncio.Event())
+    await watcher._poll_session(client, [group], 2, asyncio.Event())
+
+    assert len(client.entity_calls) == 1  # имя группы определили один раз, дальше берём из кэша
+
+
+async def test_flood_wait_pauses_the_whole_account(monkeypatch):
+    from telethon.errors import FloodWaitError
+
+    monkeypatch.setattr(watcher, "GROUP_GAP", 0)
+    monkeypatch.setattr(watcher.settings, "watch_concurrency", 1)
+    started = []
+
+    async def poll(client, group, check_changes=True):
+        started.append((group.id, asyncio.get_running_loop().time()))
+        if group.id == 0 and len(started) == 1:
+            raise FloodWaitError(request=None, capture=0)
+        return {"new": 0, "edited": 0, "deleted": 0}
+
+    monkeypatch.setattr(watcher, "poll_group", poll)
+
+    await watcher._poll_session(object(), [_group(id=0), _group(id=1)], 0, asyncio.Event())
+
+    assert [g for g, _ in started] == [0, 1]
