@@ -485,3 +485,13 @@ async def test_cleanup_removes_open_orders_without_any_contact_and_counts_them(s
     assert status["nobody"] == OrderStatus.CANCELLED
     assert status["reachable"] != OrderStatus.CANCELLED and status["in_public"] != OrderStatus.CANCELLED
     assert (await session.execute(select(ParseStat.error))).scalars().all() == ["no_contact"]
+
+
+async def test_overlong_city_from_the_model_is_clamped_instead_of_failing_the_save(session, monkeypatch):
+    long_city = "Россия, Ненецкий автономный округ, Заполярный район, межселенные территории, вахтовый посёлок " * 3
+    _parse(monkeypatch, {**ROUTE, "via_points": [], "to_city": long_city})
+
+    await _post(1)
+
+    orders = await _orders(session)
+    assert len(orders) == 1 and len(orders[0].to_city) <= 128 and orders[0].to_city.startswith("Россия, Ненецкий")

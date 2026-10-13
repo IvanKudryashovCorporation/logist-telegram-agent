@@ -80,6 +80,21 @@ def vehicle_type_of(car_class: Optional[str], raw_text: Optional[str], passenger
     return "car"
 
 
+def clamp_text_columns(order: Any) -> None:
+    """Обрезает текстовые поля до длины колонок: PostgreSQL не принимает значение длиннее колонки.
+
+    Модель или геокодер иногда возвращают «город» на сотню символов (полный адрес с районами) — такая заявка
+    раньше не сохранялась совсем и бесконечно повторялась в очереди."""
+    table = getattr(type(order), "__table__", None)
+    if table is None:
+        return
+    for column in table.columns:
+        limit = getattr(column.type, "length", None)
+        value = getattr(order, column.key, None)
+        if limit and isinstance(value, str) and len(value) > limit:
+            setattr(order, column.key, value[:limit].rstrip())
+
+
 def refresh_derived(order: Any) -> Any:
     """Пересчитывает все денормализованные поля поиска/фильтрации заказа.
 
@@ -88,6 +103,7 @@ def refresh_derived(order: Any) -> Any:
     """
     from app.city_aliases import canonical_city_name, city_key
 
+    clamp_text_columns(order)
     refresh_search_text(order)
     # Ключ строится по каноническому названию: «Мин воды» и «Минеральные Воды» —
     # один ключ, какой бы вариант ни остался в поле города.
