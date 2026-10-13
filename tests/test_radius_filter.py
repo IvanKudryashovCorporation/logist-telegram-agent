@@ -158,7 +158,7 @@ async def test_radius_never_drops_name_matches_without_coordinates(session, make
     assert ids["city_no_coords"] in with_radius
 
 
-@pytest.mark.parametrize("radius", ["0", "25", "50", "100", "200", "300", "500"])
+@pytest.mark.parametrize("radius", ["0", "25", "50", "100", "200", "300", "500", "700"])
 async def test_sql_and_python_reference_agree_with_radius(session, make_order, radius):
     await _seed_orders(make_order)
     filters = _filters(radius)

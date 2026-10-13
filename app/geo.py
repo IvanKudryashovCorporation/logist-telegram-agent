@@ -43,7 +43,7 @@ log = logging.getLogger("app.geo")
 Coords = tuple[float, float]
 
 #: Допустимые значения радиуса, км (0 — только сам город).
-RADIUS_CHOICES: tuple[int, ...] = (0, 25, 50, 100, 200, 300, 500)
+RADIUS_CHOICES: tuple[int, ...] = (0, 25, 50, 100, 200, 300, 500, 700)
 
 #: Километров в градусе широты (и долготы на экваторе).
 KM_PER_DEGREE = 111.2
