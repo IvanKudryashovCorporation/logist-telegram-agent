@@ -316,3 +316,36 @@ async def test_site_button_garbage_or_unconfirmed_is_refused(client, login_on):
         response = await client.get("/auth/bot/enter", params={"token": token})
         assert response.headers["location"] == "/login"
         assert "driver_session" not in response.cookies
+
+
+async def test_plain_start_shows_description_and_site_buttons():
+    api, store = FakeApi(), LoginStore()
+
+    await handle_update(_start(ALICE), api, store)
+
+    sent = api.sent("sendMessage")[0]
+    buttons = [button for row in sent["reply_markup"]["inline_keyboard"] for button in row]
+    assert "Что умеет сервис" in sent["text"] and "14 дней" in sent["text"]
+    assert any(b["url"].rstrip("/").endswith("lentazakazov.ru") for b in buttons)
+    assert any(b["url"].endswith("/about") for b in buttons)
+
+
+async def test_help_and_start_with_bot_name_show_the_same_welcome():
+    api, store = FakeApi(), LoginStore()
+    help_update = _start(ALICE)
+    help_update["message"]["text"] = "/help"
+    named = _start(ALICE)
+    named["message"]["text"] = "/start@podacha_bot"
+
+    await handle_update(help_update, api, store)
+    await handle_update(named, api, store)
+
+    texts = [m["text"] for m in api.sent("sendMessage")]
+    assert len(texts) == 2 and texts[0] == texts[1] and not store._items
+
+
+def test_bot_profile_texts_fit_telegram_limits():
+    from app.web.bot_login import BOT_COMMANDS, BOT_DESCRIPTION, BOT_SHORT_DESCRIPTION
+
+    assert len(BOT_DESCRIPTION) <= 512 and len(BOT_SHORT_DESCRIPTION) <= 120
+    assert all(len(description) <= 256 for _command, description in BOT_COMMANDS)

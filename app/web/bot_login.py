@@ -142,11 +142,39 @@ def _user_info(raw: dict) -> dict:
     }
 
 
-_WELCOME = (
-    "Это бот сайта «Лента заказов».\n"
-    "Чтобы войти на сайт, нажмите на нём «Войти через Telegram» и откройте ссылку на бота. "
-    "Сюда же приходят уведомления по вашим подпискам."
+#: Описание бота (до 512 символов): Telegram показывает его в пустом чате до нажатия «Старт».
+BOT_DESCRIPTION = (
+    "Лента заказов — свежие заявки такси и межгорода из Telegram-групп диспетчеров в одной ленте.\n\n"
+    "• Заказы без дублей и рекламы, с ценой и контактом диспетчера\n"
+    "• Фильтры по городам, радиусу до 500 км, типу авто, времени и цене\n"
+    "• Новые заказы по вашему фильтру приходят сюда, брать можно в один тап\n\n"
+    "14 дней бесплатно. Нажмите «Старт» и откройте сайт."
 )
+#: Короткое описание (до 120 символов): профиль бота и ссылка, которой делятся.
+BOT_SHORT_DESCRIPTION = "Заказы такси и межгорода из Telegram-групп в одной ленте. Фильтры и уведомления."
+MENU_BUTTON_TEXT = "Открыть сайт"
+BOT_COMMANDS = (("start", "О боте и ссылка на сайт"), ("help", "Что умеет бот"))
+
+_WELCOME = (
+    "🚕 Лента заказов\n\n"
+    "Свежие заявки такси и межгорода из Telegram-групп диспетчеров собираются на сайте в одну ленту: "
+    "без дублей и рекламы, с ценой и кнопкой «Написать диспетчеру».\n\n"
+    "Что умеет сервис:\n"
+    "• фильтры по городам, радиусу до 500 км, типу авто (минивэн или легковой), времени и цене;\n"
+    "• уведомления в этот чат о новых заказах по вашему фильтру, заказ можно взять в один тап;\n"
+    "• раздел «Мои заказы» с историей.\n\n"
+    "Первые 14 дней бесплатно. Нажмите кнопку ниже, чтобы открыть сайт и войти через Telegram."
+)
+
+
+def _welcome_keyboard() -> dict:
+    site = settings.public_base_url.rstrip("/")
+    return {
+        "inline_keyboard": [
+            [{"text": "🌐 Открыть сайт", "url": site}],
+            [{"text": "ℹ️ О сервисе и цены", "url": f"{site}/about"}],
+        ]
+    }
 _EXPIRED = "Ссылка для входа устарела. Нажмите «Войти через Telegram» на сайте ещё раз."
 _ASK = (
     "Вход на сайт «Лента заказов».\n\n"
@@ -177,12 +205,18 @@ async def handle_update(update: dict, api: BotApi, login_store: LoginStore = sto
 async def _handle_message(message: dict, api: BotApi, login_store: LoginStore) -> None:
     text = (message.get("text") or "").strip()
     chat_id = message["chat"]["id"]
-    if message["chat"].get("type") != "private" or not text.startswith("/start"):
+    if message["chat"].get("type") != "private":
+        return
+    command = text.split(maxsplit=1)[0].split("@")[0].lower() if text else ""
+    if command == "/help":
+        await api("sendMessage", {"chat_id": chat_id, "text": _WELCOME, "reply_markup": _welcome_keyboard()})
+        return
+    if command != "/start":
         return
 
     token = text[len("/start"):].strip()
-    if not token:
-        await api("sendMessage", {"chat_id": chat_id, "text": _WELCOME})
+    if not token or token.startswith("@"):
+        await api("sendMessage", {"chat_id": chat_id, "text": _WELCOME, "reply_markup": _welcome_keyboard()})
         return
 
     item = login_store.get(token)
