@@ -35,6 +35,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 async def classify_username(client, name: str) -> dict:
     try:
         entity = await client.get_entity(name)
+    except FloodWaitError:
+        raise  # лимит Telegram — это не «группы нет»: вызывающий код подождёт и повторит
     except (ValueError, RPCError) as exc:
         return {"category": "dead", "detail": type(exc).__name__}
     if isinstance(entity, User):
@@ -48,6 +50,8 @@ async def classify_username(client, name: str) -> dict:
     }
     try:
         messages = await client.get_messages(entity, limit=3)
+    except FloodWaitError:
+        raise
     except RPCError as exc:
         return {"category": "public_join", "detail": type(exc).__name__, **info}
     if not messages and getattr(entity, "join_request", False):
@@ -58,6 +62,8 @@ async def classify_username(client, name: str) -> dict:
 async def classify_invite(client, hash_: str) -> dict:
     try:
         result = await client(CheckChatInviteRequest(hash_))
+    except FloodWaitError:
+        raise
     except RPCError as exc:
         return {"category": "dead", "detail": type(exc).__name__}
     if isinstance(result, (ChatInviteAlready, ChatInvitePeek)):
