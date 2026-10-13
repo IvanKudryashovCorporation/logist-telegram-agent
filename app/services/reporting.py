@@ -78,11 +78,21 @@ def _msk_day(moment: datetime) -> date:
     return (moment + MSK_OFFSET).date()
 
 
+#: Действия журнала, после которых заказ считается мусором (на ленте его не было нужно видеть): предложения водителей,
+#: заявки без цены и контакта, удалённые группы, ручное скрытие. Заказы, которые забрали или которые диспетчер
+#: удалил/закрыл (🔒, «Отдан»), мусором не считаются: они были в ленте и водитель мог их взять.
+_JUNK_ACTIONS = (
+    "cancelled_driver_offer", "cancelled_no_price", "cancelled_no_contact", "cancelled_group_removed",
+    "hidden_by_admin",
+)
+
+
 async def orders_per_day(days: int = 7) -> dict:
     """Сколько заказов появилось в ленте за каждый из последних ``days`` дней (по МСК).
 
-    Считаются все заявки, кроме скрытых (дубли, мусор, удалённые в Telegram), —
-    иначе цифра показывала бы не заказы, а шум. Дни без заказов остаются в ряду
+    Считаются все заказы, которые побывали в ленте, в том числе уже забранные и снятые диспетчером (удалил
+    сообщение, написал «Отдан»): именно столько заявок мы собираем. Не считаются только мусор (предложения водителей,
+    заявки без цены или контакта, удалённые группы). Дубли в базу не попадают. Дни без заказов остаются в ряду
     нулями, чтобы по графику было видно провалы.
     """
     days = max(1, days)
@@ -90,11 +100,10 @@ async def orders_per_day(days: int = 7) -> dict:
     first = today - timedelta(days=days - 1)
     since = datetime.combine(first, time.min) - MSK_OFFSET  # полночь МСК в наивном UTC
     async with SessionLocal() as session:
+        junk = select(ActionLog.order_id).where(ActionLog.action.in_(_JUNK_ACTIONS))
         moments = (
             await session.execute(
-                select(Order.created_at).where(
-                    Order.created_at >= since, Order.status != OrderStatus.CANCELLED
-                )
+                select(Order.created_at).where(Order.created_at >= since, Order.id.not_in(junk))
             )
         ).scalars().all()
 

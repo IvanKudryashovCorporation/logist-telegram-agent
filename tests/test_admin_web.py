@@ -184,21 +184,26 @@ async def _created(session, order, days_ago: int) -> None:
     await session.commit()
 
 
-async def test_orders_per_day_counts_days_and_skips_cancelled(make_order, session):
+async def test_orders_per_day_counts_every_order_that_was_in_the_feed_except_junk(make_order, session):
+    from app.models import ActionLog, ActorType
     from app.services import reporting
 
     for days_ago in (0, 0, 2):
         await _created(session, await make_order(), days_ago)
-    hidden = await make_order(status=OrderStatus.CANCELLED, pickup_at=now_utc_naive() + timedelta(days=1))
-    await _created(session, hidden, 0)
+    taken = await make_order(status=OrderStatus.CANCELLED, pickup_at=now_utc_naive() + timedelta(days=1))
+    await _created(session, taken, 0)  # диспетчер закрыл или удалил заказ — он был в ленте, считаем
+    junk = await make_order(status=OrderStatus.CANCELLED, pickup_at=now_utc_naive() + timedelta(days=1))
+    await _created(session, junk, 0)
+    session.add(ActionLog(order_id=junk.id, actor=ActorType.SYSTEM, action="cancelled_no_price"))
+    await session.commit()
     await _created(session, await make_order(), 40)  # вне периода
 
     daily = await reporting.orders_per_day(days=7)
 
-    assert daily["total"] == 3
-    assert [row["count"] for row in daily["rows"]] == [2, 0, 1, 0, 0, 0, 0]  # новые сверху, нули остаются
-    assert daily["today"] == 2
-    assert daily["peak"] == 2
+    assert daily["total"] == 4
+    assert [row["count"] for row in daily["rows"]] == [3, 0, 1, 0, 0, 0, 0]  # новые сверху, нули остаются
+    assert daily["today"] == 3
+    assert daily["peak"] == 3
     assert daily["rows"][0]["share"] == 1.0
 
 
