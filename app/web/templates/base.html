@@ -228,7 +228,7 @@
             {% endif %}
             <div class="filters-actions">
               <button type="submit" id="filterApply">Применить{% if page_info is defined and page_info %} <span id="filterApplyCount">({{ page_info.total }})</span>{% endif %}</button>
-              <a href="/{{ '?q=' + q if q else '' }}" class="btn btn-secondary">Сбросить</a>
+              <a href="/?reset=1{{ '&q=' + (q | urlencode) if q else '' }}" class="btn btn-secondary">Сбросить</a>
             </div>
           </form>
         </details>

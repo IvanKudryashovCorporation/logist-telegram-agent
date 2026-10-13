@@ -731,3 +731,13 @@ async def test_switched_off_filter_stays_silent_while_the_other_works(session, m
     await notify_once(send=outbox)
 
     assert off.is_active is False and outbox.messages == []
+
+
+async def test_notification_says_whether_the_car_is_a_minivan_or_a_car(make_order):
+    from app.services.subscriptions import build_message, order_line
+
+    minivan = await make_order(raw_text="Краснодар аэро - Мрия 2 взр Минивэн 15.000", passengers=2)
+    plain = await make_order(raw_text="Краснодар - Сочи 3000", passengers=2)
+
+    assert order_line(minivan).endswith("🚐 минивэн") and order_line(plain).endswith("🚗 легковой")
+    assert "🚐 минивэн" in build_message([minivan], {}) and "🚗 легковой" in build_message([minivan, plain], {})

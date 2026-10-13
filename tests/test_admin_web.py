@@ -843,3 +843,16 @@ async def test_groups_page_hides_deleted_and_disabled_groups(session, make_order
     stats = await reporting.group_stats(days=7)
 
     assert [r["title"] for r in stats["rows"]] == ["Живая"]
+
+
+async def test_reset_button_forgets_the_saved_filter_and_shows_the_full_feed(client):
+    await _login(client)
+    await client.get("/?from_city=Керчь&price_min=3000")
+    assert (await client.get("/")).status_code == 303  # фильтр запомнен
+
+    reset = await client.get("/?reset=1")
+
+    assert reset.status_code == 303 and reset.headers["location"] == "/"
+    assert (await client.get("/")).status_code == 200  # дальше лента без фильтра, редиректа нет
+    page = (await client.get("/?page=1")).text
+    assert "/?reset=1" in page  # кнопка «Сбросить» ведёт на сброс

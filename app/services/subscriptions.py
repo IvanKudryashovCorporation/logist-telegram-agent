@@ -37,6 +37,7 @@ from app.models import (
     SubscriptionNotification,
     WorkGroup,
 )
+from app.search import vehicle_type_of
 from app.services import billing
 from app.timeutil import now_msk_naive, now_utc_naive
 from app.web import queries
@@ -202,6 +203,12 @@ async def delete_subscription(session, telegram_id: int, sub_id: int) -> bool:
 # --- Сообщения -------------------------------------------------------------------
 
 
+def vehicle_label(order: Order) -> str:
+    """«🚐 минивэн» или «🚗 легковой»: водителю важно знать, какая машина нужна, прямо в уведомлении."""
+    kind = order.vehicle_type or vehicle_type_of(order.car_class, order.raw_text, order.passengers)
+    return "🚐 минивэн" if kind == "minivan" else "🚗 легковой"
+
+
 def order_line(order: Order) -> str:
     stops = [point["name"] for point in (order.via_points or []) if point.get("name")]
     route = " → ".join([order.from_city or "?", *stops, order.to_city or "?"])
@@ -210,6 +217,7 @@ def order_line(order: Order) -> str:
         extras.append(f"{order.client_price:.0f} ₽")
     if order.passengers:
         extras.append(f"{order.passengers} пасс.")
+    extras.append(vehicle_label(order))
     return f"{route}\n   {' · '.join(extras)}"
 
 

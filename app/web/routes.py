@@ -147,13 +147,17 @@ async def feed(
 ):
     token, new_token = driver_token(request)
     telegram_id = logged_in_telegram_id(request)
+    if request.query_params.get("reset"):
+        # Кнопка «Сбросить»: забываем запомненный фильтр и открываем полную ленту.
+        await _remember_filter(telegram_id, {})
+        return _redirect(f"/?{urlencode({'q': q.strip()})}" if q.strip() else "/", new_token)
     if telegram_id is not None and not request.query_params:
         # Вошёл заново без параметров — открываем ленту с его последним фильтром.
         saved = await _saved_filter(telegram_id)
         if saved:
             return _redirect(
                 f"/?{urlencode(saved)}", new_token,
-                "Показан ваш последний фильтр. Чтобы сбросить его, очистите поля и нажмите «Применить».",
+                "Показан ваш последний фильтр. Чтобы вернуть всю ленту, нажмите «Сбросить» в фильтре.",
             )
     filters = Filters(
         from_city=from_city, to_city=to_city, vehicle=vehicle,
