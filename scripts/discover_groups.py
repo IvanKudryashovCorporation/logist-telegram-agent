@@ -185,6 +185,8 @@ async def inspect_candidates(client, found, delay: float, per_chat: int) -> list
     now = datetime.now(timezone.utc)
     out: list[Candidate] = []
     for peer_id, (chat, queries) in found.items():
+        if not hasattr(chat, "title"):
+            continue  # пользователь или бот, а не группа
         item = Candidate(
             id=peer_id, username=chat.username, title=chat.title or chat.username,
             kind="канал" if getattr(chat, "broadcast", False) else "группа",
