@@ -18,6 +18,7 @@ Telegram присылает события (новое сообщение, пр�
 """
 
 import asyncio
+import contextlib
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -43,20 +44,6 @@ EDIT_POLLS = 3
 #: Пауза после опроса группы, секунд: не частим запросами (групп опрашивается несколько одновременно).
 GROUP_GAP = 0.15
 
-#: Определённые чаты по (клиент, группа): имя в Telegram определяем один раз, а не на каждом круге.
-#: Запрос имени (ResolveUsername) — самый дорогой и первым упирается в лимит Telegram.
-_ENTITIES: dict[tuple[int, int], object] = {}
-
-
-async def _entity(client, group: "WatchGroup"):
-    key = (id(client), group.id)
-    entity = _ENTITIES.get(key)
-    if entity is None:
-        entity = await client.get_entity(group.username or group.tg_chat_id)
-        _ENTITIES[key] = entity
-    return entity
-
-
 @dataclass(frozen=True)
 class WatchGroup:
     id: int
@@ -65,6 +52,27 @@ class WatchGroup:
     username: Optional[str]
     session_name: Optional[str]
     last_message_id: Optional[int]
+
+
+def _entities_of(client) -> dict:
+    """Кэш определённых чатов лежит на самом клиенте: имя группы определяем один раз, а не на каждом круге.
+
+    Запрос имени (ResolveUsername) — самый дорогой и первым упирается в лимит Telegram."""
+    cache = getattr(client, "_watch_entities", None)
+    if cache is None:
+        cache = {}
+        with contextlib.suppress(AttributeError):
+            client._watch_entities = cache
+    return cache
+
+
+async def _entity(client, group: "WatchGroup"):
+    cache = _entities_of(client)
+    entity = cache.get(group.id)
+    if entity is None:
+        entity = await client.get_entity(group.username or group.tg_chat_id)
+        cache[group.id] = entity
+    return entity
 
 
 async def watch_groups() -> list[WatchGroup]:
@@ -205,7 +213,7 @@ async def _poll_session(client, groups: list[WatchGroup], cycle: int, stop_event
                 log.warning("FloodWait %s с на «%s» — этот аккаунт ждёт", exc.seconds, group.title)
                 blocked_until = max(blocked_until, loop.time() + exc.seconds + 1)
             except Exception:
-                _ENTITIES.pop((id(client), group.id), None)  # вдруг сменилось имя или доступ: определим заново
+                _entities_of(client).pop(group.id, None)  # вдруг сменилось имя или доступ: определим заново
                 log.exception("Ошибка опроса группы «%s»", group.title)
             await asyncio.sleep(GROUP_GAP)
 
