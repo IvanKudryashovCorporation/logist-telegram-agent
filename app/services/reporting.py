@@ -21,6 +21,7 @@ from app.models import (
     ORDER_STATUS_LABELS,
     ActionLog,
     ActorType,
+    BillingEvent,
     Driver,
     Order,
     OrderStatus,
@@ -30,6 +31,7 @@ from app.models import (
     Payment,
     PendingMessage,
     PendingStatus,
+    UserEvent,
     WorkGroup,
 )
 from app.services import billing
@@ -333,7 +335,48 @@ async def users_overview(*, q: str = "", sort: str = "login", limit: int = 200) 
     }
 
 
-async def user_detail(telegram_id: int, *, orders_limit: int = 50, actions_limit: int = 30) -> dict | None:
+_ORDER_ACTION_LABELS = {
+    "order_taken": "Взял заказ",
+    "order_released": "Отказался от заказа",
+    "order_agreed": "Договорился по заказу",
+    "order_completed": "Отметил заказ выполненным",
+    "problem_reported": "Сообщил о проблеме с заказом",
+}
+#: Какие события подписки и оплаты показываем в истории пользователя (служебные уведомления ЮKassa — нет).
+_HISTORY_BILLING_KINDS = (
+    "payment_created", "payment_create_failed", "payment_succeeded", "payment_canceled", "refund_succeeded",
+    "autorenew_charged", "autorenew_failed", "autorenew_off", "admin_grant", "admin_reset",
+)
+
+
+def _history(order_actions, site_events, money_events, *, limit: int) -> list[dict]:
+    """Единая история пользователя: заходы и фильтры, оплаты, действия с заказами — от новых к старым."""
+    from app.services import billing_events, user_events
+
+    rows: list[dict] = []
+    for a in order_actions:
+        rows.append({
+            "at": a.created_at, "when": _msk(a.created_at), "icon": "order",
+            "label": _ORDER_ACTION_LABELS.get(a.action, a.action), "details": "", "order_id": a.order_id,
+        })
+    for e in site_events:
+        rows.append({
+            "at": e.created_at, "when": _msk(e.created_at), "icon": "site",
+            "label": user_events.KIND_LABELS.get(e.kind, e.kind), "details": e.details or "", "order_id": None,
+        })
+    for e in money_events:
+        details = e.details or ""
+        if e.amount_kop:
+            details = f"{e.amount_kop / 100:.0f} ₽" + (f" · {details}" if details else "")
+        rows.append({
+            "at": e.created_at, "when": _msk(e.created_at), "icon": "money",
+            "label": billing_events.KIND_LABELS.get(e.kind, e.kind).capitalize(), "details": details, "order_id": None,
+        })
+    rows.sort(key=lambda r: r["at"], reverse=True)
+    return rows[:limit]
+
+
+async def user_detail(telegram_id: int, *, orders_limit: int = 50, actions_limit: int = 200) -> dict | None:
     """Всё о пользователе: профиль, статистика, подписка, его заказы и история действий."""
     async with SessionLocal() as session:
         driver = (
@@ -367,21 +410,44 @@ async def user_detail(telegram_id: int, *, orders_limit: int = 50, actions_limit
                 )
             ).scalars().all()
         )
-        actions = []
-        if orders:
-            actions = list(
-                (
-                    await session.execute(
-                        select(ActionLog)
-                        .where(
-                            ActionLog.order_id.in_([o.id for o in orders]),
-                            ActionLog.actor == ActorType.DRIVER,
-                        )
-                        .order_by(ActionLog.id.desc())
-                        .limit(actions_limit)
+        # Действия водителя с заказами: в details каждого записан префикс его токена (в том числе у заказов,
+        # от которых он уже отказался и которых нет в списке «взятых»).
+        actions = list(
+            (
+                await session.execute(
+                    select(ActionLog)
+                    .where(
+                        ActionLog.actor == ActorType.DRIVER,
+                        or_(
+                            ActionLog.details.like(f"token={token[:8]}%"),
+                            ActionLog.order_id.in_([o.id for o in orders] or [0]),
+                        ),
                     )
-                ).scalars().all()
-            )
+                    .order_by(ActionLog.id.desc())
+                    .limit(actions_limit)
+                )
+            ).scalars().all()
+        )
+        site_events = list(
+            (
+                await session.execute(
+                    select(UserEvent)
+                    .where(UserEvent.telegram_id == telegram_id)
+                    .order_by(UserEvent.id.desc())
+                    .limit(actions_limit)
+                )
+            ).scalars().all()
+        )
+        money_events = list(
+            (
+                await session.execute(
+                    select(BillingEvent)
+                    .where(BillingEvent.telegram_id == telegram_id, BillingEvent.kind.in_(_HISTORY_BILLING_KINDS))
+                    .order_by(BillingEvent.id.desc())
+                    .limit(actions_limit)
+                )
+            ).scalars().all()
+        )
 
     stats = _stats_by_token(
         [(token, o.status, o.client_price, o.has_problem) for o in orders]
@@ -398,7 +464,7 @@ async def user_detail(telegram_id: int, *, orders_limit: int = 50, actions_limit
         "orders": orders[:orders_limit],
         "orders_total": len(orders),
         "taken_at": {o.id: _msk(o.taken_at) for o in orders[:orders_limit]},
-        "actions": [(_msk(a.created_at), a.order_id, a.action, a.details or "") for a in actions],
+        "timeline": _history(actions, site_events, money_events, limit=actions_limit),
         "active_orders": [o for o in orders if o.status in (OrderStatus.AGREED, OrderStatus.IN_PROGRESS)],
     }
 

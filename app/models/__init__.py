@@ -18,6 +18,7 @@ from app.models.parse_stat import ParseStat
 from app.models.payment import BillingEvent, Payment, Refund
 from app.models.pending_message import PendingMessage
 from app.models.subscription import OrderSubscription, SubscriptionNotification
+from app.models.user_event import UserEvent
 from app.models.work_group import WorkGroup
 
 __all__ = [
@@ -40,5 +41,6 @@ __all__ = [
     "PendingStatus",
     "Refund",
     "SubscriptionNotification",
+    "UserEvent",
     "WorkGroup",
 ]

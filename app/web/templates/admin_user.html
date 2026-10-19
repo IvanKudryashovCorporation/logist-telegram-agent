@@ -18,7 +18,7 @@
     <tbody>
       <tr><th>Telegram id</th><td class="mono">{{ d.telegram_id }}</td></tr>
       <tr><th>Зарегистрирован</th><td>{{ u.registered.strftime('%d.%m.%Y %H:%M') if u.registered else '—' }} <span class="muted">(МСК)</span></td></tr>
-      <tr><th>Последний вход</th><td>{{ u.last_login.strftime('%d.%m.%Y %H:%M') if u.last_login else '—' }} <span class="muted">(МСК)</span></td></tr>
+      <tr><th>Последний заход</th><td>{{ u.last_login.strftime('%d.%m.%Y %H:%M') if u.last_login else '—' }} <span class="muted">(МСК)</span></td></tr>
       <tr>
         <th>Подписка</th>
         <td>
@@ -165,22 +165,25 @@
 </div>
 
 <div class="card">
-  <h2>История действий</h2>
-  {% if u.actions %}
+  <h2>История действий <span class="muted">({{ u.timeline|length }})</span></h2>
+  {% if u.timeline %}
     <table>
-      <thead><tr><th>Когда (МСК)</th><th>Заказ</th><th>Действие</th></tr></thead>
+      <thead><tr><th>Когда (МСК)</th><th>Действие</th></tr></thead>
       <tbody>
-        {% for when, order_id, action, details in u.actions %}
+        {% for row in u.timeline %}
           <tr>
-            <td class="nowrap">{{ when.strftime('%d.%m %H:%M') if when else '—' }}</td>
-            <td class="num mono"><a href="/orders/{{ order_id }}" target="_blank" rel="noopener">#{{ order_id }}</a></td>
-            <td>{{ action }}{% if details %} <span class="muted">{{ details }}</span>{% endif %}</td>
+            <td class="nowrap">{{ row.when.strftime('%d.%m.%Y %H:%M') if row.when else '—' }}</td>
+            <td>
+              {{ row.label }}
+              {% if row.order_id %}<a href="/orders/{{ row.order_id }}" target="_blank" rel="noopener">#{{ row.order_id }}</a>{% endif %}
+              {% if row.details %}<span class="muted">· {{ row.details }}</span>{% endif %}
+            </td>
           </tr>
         {% endfor %}
       </tbody>
     </table>
   {% else %}
-    <div class="empty">Действий нет.</div>
+    <div class="empty">Действий пока нет.</div>
   {% endif %}
 </div>
 {% endblock %}

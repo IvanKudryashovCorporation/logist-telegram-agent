@@ -36,7 +36,7 @@ from app.models import (
     OrderSubscription,
     WorkGroup,
 )
-from app.services import billing, notifications
+from app.services import billing, notifications, user_events
 from app.timeutil import now_msk_naive, now_utc_naive
 from app.web.filters import Filters
 
@@ -653,6 +653,7 @@ async def upsert_driver(session: AsyncSession, payload: dict) -> Driver:
         await session.execute(select(Driver).where(Driver.telegram_id == telegram_id))
     ).scalar_one_or_none()
 
+    is_new = driver is None
     if driver is None:
         driver = Driver(telegram_id=telegram_id, trial_ends_at=billing.new_driver_trial_end())
         session.add(driver)
@@ -668,6 +669,9 @@ async def upsert_driver(session: AsyncSession, payload: dict) -> Driver:
     driver.last_name = payload.get("last_name") or None
     driver.photo_url = payload.get("photo_url") or None
     driver.last_login_at = now_utc_naive()
+    await user_events.record(
+        user_events.LOGIN, telegram_id, "первый вход, аккаунт создан" if is_new else "", session=session
+    )
 
     await session.commit()
     await session.refresh(driver)

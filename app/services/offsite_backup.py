@@ -52,7 +52,7 @@ def state_path() -> Path:
 
 def latest_dump(directory: Optional[Path] = None) -> Optional[Path]:
     directory = directory or Path(settings.watchdog_backup_dir)
-    dumps = sorted(directory.glob("logist-*.sql.gz"), key=lambda p: p.stat().st_mtime) if directory.exists() else []
+    dumps = sorted(directory.glob("logist-*.sql.gz"), key=lambda p: (p.stat().st_mtime, p.name)) if directory.exists() else []
     return dumps[-1] if dumps else None
 
 

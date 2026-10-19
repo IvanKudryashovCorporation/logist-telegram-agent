@@ -638,7 +638,7 @@ async def test_user_card_shows_profile_stats_orders_and_history(client, make_ord
     assert "Иван Петров" in response.text and str(driver.telegram_id) in response.text
     assert f"/orders/{order.id}" in response.text
     assert "диспетчер не отвечает" in response.text  # жалоба
-    assert "order_agreed" in response.text  # история действий
+    assert "Договорился по заказу" in response.text  # история действий
     assert "https://t.me/ivan_driver" in response.text  # кнопка «Написать в Telegram»
     assert "Снять с водителя" in response.text
 

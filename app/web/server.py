@@ -28,6 +28,7 @@ from app.web import admin as admin_module
 from app.web import auth as auth_module
 from app.web import billing_routes, bot_login
 from app.web import routes as public_routes
+from app.web.last_seen import LastSeenMiddleware
 from app.web.rate_limit import RateLimitMiddleware
 
 log = logging.getLogger("web")
@@ -142,6 +143,7 @@ def create_app() -> FastAPI:
 
     # Порядок важен: middleware, добавленные позже, выполняются раньше.
     application.add_middleware(RateLimitMiddleware)
+    application.add_middleware(LastSeenMiddleware)
     application.add_middleware(SecurityHeadersMiddleware)
 
     STATIC_DIR.mkdir(parents=True, exist_ok=True)

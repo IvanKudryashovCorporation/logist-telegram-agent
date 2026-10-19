@@ -18,7 +18,7 @@ from app import geo
 from app.config import settings
 from app.db.base import SessionLocal
 from app.models import HIDDEN_STATUSES, Driver, Order
-from app.services import billing, notifications
+from app.services import billing, notifications, user_events
 from app.services.subscriptions import (
     ADDED,
     EXISTS,
@@ -355,6 +355,9 @@ async def apply_filter(request: Request):
         return _login_redirect(request, target)
 
     await _remember_filter(logged_in_telegram_id(request), view)
+    tg_id = logged_in_telegram_id(request)
+    summary = "; ".join(describe_filters(params)) or "без условий"
+    await user_events.record(user_events.FILTER_APPLIED, tg_id, summary)
 
     notice = ""
     if form.get("notify") and not await _has_subscription(request):
@@ -368,6 +371,10 @@ async def apply_filter(request: Request):
         else:
             async with SessionLocal() as session:
                 _sub, outcome = await add_subscription(session, logged_in_telegram_id(request), params)
+            await user_events.record(
+                {ADDED: user_events.FILTER_SAVED, EXISTS: user_events.FILTER_EXISTS, LIMIT: user_events.FILTER_LIMIT}[outcome],
+                tg_id, summary,
+            )
             notice = {
                 ADDED: "Фильтр применён и добавлен в «Мои фильтры». Новые подходящие заказы пришлём вам в Telegram.",
                 EXISTS: "Такой фильтр уже есть в «Мои фильтры» — уведомления по нему включены.",
@@ -422,14 +429,22 @@ async def my_filter_action(request: Request, sub_id: int, action: str):
     if action == "on" and not await _has_subscription(request):
         return _redirect("/subscription", new_token, queries.ActionResult(False, "no_subscription").message)
     async with SessionLocal() as session:
+        known = {s.id: s for s in await list_subscriptions(session, telegram_id)}
+        summary = "; ".join(describe_filters(known[sub_id].params)) if sub_id in known else ""
         if action == "delete":
             done = await delete_subscription(session, telegram_id, sub_id)
             notice = "Фильтр удалён." if done else ""
+            if done:
+                await user_events.record(user_events.FILTER_DELETED, telegram_id, summary)
         else:
             sub = await set_subscription_active(session, telegram_id, sub_id, action == "on")
             notice = "" if sub is None else (
                 "Уведомления по фильтру включены." if action == "on" else "Уведомления по фильтру выключены."
             )
+            if sub is not None:
+                await user_events.record(
+                    user_events.FILTER_ON if action == "on" else user_events.FILTER_OFF, telegram_id, summary
+                )
     return _redirect("/filters", new_token, notice)
 
 
