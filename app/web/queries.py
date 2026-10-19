@@ -14,6 +14,7 @@ Python их фильтровал и сортировал — при росте �
 """
 
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -215,6 +216,20 @@ def invalidate_city_cache() -> None:
     _city_cache.invalidate()
 
 
+#: «Жд симф», «ж/д Симферополь», «ж.д. Симф»: вокзал города, записанный по-разному.
+_STATION_PREFIX_RE = re.compile(r"^(?:ж\s*/\s*д|ж\s*\.\s*д\.?|жд)\s+(.+)$", re.IGNORECASE)
+
+
+def _suggestion_name(name: str) -> str:
+    """Каноническое название для подсказки: «Жд симф» и «ЖД Симферополь» — одна запись «ЖД Симферополь»."""
+    name = name.strip()
+    station = _STATION_PREFIX_RE.match(name)
+    if station:
+        rest = expand_city_term(station.group(1))
+        return f"ЖД {rest[:1].upper()}{rest[1:]}"
+    return expand_city_term(name)
+
+
 async def known_cities(session: AsyncSession) -> list[str]:
     """Справочник городов + реально встречающиеся в заявках."""
     cached = _city_cache.get()
@@ -237,7 +252,7 @@ async def known_cities(session: AsyncSession) -> list[str]:
     # Один город — одна запись: названия сводятся к каноническому и дедуплицируются по
     # «сжатой» форме («Мелитополь» и «мелитополь» — не два города).
     chosen: dict[str, str] = {}
-    for name in [*KNOWN_CITIES, *(expand_city_term(c) for c in [*from_cities, *to_cities])]:
+    for name in [*KNOWN_CITIES, *(_suggestion_name(c) for c in [*from_cities, *to_cities])]:
         key = _compact(city_key(name))
         if not key:
             continue

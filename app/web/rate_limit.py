@@ -29,7 +29,7 @@ from app.web.deps import client_ip
 log = logging.getLogger("web.rate_limit")
 
 #: Пути, которые не лимитируем: статика, мониторинг, favicon.
-EXEMPT_PREFIXES = ("/static/", "/healthz", "/robots.txt", "/sitemap.xml", "/favicon.ico", "/payments/")
+EXEMPT_PREFIXES = ("/static/", "/healthz", "/robots.txt", "/sitemap.xml", "/favicon.ico", "/manifest.webmanifest", "/sw.js", "/payments/")
 
 #: Сколько адресов храним одновременно, прежде чем начать вытеснять старые.
 MAX_TRACKED_KEYS = 20_000

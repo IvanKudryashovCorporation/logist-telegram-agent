@@ -250,3 +250,14 @@ async def test_private_group_page_says_the_button_opens_a_personal_chat(client, 
 
     assert "откроет личный чат" in page.text
     assert "Открыть чат напрямую" not in page.text  # он и так главная кнопка
+
+
+async def test_station_spellings_are_one_suggestion(session, make_order):
+    """«Жд симф», «ж/д Симф» и «ЖД Симферополь» — один вокзал, а не три строки в подсказках."""
+    for spelling in ("Жд симф", "ж/д Симф", "ЖД Симферополь"):
+        await make_order(from_city=spelling, to_city="Сочи")
+    queries.invalidate_city_cache()
+
+    cities = await queries.known_cities(session)
+
+    assert [c for c in cities if c.lower().startswith(("жд ", "ж/д"))and "симф" in c.lower()] == ["ЖД Симферополь"]

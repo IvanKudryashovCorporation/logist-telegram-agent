@@ -1446,6 +1446,7 @@ async def test_robots_and_sitemap_open_only_public_pages(client):
     assert "Sitemap: " in robots and robots.rstrip().endswith("/sitemap.xml")
     assert sitemap.status_code == 200 and "/about</loc>" in sitemap.text and "/offer</loc>" in sitemap.text
     assert "/my" not in sitemap.text and "/admin" not in sitemap.text
+    assert "Allow: /favicon.ico$" in robots and "Allow: /static/favicon.png\n" in robots  # значок сайта для выдачи
 
 
 async def test_google_verification_file_is_served(client):
@@ -1453,3 +1454,31 @@ async def test_google_verification_file_is_served(client):
 
     assert response.status_code == 200
     assert response.text == "google-site-verification: googleeebeef890b012038.html"
+
+
+async def test_privacy_page_is_public_and_linked(client):
+    page = await client.get("/privacy")
+    robots = (await client.get("/robots.txt")).text
+    sitemap = (await client.get("/sitemap.xml")).text
+
+    assert page.status_code == 200
+    assert "Политика конфиденциальности" in page.text and 'content="index, follow"' in page.text
+    assert "Allow: /privacy$" in robots and "/privacy</loc>" in sitemap
+    assert 'href="/privacy"' in (await client.get("/about")).text  # ссылка в общем подвале
+
+
+async def test_site_is_installable_as_app(client):
+    manifest = await client.get("/manifest.webmanifest")
+    worker = await client.get("/sw.js")
+    page = (await client.get("/about")).text
+
+    data = manifest.json()
+    assert manifest.status_code == 200 and "manifest+json" in manifest.headers["content-type"]
+    assert data["display"] == "standalone" and data["start_url"] == "/"
+    sizes = {icon["sizes"] for icon in data["icons"]}
+    assert {"192x192", "512x512"} <= sizes
+    for icon in data["icons"]:
+        assert (await client.get(icon["src"])).status_code == 200
+    assert worker.status_code == 200 and "javascript" in worker.headers["content-type"]
+    assert worker.headers["service-worker-allowed"] == "/" and "fetch" in worker.text
+    assert 'rel="manifest"' in page and 'name="theme-color"' in page

@@ -227,8 +227,19 @@
           var q = norm(query);
           if (!q) { hideSuggestions(); return; }
 
+          // Порядок подсказок: точное совпадение, потом названия, начинающиеся с запроса,
+          // потом слова с запросом в начале («ЖД Симферополь»), и только потом всё остальное.
+          function rank(city) {
+            var name = norm(city);
+            if (name === q) return 0;
+            if (name.indexOf(q) === 0) return 1;
+            if (name.split(/[\s(,\/-]+/).some(function (w) { return w.indexOf(q) === 0; })) return 2;
+            return 3;
+          }
           var matches = KNOWN_CITIES.filter(function (city) {
             return norm(city).indexOf(q) !== -1 && !selected.some(function (c) { return norm(c) === norm(city); });
+          }).sort(function (a, b) {
+            return rank(a) - rank(b) || a.length - b.length || a.localeCompare(b, 'ru');
           }).slice(0, 8);
 
           if (!matches.length) { hideSuggestions(); return; }

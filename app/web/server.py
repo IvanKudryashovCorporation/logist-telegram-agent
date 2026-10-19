@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
@@ -40,11 +40,35 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 _DOCS_DISABLED = {"docs_url": None, "redoc_url": None, "openapi_url": None}
 
 #: Закрыто всё, кроме страницы о сервисе и оферты: в ленте телефоны клиентов и аккаунты диспетчеров.
-_PUBLIC_PAGES = ("/about", "/offer")
+_PUBLIC_PAGES = ("/about", "/offer", "/privacy")
+#: Иконки сайта: без доступа к ним поисковик не может скачать значок и показывает в выдаче глобус.
+_PUBLIC_ICONS = ("/static/favicon.png", "/static/apple-touch-icon.png", "/static/logo.png")
+
+
+_WEB_MANIFEST = {
+    "name": "Лента заказов",
+    "short_name": "Лента",
+    "description": "Свежие заказы такси и межгорода из Telegram-групп в одной ленте.",
+    "lang": "ru",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "orientation": "portrait",
+    "background_color": "#0b0f19",
+    "theme_color": "#1668f5",
+    "icons": [
+        {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+        {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+        {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable"},
+        {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+    ],
+}
 
 
 def _robots_txt() -> str:
-    allow = "".join(f"Allow: {path}$\n" for path in (*_PUBLIC_PAGES, "/sitemap.xml"))
+    allow = "".join(f"Allow: {path}$\n" for path in (*_PUBLIC_PAGES, "/sitemap.xml", "/favicon.ico"))
+    # Значок сайта нужен Google для выдачи; ссылки на иконки идут с ?v=..., поэтому здесь без «$».
+    allow += "".join(f"Allow: {path}\n" for path in _PUBLIC_ICONS)
     return (
         "User-agent: *\n" + allow + "Disallow: /\n\n"
         f"Sitemap: {settings.public_base_url.rstrip('/')}/sitemap.xml\n"
@@ -156,7 +180,7 @@ def create_app() -> FastAPI:
 
     @application.get("/robots.txt", response_class=PlainTextResponse)
     async def robots_txt() -> str:
-        """Индексировать можно только /about и /offer.
+        """Индексировать можно только /about, /offer и /privacy.
 
         Лента содержит телефоны клиентов и аккаунты диспетчеров; поисковику
         там делать нечего, а вот скрейперам — очень даже.
@@ -167,6 +191,27 @@ def create_app() -> FastAPI:
     async def google_site_verification() -> str:
         """Файл подтверждения владения сайтом для Google Search Console."""
         return "google-site-verification: googleeebeef890b012038.html"
+
+    @application.get("/manifest.webmanifest")
+    async def web_manifest() -> JSONResponse:
+        """Манифест веб-приложения: значок и имя, когда сайт добавляют на экран телефона."""
+        return JSONResponse(_WEB_MANIFEST, media_type="application/manifest+json")
+
+    @application.get("/sw.js", include_in_schema=False)
+    async def service_worker() -> FileResponse:
+        """Сервис-воркер отдаётся из корня, чтобы его область действия охватывала весь сайт."""
+        return FileResponse(
+            STATIC_DIR / "sw.js", media_type="application/javascript",
+            headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"},
+        )
+
+    @application.get("/yandex_91d81d81987e32f8.html", response_class=HTMLResponse)
+    async def yandex_site_verification() -> str:
+        """Файл подтверждения владения сайтом для Яндекс Вебмастера."""
+        return (
+            '<html><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8"></head>'
+            "<body>Verification: 91d81d81987e32f8</body></html>"
+        )
 
     @application.api_route("/sitemap.xml", methods=["GET", "HEAD"])
     async def sitemap_xml() -> Response:

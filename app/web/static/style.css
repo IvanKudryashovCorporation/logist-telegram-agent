@@ -1093,3 +1093,9 @@ input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), select, t
 .sb-confirm-box { margin-top:6px; padding:14px; border:1px solid var(--sb-line); border-radius:12px; }
 .sb-confirm-box p { margin:0 0 10px; }
 .sb-btn-danger { background:#dc2626; color:#fff; border-color:#dc2626; }
+.site-foot { max-width: 1000px; margin: 32px auto 0; padding: 20px 16px 28px; border-top: 1px solid var(--border);
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 20px;
+  color: var(--muted); font-size: 13px; }
+.site-foot-links { display: flex; flex-wrap: wrap; gap: 4px 18px; }
+.site-foot-links a { color: var(--muted); text-decoration: none; min-height: 32px; display: inline-flex; align-items: center; }
+.site-foot-links a:hover, .site-foot-links a:focus-visible { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }

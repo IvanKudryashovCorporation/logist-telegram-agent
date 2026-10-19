@@ -348,6 +348,23 @@ async def about_page(request: Request):
     return templates.TemplateResponse("about.html", _base_context(request, counts) | _about_context())
 
 
+@router.get("/privacy", response_class=HTMLResponse)
+async def privacy_page(request: Request):
+    """Политика обработки персональных данных (нужна платёжному провайдеру и по 152-ФЗ)."""
+    async with SessionLocal() as session:
+        counts = await queries.header_counts(session, "")
+    return templates.TemplateResponse(
+        "privacy.html",
+        _base_context(request, counts)
+        | {
+            "seller": settings.offer_seller_name.strip(),
+            "seller_inn": settings.offer_seller_inn.strip(),
+            "orders_retention_days": settings.closed_orders_retention_days,
+            "base_url": settings.public_base_url.rstrip("/"),
+        },
+    )
+
+
 @router.get("/offer", response_class=HTMLResponse)
 async def offer_page(request: Request):
     """Публичная оферта: условия платной подписки (нужна платёжному провайдеру и покупателю)."""

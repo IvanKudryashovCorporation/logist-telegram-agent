@@ -7,8 +7,14 @@
   {# По умолчанию страницы закрыты от индексации: в ленте телефоны клиентов. Публичные страницы переопределяют блок. #}
   {% block seo %}<meta name="robots" content="noindex, nofollow">{% endblock %}
   {% block head_extra %}{% endblock %}
+  <link rel="icon" href="/favicon.ico" sizes="48x48">
   <link rel="icon" type="image/png" sizes="64x64" href="{{ static_url('favicon.png') }}">
   <link rel="apple-touch-icon" href="{{ static_url('apple-touch-icon.png') }}">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#1668f5">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Лента заказов">
   <script src="{{ static_url('theme.js') }}"></script>
   <link rel="stylesheet" href="{{ static_url('style.css') }}">
 </head>
@@ -242,7 +248,17 @@
     {% endif %}
     {% block content %}{% endblock %}
   </main>
+  <footer class="site-foot">
+    <nav class="site-foot-links" aria-label="Информация о сервисе">
+      <a href="/about">О сервисе</a>
+      <a href="/offer">Публичная оферта</a>
+      <a href="/privacy">Политика конфиденциальности</a>
+      {% if owner_contact_url %}<a href="{{ owner_contact_url }}" target="_blank" rel="noopener">Обратная связь</a>{% endif %}
+    </nav>
+    <div class="site-foot-note">© Лента заказов</div>
+  </footer>
   <script src="{{ static_url('app.js') }}" defer></script>
+  <script src="{{ static_url('pwa.js') }}" defer></script>
   <script src="{{ static_url('tour.js') }}" defer></script>
 </body>
 </html>
