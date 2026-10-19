@@ -129,6 +129,9 @@ class Settings(BaseSettings):
     #: через Telegram с одним из этих id; всем остальным (и гостям) её нет — 404.
     #: Пусто — админки нет ни у кого. Пароля у неё больше нет.
     admin_telegram_ids: str = ""
+    #: Чаты с высоким приоритетом разбора (tg_chat_id через запятую): их сообщения идут в LLM вне очереди,
+    #: при лимите основного провайдера сразу уходят в резервный, а очередь повторов берёт их первыми.
+    priority_chat_ids: str = ""
     #: Секрет подписи сессий (cookie входа через Telegram).
     session_secret: str = ""
 
@@ -286,6 +289,15 @@ class Settings(BaseSettings):
     @property
     def session_path(self) -> Path:
         return PROJECT_ROOT / f"{self.tg_session_name}.session"
+
+    @property
+    def priority_chats(self) -> set[int]:
+        ids: set[int] = set()
+        for part in self.priority_chat_ids.replace(";", ",").split(","):
+            part = part.strip()
+            if part.lstrip("-").isdigit():
+                ids.add(int(part))
+        return ids
 
     @property
     def admin_ids(self) -> set[int]:

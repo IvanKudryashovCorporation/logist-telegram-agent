@@ -418,3 +418,32 @@ async def test_content_dedup_shadow_mode_still_calls_llm_and_logs_agreement(sess
         await _post(-100222, 2, text=body + "\nписать @disp_two")
 
     assert "content_dedup shadow ok" in caplog.text and await _count(session) == 1
+
+
+# --- 5. Диапазон пассажиров («5-6 пас» и «6 чел») ----------------------------------------------
+
+
+async def test_range_of_passengers_does_not_split_one_trip(session, monkeypatch):
+    """Пермь → Краснотурьинск 23000: в одной группе «5-6 пас» (в заказ ушло 5), в «PRO все заказы» — «6 чел»."""
+    tomorrow = (now_msk_naive() + timedelta(days=1)).date().isoformat()
+    fields = dict(pickup_date=tomorrow, pickup_time="07:00", from_city="Пермь", to_city="Краснотурьинск",
+                  client_price=23000)
+    _parse(monkeypatch, passengers=5, **fields)
+    first = await _post(-100222, 1, dispatcher_tg_id=11, dispatcher_username="transfer_a")
+    _parse(monkeypatch, passengers=6, **fields)
+    second = await _post(-1004413141153, 2, dispatcher_tg_id=8924686498, dispatcher_username="ProPoisk_zakazov_bot")
+
+    assert second == first
+    assert await _count(session) == 1
+
+
+async def test_passengers_two_apart_are_different_trips(session, monkeypatch):
+    tomorrow = (now_msk_naive() + timedelta(days=1)).date().isoformat()
+    fields = dict(pickup_date=tomorrow, pickup_time="07:00", from_city="Пермь", to_city="Краснотурьинск",
+                  client_price=23000)
+    _parse(monkeypatch, passengers=2, **fields)
+    await _post(-100222, 1, dispatcher_tg_id=11, dispatcher_username="transfer_a")
+    _parse(monkeypatch, passengers=6, **fields)
+    await _post(-1004413141153, 2, dispatcher_tg_id=8924686498, dispatcher_username="ProPoisk_zakazov_bot")
+
+    assert await _count(session) == 2

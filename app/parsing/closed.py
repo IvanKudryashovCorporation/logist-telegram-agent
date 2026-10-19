@@ -32,9 +32,20 @@ _CLOSED_TICK_RE = re.compile(
 )
 
 
+#: Бот «PRO все заказы» переделывает опубликованное сообщение в «⛔️ Заказ снят/взят» + строку заказа.
+_BOT_TAKEN_RE = re.compile(r"заказ\s+снят\s*/\s*взят", re.IGNORECASE)
+
+
+def has_bot_taken_mark(text: str | None) -> bool:
+    """Сообщение бота «⛔️ Заказ снят/взят»: заказ ушёл, даже если у нас из него заказа не было."""
+    return bool(text) and bool(_BOT_TAKEN_RE.search(text))
+
+
 def has_closed_mark(text: str | None) -> bool:
-    """Диспетчер словами отметил, что заказ ушёл: «Отдан ✅», «Забрали», «Не актуально»."""
-    return bool(text) and bool(_CLOSED_LINE_RE.search(text) or _CLOSED_TICK_RE.search(text))
+    """Диспетчер словами отметил, что заказ ушёл: «Отдан ✅», «Забрали», «Не актуально», «Заказ снят/взят»."""
+    return bool(text) and bool(
+        _CLOSED_LINE_RE.search(text) or _CLOSED_TICK_RE.search(text) or _BOT_TAKEN_RE.search(text)
+    )
 
 
 def has_closed_lock(text: str | None) -> bool:

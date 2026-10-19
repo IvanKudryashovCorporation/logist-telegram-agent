@@ -70,10 +70,13 @@ def normalized_text(text: Optional[str]) -> str:
 
 
 def clearly_different_clients(first: LiveOrder, second: LiveOrder) -> bool:
-    """Один маршрут и время, но разные клиенты (телефон или число пассажиров) — не повтор."""
+    """Один маршрут и время, но разные клиенты (телефон или число пассажиров) — не повтор.
+
+    Пассажиры, отличающиеся на одного, не считаются разными: в одной публикации «5-6 пас», в другой «6 чел»,
+    а в записи остаётся одно число из диапазона."""
     if first.phone and second.phone and first.phone != second.phone:
         return True
-    return bool(first.passengers and second.passengers and first.passengers != second.passengers)
+    return bool(first.passengers and second.passengers and abs(first.passengers - second.passengers) > 1)
 
 
 def _same_addresses_inside_one_city(first: LiveOrder, second: LiveOrder) -> bool:

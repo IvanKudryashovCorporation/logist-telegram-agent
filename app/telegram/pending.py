@@ -15,7 +15,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -106,7 +106,12 @@ async def fetch_due(session: AsyncSession, *, limit: int = 10) -> list[PendingMe
             PendingMessage.status == PendingStatus.PENDING,
             func.coalesce(PendingMessage.next_attempt_at, now) <= now,
         )
-        .order_by(PendingMessage.next_attempt_at.asc(), PendingMessage.id.asc())
+        .order_by(
+            # Сообщения приоритетных групп разбираются первыми.
+            case((PendingMessage.chat_id.in_(list(settings.priority_chats)), 0), else_=1),
+            PendingMessage.next_attempt_at.asc(),
+            PendingMessage.id.asc(),
+        )
         .limit(limit)
     )
     return list(rows.scalars().all())

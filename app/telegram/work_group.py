@@ -45,7 +45,8 @@ from app.models import (
     WorkGroup,
 )
 from app.parsing import stats as parse_stats
-from app.parsing.closed import ACTION_CLOSED_LOCK, has_closed_lock
+from app.parsing.bot_noise import strip_bot_noise
+from app.parsing.closed import ACTION_CLOSED_LOCK, has_bot_taken_mark, has_closed_lock
 from app.parsing.llm_parser import content_key, parse_orders, text_hash, text_key
 from app.parsing.order_builder import apply_parsed_fields, extract_contact_username, resolve_pickup_at
 from app.parsing.prefilter import PrefilterDecision, prefilter
@@ -352,9 +353,11 @@ async def upsert_order_text(
     Бросает :class:`ParseUnavailable`, если LLM недоступна, — вызывающий код
     обязан поставить сообщение в очередь.
     """
-    text = (text or "").strip()
+    text = strip_bot_noise((text or "").strip())
     if not text:
         return []
+    priority = chat_id in settings.priority_chats
+    urgent = urgent or priority
 
     async with SessionLocal() as db:
         existing_by_index = {
@@ -370,7 +373,9 @@ async def upsert_order_text(
         }
 
         free_existing = [o for o in existing_by_index.values() if not o.taken_by_token]
-        if has_closed_lock(text) and len(existing_by_index) == 1:
+        if has_closed_lock(text) and (
+            len(existing_by_index) == 1 or (not existing_by_index and has_bot_taken_mark(text))
+        ):
             # Диспетчер дописал 🔒 — заказ взяли: снимаем с ленты. Водителя, который его уже
             # взял, это не касается — его заказ остаётся в «Мои заказах».
             await _cancel_orders(db, free_existing, dispatcher_tg_id, action=ACTION_CLOSED_LOCK)
@@ -461,7 +466,12 @@ async def upsert_order_text(
             shadow_twin = twin
 
         # Несрочное (из очереди) сообщение при лимите провайдера ждёт, а не уходит в платный резерв.
-        parse_result = await (parse_orders(text) if urgent else parse_orders(text, urgent=False))
+        if not urgent:
+            parse_result = await parse_orders(text, urgent=False)
+        elif priority:
+            parse_result = await parse_orders(text, priority=True)
+        else:
+            parse_result = await parse_orders(text)
         parsed_list = parse_result.orders
 
         if not parsed_list:

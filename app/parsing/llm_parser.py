@@ -28,6 +28,8 @@
 """
 
 import asyncio
+import heapq
+from contextlib import asynccontextmanager
 import hashlib
 import json
 import logging
@@ -265,7 +267,52 @@ _cache = _ParseCache(settings.parse_cache_size)
 
 #: Не больше стольких одновременных запросов к основному провайдеру: у бесплатных тарифов жёсткий лимит
 #: запросов, и лишняя параллельность даёт 429, а не скорость. Лишние запросы просто ждут своей очереди.
-_primary_gate = asyncio.Semaphore(max(1, settings.llm_concurrency))
+class _PriorityGate:
+    """Семафор с очередью по приоритету: освободившееся место получает приоритетный запрос, а среди равных — первый."""
+
+    def __init__(self, size: int) -> None:
+        self._free = size
+        self._waiters: list[tuple[int, int, "asyncio.Future[None]"]] = []
+        self._seq = 0
+
+    @asynccontextmanager
+    async def slot(self, priority: bool = False):
+        await self._acquire(priority)
+        try:
+            yield
+        finally:
+            self._release()
+
+    async def _acquire(self, priority: bool) -> None:
+        if self._free > 0 and not self._waiters:
+            self._free -= 1
+            return
+        future: "asyncio.Future[None]" = asyncio.get_running_loop().create_future()
+        self._seq += 1
+        heapq.heappush(self._waiters, (0 if priority else 1, self._seq, future))
+        try:
+            await future
+        except asyncio.CancelledError:
+            if future.done() and not future.cancelled():
+                self._release()  # место уже передали нам — возвращаем следующему
+            raise
+
+    def _release(self) -> None:
+        while self._waiters:
+            _, _, future = heapq.heappop(self._waiters)
+            if not future.done():
+                future.set_result(None)  # место переходит ожидающему без освобождения
+                return
+        self._free += 1
+
+
+_primary_gate = _PriorityGate(max(1, settings.llm_concurrency))
+
+
+def _primary_slot(priority: bool):
+    """Место у основного провайдера: приоритетным сообщениям — вне очереди (обычный семафор из тестов тоже годится)."""
+    gate = _primary_gate
+    return gate.slot(priority) if isinstance(gate, _PriorityGate) else gate
 
 
 def cache_stats() -> dict[str, int]:
@@ -377,11 +424,12 @@ def _as_cached(result: ParseResult) -> ParseResult:
     )
 
 
-async def parse_orders(text: str, *, urgent: bool = True) -> ParseResult:
+async def parse_orders(text: str, *, urgent: bool = True, priority: bool = False) -> ParseResult:
     """Основная точка входа: разбор с кэшем, склейкой одинаковых запросов, повторами и метриками.
 
     ``urgent=False`` — несрочное сообщение (из очереди): при лимите основного провайдера оно не идёт
-    в платный резерв, а ждёт и повторяется позже."""
+    в платный резерв, а ждёт и повторяется позже.
+    ``priority=True`` — сообщение приоритетной группы: к основному провайдеру пропускается вне очереди."""
     cached = _cache.get(text)
     if cached is not None:
         log.debug("Разбор из кэша (%s заявок)", len(cached.orders))
@@ -397,7 +445,7 @@ async def parse_orders(text: str, *, urgent: bool = True) -> ParseResult:
     future: "asyncio.Future[ParseResult]" = asyncio.get_running_loop().create_future()
     _inflight[key] = future
     try:
-        result = await _parse_uncached(text, urgent)
+        result = await _parse_uncached(text, urgent, priority)
     except BaseException as exc:
         if not future.done():
             future.set_exception(exc)
@@ -410,11 +458,11 @@ async def parse_orders(text: str, *, urgent: bool = True) -> ParseResult:
         _inflight.pop(key, None)
 
 
-async def _parse_uncached(text: str, urgent: bool = True) -> ParseResult:
+async def _parse_uncached(text: str, urgent: bool = True, priority: bool = False) -> ParseResult:
     # Диспетчеры пишут «сегодня» по Москве; с 00:00 до 03:00 МСК на сервере (UTC) ещё вчера.
     today = now_msk_naive().date().isoformat()
     try:
-        return await _parse_with(text, today, fallback=False)
+        return await _parse_with(text, today, fallback=False, priority=priority)
     except ParseUnavailable as primary_error:
         if _fallback_client is None:
             raise
@@ -427,7 +475,7 @@ async def _parse_uncached(text: str, urgent: bool = True) -> ParseResult:
             raise ParseUnavailable(f"основной: {primary_error}; резервный: {fallback_error}") from fallback_error
 
 
-async def _parse_with(text: str, today: str, fallback: bool) -> ParseResult:
+async def _parse_with(text: str, today: str, fallback: bool, priority: bool = False) -> ParseResult:
     """Разбор одним провайдером с повторами при временных сбоях."""
     max_attempts = max(1, settings.llm_max_retries)
     model = settings.llm_fallback_model if fallback else settings.llm_model
@@ -439,7 +487,7 @@ async def _parse_with(text: str, today: str, fallback: bool) -> ParseResult:
             if fallback:
                 response = await _call_llm(text, today, fallback)
             else:
-                async with _primary_gate:
+                async with _primary_slot(priority):
                     response = await _call_llm(text, today)
             orders = _extract_orders(response)
             fill_missing_prices(orders, text)
