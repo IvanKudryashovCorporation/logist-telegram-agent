@@ -19,6 +19,10 @@ _CITY_PREFIX_RE = re.compile(
     re.IGNORECASE,
 )
 
+#: Пометка региона после города: «Донецк ДНР», «Донецк (ДНР)», «Луганск, ЛНР». Это тот же город, что и «Донецк»:
+#: без этого заявки «Ростов → Донецк» и «Ростов → Донецк ДНР» не склеивались в одну.
+_REGION_SUFFIX_RE = re.compile(r"(?:[\s,]+|\s*\()(?:днр|лнр|рф|россия)\)?$", re.IGNORECASE)
+
 CITY_ALIASES: dict[str, str] = {
     # Крым
     "симф": "Симферополь",
@@ -188,6 +192,9 @@ def city_key(value: str | None) -> str:
         text = _CITY_PREFIX_RE.sub("", text)
     # «М.О.» и «М. О.» — одно и то же: точки считаем пробелами.
     text = re.sub(r"[.\s]+", " ", text)
+    stripped = _REGION_SUFFIX_RE.sub("", text)
+    if stripped.strip(" .,;-"):  # само «ДНР» городом не считаем и не стираем
+        text = stripped
     text = re.sub(r"\s*\(\s*", " (", text)  # «Толстое( Район )» = «Толстое (Район)»
     text = re.sub(r"\s*\)", ")", text)
     return text.strip(" .,;-")

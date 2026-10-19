@@ -3,7 +3,7 @@
 import pytest
 
 from app import city_aliases, geo, plausibility, routing
-from app.city_aliases import CITY_ALIASES, canonical_city_name, expand_city_term
+from app.city_aliases import CITY_ALIASES, canonical_city_name, city_key, expand_city_term
 from app.db.base import SessionLocal
 from app.geo import Candidate
 from app.models import Order
@@ -261,3 +261,9 @@ async def test_station_spellings_are_one_suggestion(session, make_order):
     cities = await queries.known_cities(session)
 
     assert [c for c in cities if c.lower().startswith(("жд ", "ж/д"))and "симф" in c.lower()] == ["ЖД Симферополь"]
+
+
+def test_region_mark_is_not_part_of_the_city_key():
+    assert city_key("Донецк ДНР") == city_key("Донецк (ДНР)") == city_key("Донецк, ДНР") == city_key("Донецк") == "донецк"
+    assert city_key("Луганск ЛНР") == "луганск"
+    assert city_key("ДНР") == "днр"  # само по себе — не пометка региона

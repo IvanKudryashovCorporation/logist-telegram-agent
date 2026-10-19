@@ -447,3 +447,21 @@ async def test_passengers_two_apart_are_different_trips(session, monkeypatch):
     await _post(-1004413141153, 2, dispatcher_tg_id=8924686498, dispatcher_username="ProPoisk_zakazov_bot")
 
     assert await _count(session) == 2
+
+
+# --- 6. Пометка региона у города («Донецк ДНР») ------------------------------------------------
+
+
+@pytest.mark.parametrize("first_to, second_to", [("Донецк", "Донецк ДНР"), ("Донецк ДНР", "Донецк"), ("Донецк (ДНР)", "Донецк, ДНР")])
+async def test_region_mark_does_not_split_one_trip(session, monkeypatch, first_to, second_to):
+    """Ростов → Донецк 8000 из двух групп: в одной «Донецк», в другой «Донецк ДНР» — один заказ, а не два."""
+    tomorrow = (now_msk_naive() + timedelta(days=1)).date().isoformat()
+    fields = dict(pickup_date=tomorrow, pickup_time="06:00", from_city="Ростов-на-Дону", client_price=8000,
+                  passengers=1)
+    _parse(monkeypatch, to_city=first_to, **fields)
+    first = await _post(-100222, 1, dispatcher_tg_id=11, dispatcher_username="dispatcher_a")
+    _parse(monkeypatch, to_city=second_to, **fields)
+    second = await _post(-1004413141153, 2, dispatcher_tg_id=12, dispatcher_username="dispatcher_b")
+
+    assert second == first
+    assert await _count(session) == 1
