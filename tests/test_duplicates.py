@@ -250,7 +250,7 @@ async def test_background_pass_cancels_a_repost_that_slipped_through(session, ma
                              dispatcher_username="UgtravelBot", client_phone=None, passengers=None)
     newer = await make_order(from_city="Гагра", to_city="Сочи", price="2700", pickup_at=pickup,
                              dispatcher_username="UgtravelBot", client_phone=None, passengers=None)
-    other = await make_order(from_city="Гагра", to_city="Сочи", price="2700", pickup_at=pickup,
+    other = await make_order(from_city="Гагра", to_city="Сочи", price="3000", pickup_at=pickup,
                              dispatcher_username="another_one", client_phone=None, passengers=None,
                              raw_text="Другой диспетчер, свой текст объявления про этот же маршрут")
     other.dispatcher_tg_id = 222  # фабрика ставит всем 111 — делаем другого диспетчера
@@ -462,6 +462,59 @@ async def test_region_mark_does_not_split_one_trip(session, monkeypatch, first_t
     first = await _post(-100222, 1, dispatcher_tg_id=11, dispatcher_username="dispatcher_a")
     _parse(monkeypatch, to_city=second_to, **fields)
     second = await _post(-1004413141153, 2, dispatcher_tg_id=12, dispatcher_username="dispatcher_b")
+
+    assert second == first
+    assert await _count(session) == 1
+
+
+# --- 7. Пояснение в скобках у города («Клименки (Белгородская область)») -----------------------
+
+
+@pytest.mark.parametrize("first_from, second_from", [
+    ("Клименки", "Клименки (Белгородская область)"),
+    ("Клименки (Белгородская область)", "Клименки"),
+])
+async def test_bracket_note_does_not_split_one_trip(session, monkeypatch, first_from, second_from):
+    """Клименки → Тамбов 22000 из двух групп: с пояснением области и без — один заказ, в любом порядке."""
+    fields = dict(pickup_date="2026-10-27", pickup_time="08:00", to_city="Тамбов", client_price=22000, passengers=6)
+    _parse(monkeypatch, from_city=first_from, **fields)
+    first = await _post(-100222, 1, dispatcher_tg_id=11, dispatcher_username="dispatcher_a")
+    _parse(monkeypatch, from_city=second_from, **fields)
+    second = await _post(-100333, 2, dispatcher_tg_id=12, dispatcher_username="dispatcher_b")
+
+    assert second == first
+    assert await _count(session) == 1
+
+
+# --- 8. Дефис и пробел в названии города («Ликино-Дулёво» / «Ликино дулево») -----------------------
+
+
+@pytest.mark.parametrize("first_from, second_from", [
+    ("Ликино дулево", "Ликино-Дулёво"),
+    ("Ликино-Дулёво", "Ликино дулево"),
+])
+async def test_hyphen_or_space_in_city_name_does_not_split_one_trip(session, monkeypatch, first_from, second_from):
+    """Ликино-Дулёво → Кондрово 8000 «в ближайшее время» из двух групп: с дефисом и без — один заказ."""
+    _parse(monkeypatch, from_city=first_from, to_city="Кондрово", client_price=8000, passengers=1)
+    first = await _post(-100222, 1, dispatcher_tg_id=11, dispatcher_username="dispatcher_a")
+    _parse(monkeypatch, from_city=second_from, to_city="Кондрово", client_price=8000, passengers=2)
+    second = await _post(-100333, 2, dispatcher_tg_id=12, dispatcher_username="dispatcher_b")
+
+    assert second == first
+    assert await _count(session) == 1
+
+
+# --- 9. Аэропорт вместо города («Рязань → Шереметьево» и «Рязань → Москва») ---------------------
+
+
+@pytest.mark.parametrize("first_to, second_to", [("Шереметьево", "Москва"), ("Москва", "Шереметьево")])
+async def test_airport_and_its_city_are_one_trip(session, monkeypatch, first_to, second_to):
+    tomorrow = (now_msk_naive() + timedelta(days=1)).date().isoformat()
+    fields = dict(pickup_date=tomorrow, pickup_time="16:30", from_city="Рязань", client_price=7000, passengers=2)
+    _parse(monkeypatch, to_city=first_to, **fields)
+    first = await _post(-100222, 1, dispatcher_tg_id=11, dispatcher_username="dispatcher_a")
+    _parse(monkeypatch, to_city=second_to, **fields)
+    second = await _post(-100333, 2, dispatcher_tg_id=12, dispatcher_username="dispatcher_b")
 
     assert second == first
     assert await _count(session) == 1

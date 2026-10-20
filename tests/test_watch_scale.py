@@ -153,3 +153,82 @@ async def test_flood_wait_pauses_the_whole_account(monkeypatch):
     await watcher._poll_session(object(), [_group(id=0), _group(id=1)], 0, asyncio.Event())
 
     assert [g for g, _ in started] == [0, 1]
+
+
+# --- Загруженные группы опрашиваются чаще, тихие реже ---------------------------------------------------
+
+
+def test_poll_every_depends_on_activity(monkeypatch):
+    monkeypatch.setattr(watcher.settings, "watch_hot_per_hour", 20)
+    monkeypatch.setattr(watcher.settings, "watch_warm_per_hour", 4)
+    monkeypatch.setattr(watcher.settings, "watch_warm_every", 2)
+    monkeypatch.setattr(watcher.settings, "watch_cold_every", 4)
+
+    assert watcher.poll_every(50) == 1
+    assert watcher.poll_every(20) == 1
+    assert watcher.poll_every(10) == 2
+    assert watcher.poll_every(0.5) == 4
+
+
+def test_schedule_polls_hot_groups_every_cycle_and_spreads_quiet_ones(monkeypatch):
+    monkeypatch.setattr(watcher.settings, "watch_adaptive", True)
+    monkeypatch.setattr(watcher.settings, "watch_cold_every", 4)
+    hot = _group(id=1, tg_chat_id=-101, last_message_id=5)
+    quiet = [_group(id=i, tg_chat_id=-100 - i, last_message_id=5) for i in range(10, 18)]
+    activity = {-101: 60.0}
+
+    polled_quiet = {group.id: 0 for group in quiet}
+    for cycle in range(8):
+        due = watcher.schedule([hot, *quiet], cycle, activity)
+        assert 1 in due  # загруженная — каждый круг
+        for group in quiet:
+            polled_quiet[group.id] += group.id in due
+        assert 0 < sum(1 for group in quiet if group.id in due) < len(quiet)  # тихие — не все сразу
+
+    assert set(polled_quiet.values()) == {2}  # каждая тихая — раз в 4 круга, то есть дважды за 8
+
+
+def test_never_polled_group_is_polled_at_once(monkeypatch):
+    monkeypatch.setattr(watcher.settings, "watch_adaptive", True)
+    fresh = _group(id=3, last_message_id=None)
+
+    assert 3 in watcher.schedule([fresh], 1, {})
+
+
+def test_adaptive_polling_can_be_switched_off(monkeypatch):
+    monkeypatch.setattr(watcher.settings, "watch_adaptive", False)
+    groups = [_group(id=i, last_message_id=5) for i in range(5)]
+
+    assert set(watcher.schedule(groups, 3, {})) == {0, 1, 2, 3, 4}
+
+
+async def test_rarely_polled_group_always_checks_edits_and_deletions(monkeypatch):
+    monkeypatch.setattr(watcher, "GROUP_GAP", 0)
+    monkeypatch.setattr(watcher.settings, "watch_slow_every", 5)
+    checks = {}
+
+    async def poll(client, group, check_changes=True):
+        checks[group.id] = check_changes
+        return {"new": 0, "edited": 0, "deleted": 0}
+
+    monkeypatch.setattr(watcher, "poll_group", poll)
+
+    # круг №1 не «медленный» (1 % 5 != 0): загруженная группа правки не проверяет, а тихая — проверяет
+    await watcher._poll_session(object(), [_group(id=1), _group(id=2)], 1, asyncio.Event(), {1: 1, 2: 4})
+
+    assert checks == {1: False, 2: True}
+
+
+async def test_activity_counts_messages_per_hour(session):
+    from app.models import ParseOutcome, ParseStat
+
+    now = datetime.now(timezone.utc)
+    stamp = now.replace(tzinfo=None)
+    for i in range(6):
+        session.add(ParseStat(chat_id=-100, message_id=i, outcome=ParseOutcome.ORDER, created_at=stamp - timedelta(minutes=10)))
+    session.add(ParseStat(chat_id=-200, message_id=1, outcome=ParseOutcome.NOT_ORDER, created_at=stamp - timedelta(hours=5)))
+    await session.commit()
+
+    activity = await watcher.activity_by_chat(2, now=now)
+
+    assert activity == {-100: 3.0}  # 6 сообщений за 2 часа; старое сообщение другой группы не считается

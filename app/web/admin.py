@@ -34,6 +34,7 @@ from app.models import (
     OrderStatus,
     PendingMessage,
     PendingStatus,
+    WorkGroup,
 )
 from app.parsing.llm_parser import cache_stats
 from app.services import billing, geo_health, notifications, reporting
@@ -74,10 +75,21 @@ async def _clarify_count() -> int:
         ).scalar_one()
 
 
+async def _groups_count() -> int:
+    """Сколько групп сейчас читает агент («Live · N групп» в шапке админки)."""
+    async with SessionLocal() as session:
+        return (
+            await session.execute(select(func.count(WorkGroup.id)).where(WorkGroup.is_active.is_(True)))
+        ).scalar_one()
+
+
 async def _render(request: Request, template: str, **context) -> HTMLResponse:
     return templates.TemplateResponse(
         template,
-        {"request": request, "admin_enabled": True, "clarify_count": await _clarify_count(), **context},
+        {
+            "request": request, "admin_enabled": True, "clarify_count": await _clarify_count(),
+            "groups_count": await _groups_count(), **context,
+        },
     )
 
 

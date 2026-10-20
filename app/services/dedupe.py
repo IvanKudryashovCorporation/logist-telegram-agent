@@ -33,6 +33,9 @@ async def cancel_duplicate_orders() -> int:
                 from_city=o.from_city, to_city=o.to_city, pickup_at=o.pickup_at,
                 phone=o.client_phone, passengers=o.passengers, created_at=o.created_at,
                 raw_text=o.raw_text, from_address=o.from_address, to_address=o.to_address,
+                price=float(o.client_price) if o.client_price is not None else None,
+                from_coords=(o.from_lat, o.from_lon) if o.from_lat is not None and o.from_lon is not None else None,
+                to_coords=(o.to_lat, o.to_lon) if o.to_lat is not None and o.to_lon is not None else None,
             )
             for o in rows
         ]

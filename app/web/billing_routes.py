@@ -348,6 +348,26 @@ async def about_page(request: Request):
     return templates.TemplateResponse("about.html", _base_context(request, counts) | _about_context())
 
 
+async def _partner_page(request: Request, template: str):
+    async with SessionLocal() as session:
+        counts = await queries.header_counts(session, "")
+    return templates.TemplateResponse(
+        template, _base_context(request, counts) | {"base_url": settings.public_base_url.rstrip("/")}
+    )
+
+
+@router.get("/for-group-owners", response_class=HTMLResponse)
+async def partner_owners_page(request: Request):
+    """Публичная страница для владельцев Telegram-групп: предложение о сотрудничестве и контакт."""
+    return await _partner_page(request, "partner_owners.html")
+
+
+@router.get("/for-dispatchers", response_class=HTMLResponse)
+async def partner_dispatchers_page(request: Request):
+    """Публичная страница для диспетчеров: предложение о сотрудничестве, как оформлять заказы, контакт."""
+    return await _partner_page(request, "partner_dispatchers.html")
+
+
 @router.get("/privacy", response_class=HTMLResponse)
 async def privacy_page(request: Request):
     """Политика обработки персональных данных (нужна платёжному провайдеру и по 152-ФЗ)."""

@@ -104,6 +104,7 @@
     }
     .app-name { font-weight: 700; font-size: 18px; }
     .brand {
+      margin-right: auto;
       display: flex;
       align-items: center;
       gap: 12px;
@@ -182,9 +183,9 @@
     }
     .tabs a:not(.active) .tab-count { background: var(--tab-count-bg); color: var(--tab-count-text); }
     .search-box {
+      display: none; /* поле поиска убрано из шапки; форма нужна для сортировки и фильтров */
       flex: 1;
       min-width: 200px;
-      display: flex;
       align-items: center;
       gap: 8px;
       background: var(--bg);
@@ -1099,3 +1100,41 @@ input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), select, t
 .site-foot-links { display: flex; flex-wrap: wrap; gap: 4px 18px; }
 .site-foot-links a { color: var(--muted); text-decoration: none; min-height: 32px; display: inline-flex; align-items: center; }
 .site-foot-links a:hover, .site-foot-links a:focus-visible { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
+
+/* Кнопки «Для владельцев групп» и «Для диспетчеров» в шапке: на телефоне скрыты (ссылки есть в подвале). */
+.partner-btn { order: 8; display: inline-flex; align-items: center; padding: 7px 14px; border: 1px solid var(--border);
+  border-radius: 999px; background: var(--card); color: var(--muted); font-size: 13px; font-weight: 600;
+  text-decoration: none; white-space: nowrap; }
+.partner-btn:hover, .partner-btn:focus-visible { border-color: var(--accent); color: var(--accent); }
+@media (max-width: 900px) { .partner-btn { display: none; } }
+
+/* ── Шапка: профиль квадратом (аватарка и ник), сортировка и фильтры в одну строку ── */
+.header-profile-tile {
+  display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  width: 64px; height: 56px; padding: 4px; border: 1px solid var(--border); border-radius: 12px;
+  background: var(--card); color: var(--muted); text-decoration: none; flex-shrink: 0; overflow: hidden;
+}
+.header-profile-tile:hover, .header-profile-tile.active { border-color: var(--accent); color: var(--text); }
+.hp-avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+.hp-avatar-fallback {
+  display: inline-flex; align-items: center; justify-content: center; background: var(--accent); color: #fff;
+  font-size: 14px; font-weight: 700;
+}
+.hp-avatar-fallback svg { width: 16px; height: 16px; }
+.hp-nick { max-width: 100%; font-size: 10.5px; font-weight: 600; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.toolbar-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+@media (max-width: 640px) {
+  .toolbar-row { flex-wrap: nowrap; width: 100%; }
+  .toolbar-row .sort-picker { flex: 1; min-width: 0; flex-wrap: nowrap; gap: 6px; }
+  .toolbar-row .sort-picker-label { display: none; }
+  .toolbar-row .sort-picker select { flex: 1; min-width: 0; width: 100%; padding: 8px 6px; font-size: 13px; }
+  .toolbar-row .filters-details { flex-shrink: 0; }
+  .header-top { margin-bottom: 8px; }
+  .header-controls { gap: 8px; }
+}
+
+/* Телефон: плашка подписки занимает всю свободную ширину строки, а квадрат профиля прижат вправо — без пустоты. */
+.header-profile-tile { margin-left: auto; }
+@media (max-width: 640px) {
+  .header-top .sub-badge { flex: 1 0 auto; justify-content: center; height: 56px; border-radius: 12px; }
+}

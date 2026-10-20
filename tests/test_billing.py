@@ -1482,3 +1482,19 @@ async def test_site_is_installable_as_app(client):
     assert worker.status_code == 200 and "javascript" in worker.headers["content-type"]
     assert worker.headers["service-worker-allowed"] == "/" and "fetch" in worker.text
     assert 'rel="manifest"' in page and 'name="theme-color"' in page
+
+
+async def test_partner_pages_have_contact_and_are_public(client):
+    robots = (await client.get("/robots.txt")).text
+    sitemap = (await client.get("/sitemap.xml")).text
+    contact = f"https://t.me/{settings.owner_contact_username.strip().lstrip('@')}"
+
+    for path, title in (("/for-group-owners", "Для владельцев групп"), ("/for-dispatchers", "Для диспетчеров")):
+        page = await client.get(path)
+        assert page.status_code == 200
+        assert title in page.text and "готовы к сотрудничеству" in page.text and contact in page.text
+        assert 'content="index, follow"' in page.text
+        assert f"Allow: {path}$" in robots and f"{path}</loc>" in sitemap
+
+    home = (await client.get("/about")).text
+    assert 'href="/for-group-owners"' in home and 'href="/for-dispatchers"' in home  # кнопки в шапке и подвале

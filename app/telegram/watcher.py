@@ -24,12 +24,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from telethon.errors import FloodWaitError
 
 from app.config import settings
 from app.db.base import SessionLocal
-from app.models import HIDDEN_STATUSES, Order, WorkGroup
+from app.models import HIDDEN_STATUSES, Order, ParseStat, WorkGroup
 from app.telegram.work_group import _handle_deleted, _handle_message
 
 log = logging.getLogger("agent.watcher")
@@ -43,6 +43,8 @@ EDIT_WINDOW = 40
 EDIT_POLLS = 3
 #: Пауза после опроса группы, секунд: не частим запросами (групп опрашивается несколько одновременно).
 GROUP_GAP = 0.15
+#: Как часто пересчитываем активность групп (по журналу разбора), секунд.
+ACTIVITY_REFRESH_SECONDS = 300
 
 @dataclass(frozen=True)
 class WatchGroup:
@@ -180,6 +182,45 @@ async def poll_group(
     return {"new": len(new), "edited": edited, "deleted": deleted}
 
 
+async def activity_by_chat(hours: int, *, now: Optional[datetime] = None) -> dict[int, float]:
+    """Сообщений в час по каждой группе за последние ``hours`` часов (по журналу разбора)."""
+    hours = max(1, hours)
+    since = (now or datetime.now(timezone.utc)).replace(tzinfo=None) - timedelta(hours=hours)
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(ParseStat.chat_id, func.count())
+                .where(ParseStat.created_at >= since, ParseStat.chat_id.is_not(None))
+                .group_by(ParseStat.chat_id)
+            )
+        ).all()
+    return {chat_id: count / hours for chat_id, count in rows}
+
+
+def poll_every(per_hour: float) -> int:
+    """Раз в сколько кругов опрашивать группу с такой активностью: загруженные — каждый круг, тихие — реже."""
+    if per_hour >= settings.watch_hot_per_hour:
+        return 1
+    if per_hour >= settings.watch_warm_per_hour:
+        return max(1, settings.watch_warm_every)
+    return max(1, settings.watch_cold_every)
+
+
+def schedule(groups: list[WatchGroup], cycle: int, activity: dict[int, float]) -> dict[int, int]:
+    """Какие группы опрашиваем в этом круге: ``{id группы: раз в сколько кругов её опрашивают}``.
+
+    Тихие группы раскладываются по разным кругам (по номеру группы), чтобы нагрузка была ровной, а не волной
+    раз в несколько кругов. Группа без истории (ни разу не опрошена) идёт сразу."""
+    if not settings.watch_adaptive:
+        return {group.id: 1 for group in groups}
+    due: dict[int, int] = {}
+    for group in groups:
+        every = poll_every(activity.get(group.tg_chat_id, 0.0))
+        if group.last_message_id is None or every == 1 or (cycle + group.id) % every == 0:
+            due[group.id] = every
+    return due
+
+
 def split_by_session(groups: list[WatchGroup]) -> dict[Optional[str], list[WatchGroup]]:
     """Группы по аккаунтам: каждый аккаунт опрашивается своей очередью, параллельно с другими."""
     grouped: dict[Optional[str], list[WatchGroup]] = {}
@@ -188,7 +229,9 @@ def split_by_session(groups: list[WatchGroup]) -> dict[Optional[str], list[Watch
     return grouped
 
 
-async def _poll_session(client, groups: list[WatchGroup], cycle: int, stop_event: asyncio.Event) -> None:
+async def _poll_session(
+    client, groups: list[WatchGroup], cycle: int, stop_event: asyncio.Event, every: Optional[dict[int, int]] = None
+) -> None:
     """Один круг по группам одного аккаунта: по ``watch_concurrency`` групп одновременно.
 
     Лимит Telegram (FloodWait) касается всего аккаунта: остальные группы ждут вместе с той, где он случился."""
@@ -206,7 +249,10 @@ async def _poll_session(client, groups: list[WatchGroup], cycle: int, stop_event
             if wait > 0:
                 await asyncio.sleep(wait)
             try:
-                counts = await poll_group(client, group, check_changes=check_changes)
+                # Редко опрашиваемые группы проверяем на правки и удаления при каждом опросе: иначе правка
+                # успела бы выйти из окна поиска раньше следующей проверки.
+                rare = (every or {}).get(group.id, 1) > 1
+                counts = await poll_group(client, group, check_changes=check_changes or rare)
                 if any(counts.values()):
                     log.info("«%s»: %s", group.title, counts)
             except FloodWaitError as exc:
@@ -225,6 +271,8 @@ async def run_watch_worker(clients: dict, stop_event: asyncio.Event) -> None:
     interval = max(15, settings.watch_poll_seconds)
     log.info("Наблюдение за группами без вступления: круг не чаще раза в %s с", interval)
     cycle = 0
+    activity: dict[int, float] = {}
+    activity_at = float("-inf")
     while not stop_event.is_set():
         started = asyncio.get_running_loop().time()
         try:
@@ -232,19 +280,30 @@ async def run_watch_worker(clients: dict, stop_event: asyncio.Event) -> None:
         except Exception:
             log.exception("Не удалось получить список групп для наблюдения")
             groups = []
+        loop_time = asyncio.get_running_loop().time()
+        if settings.watch_adaptive and loop_time - activity_at > ACTIVITY_REFRESH_SECONDS:
+            try:
+                activity = await activity_by_chat(settings.watch_activity_hours)
+                activity_at = loop_time
+            except Exception:
+                log.exception("Не удалось посчитать активность групп: опрашиваем все группы каждый круг")
+                activity, activity_at = {}, loop_time
+        due = schedule(groups, cycle, activity)
+        total = len(groups)
+        groups = [group for group in groups if group.id in due]
         queues = []
         for name, session_groups in split_by_session(groups).items():
             client = clients.get(name)
             if client is None:
                 log.warning("Нет клиента для сессии %s — групп пропущено: %s", name, len(session_groups))
                 continue
-            queues.append(_poll_session(client, session_groups, cycle, stop_event))
+            queues.append(_poll_session(client, session_groups, cycle, stop_event, due))
         if queues:
             await asyncio.gather(*queues)
         cycle += 1
         spent = asyncio.get_running_loop().time() - started
         if spent > interval * 2 or cycle % 90 == 0:
-            log.info("Круг опроса №%s: %s групп за %.1f с (интервал %s с)", cycle, len(groups), spent, interval)
+            log.info("Круг опроса №%s: %s из %s групп за %.1f с (интервал %s с)", cycle, len(groups), total, spent, interval)
         pause = max(0.0, interval - spent)
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=pause)

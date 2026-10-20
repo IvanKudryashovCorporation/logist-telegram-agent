@@ -117,3 +117,39 @@ async def test_bot_taken_edit_without_order_is_not_spam(monkeypatch):
     async with SessionLocal() as session:
         stat = (await session.execute(select(ParseStat).where(ParseStat.message_id == 9001))).scalars().one()
     assert stat.error == "closed_lock"
+
+
+async def test_contact_is_taken_from_full_message_when_snippet_lacks_it(monkeypatch):
+    """Модель вернула фрагмент без строки «Диспетчер»: контакт всё равно берётся из всего сообщения."""
+    from sqlalchemy import select
+
+    from app.models import Order
+    from app.parsing.llm_parser import ParseResult
+    from app.parsing.schema import ParsedOrder
+    from app.telegram import work_group
+
+    async def fake_parse_orders(text, **kwargs):
+        return ParseResult(orders=[ParsedOrder(from_city="Трактовое", to_city="Краснодар", client_price=19000,
+                                               pickup_date="2026-10-20", pickup_time="06:00",
+                                               raw_snippet="📍 Трактовое → Краснодар\n💰 19 000 ₽")])
+
+    monkeypatch.setattr(work_group, "parse_orders", fake_parse_orders)
+    monkeypatch.setattr(work_group.settings, "prefilter_enabled", False)
+    text = "✅ Заказ  ·  20.10 в 06:00\n📍 Трактовое → Краснодар\n💰 19 000 ₽\n👤 Диспетчер: @TAXI_161_RND"
+
+    ids = await work_group.upsert_order_text(chat_id=-1004413141153, message_id=5, text=text)
+
+    async with SessionLocal() as session:
+        order = (await session.execute(select(Order).where(Order.id == ids[0]))).scalar_one()
+    assert order.contact_username == "TAXI_161_RND"
+    assert order.dispatcher_username is None  # бот-публикатор диспетчером не записывается
+
+
+def test_bot_sender_is_not_a_dispatcher():
+    from types import SimpleNamespace
+
+    from app.telegram.work_group import dispatcher_identity
+
+    assert dispatcher_identity(SimpleNamespace(id=1, username="ProPoisk_zakazov_bot", bot=True)) == (None, None)
+    assert dispatcher_identity(SimpleNamespace(id=2, username="ivan")) == (2, "ivan")
+    assert dispatcher_identity(None) == (None, None)

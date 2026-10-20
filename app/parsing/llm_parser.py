@@ -45,6 +45,7 @@ import httpx
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
 
 from app.config import settings
+from app.parsing.city_check import unsupported_cities
 from app.parsing.price import extract_price
 from app.parsing.schema import PARSE_ORDERS_TOOL_OPENAI, ParsedOrder
 from app.timeutil import now_msk_naive
@@ -458,11 +459,44 @@ async def parse_orders(text: str, *, urgent: bool = True, priority: bool = False
         _inflight.pop(key, None)
 
 
+def _unsupported(result: ParseResult, text: str) -> list[str]:
+    cities = [city for order in result.orders for city in (order.from_city, order.to_city)]
+    return unsupported_cities(cities, text)
+
+
+async def _verify_cities(result: ParseResult, text: str, today: str) -> ParseResult:
+    """Модель не должна подменять город, которого нет в тексте («валнаваха» → «Волгоград»).
+
+    Если города из ответа в тексте не видны, текст разбирает второй провайдер; когда и он не подтверждает город,
+    название стирается: заказ уйдёт в «Нужно уточнить», а не в ленту с чужим маршрутом."""
+    bad = _unsupported(result, text)
+    if not bad:
+        return result
+    log.warning("Город из ответа модели не виден в тексте: %s — проверяем вторым провайдером. Текст: %s",
+                bad, " ".join(text[:120].split()))
+    final = result
+    if _fallback_client is not None and result.model == settings.llm_model:
+        try:
+            second = await _parse_with(text, today, fallback=True)
+        except ParseUnavailable:
+            second = None
+        if second is not None and len(_unsupported(second, text)) < len(bad):
+            final = second
+            bad = _unsupported(second, text)
+    for order in final.orders:
+        for field in ("from_city", "to_city"):
+            if getattr(order, field) in bad:
+                log.warning("Город «%s» не подтверждён текстом заявки — стёрт, заказ уйдёт на уточнение", getattr(order, field))
+                setattr(order, field, None)
+    _cache.put(text, final)
+    return final
+
+
 async def _parse_uncached(text: str, urgent: bool = True, priority: bool = False) -> ParseResult:
     # Диспетчеры пишут «сегодня» по Москве; с 00:00 до 03:00 МСК на сервере (UTC) ещё вчера.
     today = now_msk_naive().date().isoformat()
     try:
-        return await _parse_with(text, today, fallback=False, priority=priority)
+        return await _verify_cities(await _parse_with(text, today, fallback=False, priority=priority), text, today)
     except ParseUnavailable as primary_error:
         if _fallback_client is None:
             raise
@@ -470,7 +504,7 @@ async def _parse_uncached(text: str, urgent: bool = True, priority: bool = False
             raise  # несрочное сообщение подождёт: основной провайдер просто просит притормозить
         log.warning("Основной LLM недоступен (%s) — пробуем резервный %s", primary_error, settings.llm_fallback_model)
         try:
-            return await _parse_with(text, today, fallback=True)
+            return await _verify_cities(await _parse_with(text, today, fallback=True), text, today)
         except ParseUnavailable as fallback_error:
             raise ParseUnavailable(f"основной: {primary_error}; резервный: {fallback_error}") from fallback_error
 

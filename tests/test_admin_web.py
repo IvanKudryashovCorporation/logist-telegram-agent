@@ -880,3 +880,24 @@ async def test_groups_page_links_public_and_joined_private_groups(session):
     assert rows["Публичная"] == "https://t.me/pub_group"
     assert rows["Закрытая"] == "https://t.me/c/2222222222"
     assert rows["Обычная группа"] is None
+
+
+async def test_admin_has_dark_theme_switch(client, monkeypatch):
+    """Админка подключает theme.js (тема общая с сайтом), у неё есть тёмная палитра и переключатель."""
+    from pathlib import Path
+
+    css = (Path(__file__).resolve().parent.parent / "app" / "web" / "static" / "admin.css").read_text(encoding="utf-8")
+    base = (Path(__file__).resolve().parent.parent / "app" / "web" / "templates" / "admin_base.html").read_text(encoding="utf-8")
+
+    assert ':root[data-theme="dark"]' in css and "color-scheme: dark" in css
+    assert "theme.js" in base and "adminThemeToggle" in base
+    assert "#fff" not in css.split(':root[data-theme="dark"]')[1].split("}")[1]  # цвета в стилях — через переменные
+
+
+async def test_admin_header_shows_live_groups_count(client, session, make_order):
+    await _login(client)
+
+    page = await client.get("/admin")
+
+    assert page.status_code == 200 and "Live ·" in page.text
+    assert "admin.css?v=" in page.text and "theme.js?v=" in page.text  # версия в адресе: браузер не держит старые стили

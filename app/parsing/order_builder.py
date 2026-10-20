@@ -138,9 +138,16 @@ def has_critical_gaps(order: Order) -> bool:
     return not (order.from_city and order.to_city) or order.client_price is None
 
 
-def apply_parsed_fields(order: Order, parsed: ParsedOrder) -> None:
-    """Переносит поля из ParsedOrder в Order и выставляет статус по полноте данных."""
-    order.contact_username = extract_contact_username(order.raw_text) or order.contact_username
+def apply_parsed_fields(order: Order, parsed: ParsedOrder, source_text: Optional[str] = None) -> None:
+    """Переносит поля из ParsedOrder в Order и выставляет статус по полноте данных.
+
+    ``source_text`` — полный текст сообщения. Контакт ищем сначала во фрагменте заявки, а если модель вернула
+    фрагмент без него («📍 A → Б, 💰 19 000 ₽»), то во всём сообщении: строка «Диспетчер: @…» бывает ниже фрагмента."""
+    order.contact_username = (
+        extract_contact_username(order.raw_text)
+        or (extract_contact_username(source_text) if source_text else None)
+        or order.contact_username
+    )
     order.pickup_at = resolve_pickup_at(parsed.pickup_date, parsed.pickup_time, order.pickup_at)
     # Нет времени подачи — заказ «в ближайшее время» (сейчас, «3ч», «в течение
     # часа» или время просто не названо). Названное время снимает метку: правка

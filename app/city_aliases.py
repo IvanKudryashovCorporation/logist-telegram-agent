@@ -219,6 +219,13 @@ def canonical_city_variants(raw: str) -> list[str]:
         if key and key not in seen:
             seen.add(key)
             variants.append(key)
+        # «Ликино-Дулёво» и «Ликино Дулёво» — одно место: в базе ключ записан так, как написал диспетчер,
+        # поэтому ищем обе формы (дефис и пробел).
+        if key and "(" not in key:
+            for alt in (key.replace("-", " "), key.replace(" ", "-")):
+                if alt not in seen:
+                    seen.add(alt)
+                    variants.append(alt)
 
     _add(term)
     canonical = expand_city_term(term)
@@ -228,6 +235,28 @@ def canonical_city_variants(raw: str) -> list[str]:
         if city_key(alias_canonical) == canonical_key:
             _add(alias)
     return variants
+
+
+#: Аэропорты и районы, которые в заявках называют вместо города («Рязань → Шереметьево» и «Рязань → Москва» —
+#: один рейс). Нужны только для поиска повторов заявки; в подсказках и фильтрах это отдельные места.
+PLACE_TO_CITY: dict[str, str] = {
+    "шереметьево": "москва", "домодедово": "москва", "внуково": "москва", "жуковский": "москва",
+    "быково": "москва", "пулково": "санкт-петербург", "кольцово": "екатеринбург", "толмачево": "новосибирск",
+    "платов": "ростов-на-дону", "курумоч": "самара", "пашковский": "краснодар",
+    "минеральные воды": "минеральные воды", "витязево": "анапа",
+}
+
+
+def related_place_keys(keys: list[str]) -> list[str]:
+    """Ключи мест того же рейса: аэропорт ↔ его город («шереметьево» ↔ «москва»), для поиска повторов заявки."""
+    related: list[str] = []
+    for key in keys:
+        group = {key}
+        if key in PLACE_TO_CITY:
+            group.add(PLACE_TO_CITY[key])
+        group.update(place for place, city in PLACE_TO_CITY.items() if city == key)
+        related.extend(item for item in group if item not in keys and item not in related)
+    return related
 
 
 #: Полные названия городов из справочника — базовый список для автодополнения

@@ -17,12 +17,15 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Iterable, Optional
 
-from app.city_aliases import city_key, expand_city_term
+from app.city_aliases import city_key, expand_city_term, related_place_keys
+from app.geo import haversine_km
 
 #: Подача у двух повторов расходится не больше чем на это.
 TIME_TOLERANCE = timedelta(hours=3)
 #: Заявки без времени подачи считаются повтором, если опубликованы в течение этого срока.
 ASAP_WINDOW = timedelta(hours=24)
+#: Две точки ближе этого считаются одним местом (по координатам): «Ликино-Дулёво» и «Ликино дулево» с разным написанием.
+NEAR_KM = 25.0
 #: Короче этого текст слишком общий, чтобы по совпадению текста считать заявки одной.
 _MIN_TEXT_LENGTH = 15
 #: Насколько похожи тексты (0..1), чтобы считать их одним сообщением.
@@ -43,6 +46,9 @@ class LiveOrder:
     raw_text: Optional[str]
     from_address: Optional[str] = None
     to_address: Optional[str] = None
+    price: Optional[float] = None
+    from_coords: Optional[tuple[float, float]] = None
+    to_coords: Optional[tuple[float, float]] = None
 
 
 def stem(city: Optional[str]) -> str:
@@ -129,13 +135,40 @@ def is_repost(older: LiveOrder, newer: LiveOrder) -> bool:
     return difflib.SequenceMatcher(None, text_a, text_b).ratio() >= _SAME_TEXT_RATIO
 
 
+def _same_or_near_place(city_a, city_b, coords_a, coords_b) -> bool:
+    """То же место по названию, как аэропорт и его город («Шереметьево» и «Москва») или рядом по координатам."""
+    if same_place(city_a, city_b):
+        return True
+    key_a, key_b = city_key(expand_city_term(city_a or "")), city_key(expand_city_term(city_b or ""))
+    if key_a and key_b and (key_b in related_place_keys([key_a]) or key_a in related_place_keys([key_b])):
+        return True
+    return bool(coords_a and coords_b and haversine_km(coords_a, coords_b) <= NEAR_KM)
+
+
+def is_same_offer(older: LiveOrder, newer: LiveOrder) -> bool:
+    """Тот же рейс, опубликованный по-разному (другой диспетчер, другой текст, другое написание места).
+
+    Условия: цена одна и та же, подача в пределах :data:`TIME_TOLERANCE`, начало и конец маршрута — те же места
+    (по названию, как аэропорт и город или рядом по координатам), клиенты не разные. Та же проверка стоит при приёме
+    сообщения; здесь она страхует от случаев, которые проскочили мимо неё."""
+    if older.price is None or newer.price is None or older.price != newer.price:
+        return False
+    if not same_time(older, newer) or clearly_different_clients(older, newer):
+        return False
+    if not _same_or_near_place(older.from_city, newer.from_city, older.from_coords, newer.from_coords):
+        return False
+    if not _same_or_near_place(older.to_city, newer.to_city, older.to_coords, newer.to_coords):
+        return False
+    return _same_addresses_inside_one_city(older, newer)
+
+
 def duplicate_ids(orders: Iterable[LiveOrder]) -> list[int]:
     """id заявок, которые надо отменить как повторы более новых (остаётся самая новая)."""
     ordered = sorted(orders, key=lambda order: order.id or 0)
     cancelled: set[int] = set()
     for index, older in enumerate(ordered):
         for newer in ordered[index + 1:]:
-            if is_repost(older, newer):
+            if is_repost(older, newer) or is_same_offer(older, newer):
                 cancelled.add(older.id)
                 break
     return sorted(cancelled)

@@ -18,6 +18,7 @@
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -25,7 +26,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from telethon import TelegramClient, events
 
-from app.city_aliases import canonical_city_variants, city_key, expand_city_term
+from app.city_aliases import canonical_city_variants, city_key, expand_city_term, related_place_keys
 from app.config import settings
 from app.db.base import SessionLocal
 from app.dedupe_rules import (
@@ -102,6 +103,11 @@ def _city_match_clauses(column, raw_city: str):
     variants = canonical_city_variants(raw_city)
     if not variants:
         return None
+    # «Клименки (Белгородская область)» и «Клименки» — одно место: ищем и по названию без пояснения в скобках,
+    # иначе совпадение работало бы только в одну сторону (короткое находило длинное, а длинное — нет).
+    bases = (re.sub(r"\s*\(.*$", "", variant).strip() for variant in variants)
+    variants = list(dict.fromkeys([*variants, *(base for base in bases if base)]))
+    variants += related_place_keys(variants)  # «Шереметьево» ↔ «Москва»: рейс в аэропорт и в город — один
     clauses = [column.in_(variants)]
     clauses += [column.contains(v) for v in variants if len(v) >= 4]
     return or_(*clauses)
@@ -720,7 +726,7 @@ async def _save_orders(
             order.text_key = text_key(text)
             order.content_key = content_key(text)
 
-        apply_parsed_fields(order, parsed)
+        apply_parsed_fields(order, parsed, source_text=text)
         try:
             await db.flush()
         except IntegrityError:
@@ -802,6 +808,14 @@ def register_work_group_handlers(client: TelegramClient, chat_ids: list[int]) ->
         await _handle_deleted(event.chat_id, event.deleted_ids)
 
 
+def dispatcher_identity(sender) -> tuple[Optional[int], Optional[str]]:
+    """``(telegram_id, @username)`` автора для заявки. У бота-публикатора («PRO все заказы» и ему подобных) их нет:
+    «написать боту» заказ не берёт, настоящий диспетчер указан в тексте («Диспетчер: @…»)."""
+    if sender is None or getattr(sender, "bot", False):
+        return None, None
+    return getattr(sender, "id", None), getattr(sender, "username", None)
+
+
 async def _handle_message(message, is_edit: bool) -> None:
     """Точка входа для события Telethon.
 
@@ -828,12 +842,13 @@ async def _handle_message(message, is_edit: bool) -> None:
 
     try:
         sender = await message.get_sender()
+        dispatcher_tg_id, dispatcher_username = dispatcher_identity(sender)
         await upsert_order_text(
             chat_id=message.chat_id,
             message_id=message.id,
             text=text,
-            dispatcher_tg_id=getattr(sender, "id", None),
-            dispatcher_username=getattr(sender, "username", None),
+            dispatcher_tg_id=dispatcher_tg_id,
+            dispatcher_username=dispatcher_username,
             is_edit=is_edit,
         )
     except Exception as exc:

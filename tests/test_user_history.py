@@ -78,3 +78,22 @@ async def test_new_visit_is_recorded_once_per_half_hour(client, monkeypatch):
         visits = (await session.execute(
             select(UserEvent).where(UserEvent.telegram_id == TG_ID, UserEvent.kind == user_events.VISIT))).scalars().all()
     assert len(visits) == 1
+
+
+async def test_header_has_no_search_box_or_live_badge_and_shows_profile_tile(client, monkeypatch):
+    monkeypatch.setattr(settings, "telegram_login_bot_token", BOT_TOKEN)
+    monkeypatch.setattr(settings, "telegram_login_bot_username", "podacha_bot")
+    async with SessionLocal() as session:
+        session.add(Driver(telegram_id=TG_ID, first_name="Иван", username="ivan_driver",
+                           photo_url="https://t.me/i/userpic/320/ivan.jpg", trial_ends_at=now_utc_naive() + timedelta(days=5)))
+        await session.commit()
+    cookies = {DRIVER_SESSION_COOKIE: driver_session_cookie_value(TG_ID)}
+
+    guest = (await client.get("/")).text
+    page = (await client.get("/", cookies=cookies)).text
+
+    for html in (guest, page):
+        assert "Город, телефон или цена" not in html  # поле поиска убрано
+        assert "live-badge" not in html and "Live ·" not in html  # «Live» перенесён в админку
+        assert 'id="sortSelect"' in html and 'id="filtersDetails"' in html and 'class="toolbar-row"' in html
+    assert 'class="header-profile-tile' in page and "ivan_driver" in page and "userpic/320/ivan.jpg" in page

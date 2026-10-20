@@ -379,6 +379,20 @@ async def header_counts(session: AsyncSession, token: str, telegram_id: Optional
         ).scalars().all()
         filters_count = len(errors)
         filters_error = next((error for error in errors if error), None)
+    profile = None
+    if telegram_id is not None:
+        row = (
+            await session.execute(
+                select(Driver.username, Driver.first_name, Driver.last_name, Driver.photo_url).where(
+                    Driver.telegram_id == telegram_id
+                )
+            )
+        ).first()
+        if row is not None:
+            username, first_name, last_name, photo_url = row
+            full_name = " ".join(part for part in (first_name, last_name) if part)
+            nick = username or first_name or full_name or "Профиль"
+            profile = {"nick": nick, "photo": photo_url, "initial": (nick or "?")[:1].upper()}
     # Плашка «Дней подписки: N»: нужна только вошедшему водителю при включённой подписке.
     subscription = await billing.subscription_for(session, telegram_id)
     bell = await notifications.bell_for(session, telegram_id)
@@ -389,6 +403,7 @@ async def header_counts(session: AsyncSession, token: str, telegram_id: Optional
         "filters_count": filters_count,
         "filters_error": filters_error,
         "subscription": subscription,
+        "profile": profile,
         "notifications": bell.items,
         "notifications_unread": bell.unread,
         "notifications_seen": bell.seen,

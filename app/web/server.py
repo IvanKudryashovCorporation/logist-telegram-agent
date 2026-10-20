@@ -41,7 +41,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 _DOCS_DISABLED = {"docs_url": None, "redoc_url": None, "openapi_url": None}
 
 #: Закрыто всё, кроме страницы о сервисе и оферты: в ленте телефоны клиентов и аккаунты диспетчеров.
-_PUBLIC_PAGES = ("/about", "/offer", "/privacy")
+_PUBLIC_PAGES = ("/about", "/offer", "/privacy", "/for-group-owners", "/for-dispatchers")
 #: Иконки сайта: без доступа к ним поисковик не может скачать значок и показывает в выдаче глобус.
 _PUBLIC_ICONS = ("/static/favicon.png", "/static/apple-touch-icon.png", "/static/logo.png")
 

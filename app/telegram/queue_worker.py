@@ -25,7 +25,7 @@ from app.parsing import stats as parse_stats
 from app.parsing.llm_parser import text_hash
 from app.services.notify import notifier
 from app.telegram import pending as pending_queue
-from app.telegram.work_group import upsert_order_text
+from app.telegram.work_group import dispatcher_identity, upsert_order_text
 
 log = logging.getLogger("agent.queue_worker")
 
@@ -97,8 +97,8 @@ async def process_one(client: TelegramClient, pending_id: int) -> bool:
             chat_id=chat_id,
             message_id=message_id,
             text=text,
-            dispatcher_tg_id=getattr(sender, "id", None),
-            dispatcher_username=getattr(sender, "username", None),
+            dispatcher_tg_id=dispatcher_identity(sender)[0],
+            dispatcher_username=dispatcher_identity(sender)[1],
             is_edit=is_edit,
             sent_at=_naive_utc(getattr(message, "date", None)),
             urgent=False,
