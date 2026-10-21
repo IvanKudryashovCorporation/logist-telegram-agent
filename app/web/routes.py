@@ -514,7 +514,15 @@ async def order_detail(request: Request, order_id: int, back: str = ""):
         # тоже пуст — без этой проверки гость считался бы «хозяином» любого
         # свободного заказа и видел бы телефон клиента.
         is_mine = bool(token) and order.taken_by_token == token
-        if order.status in HIDDEN_STATUSES and not is_mine:
+        # Админ видит любой заказ целиком — и снятый, и уже взятый другим.
+        # Действий (договориться, написать) в этом режиме нет: карточка нужна
+        # для разбора, а не чтобы действовать от имени водителя.
+        admin_view = (
+            is_admin(request)
+            and not is_mine
+            and (order.status in HIDDEN_STATUSES or bool(order.taken_by_token))
+        )
+        if order.status in HIDDEN_STATUSES and not is_mine and not admin_view:
             # Протухшая/снятая/закрытая заявка пропала из ленты — по прямой
             # ссылке её тоже не показываем. Свою историю водитель видит.
             gone = templates.TemplateResponse(
@@ -528,11 +536,11 @@ async def order_detail(request: Request, order_id: int, back: str = ""):
         link = dispatcher_link(order, group_username=group_name)
         # Телефон/имя клиента готовим здесь, а не в шаблоне: шаблон не должен
         # знать, кому разрешено видеть персональные данные.
-        phone = client_phone_for(order, is_owner=is_mine)
-        client_name = client_name_for(order, is_owner=is_mine)
+        phone = client_phone_for(order, is_owner=is_mine or admin_view)
+        client_name = client_name_for(order, is_owner=is_mine or admin_view)
         # Оригинал заявки тоже содержит телефон и имя — показывать его
         # посторонним без вымарывания значит обойти маскирование целиком.
-        raw_text = redact_raw_text(order, is_owner=is_mine)
+        raw_text = redact_raw_text(order, is_owner=is_mine or admin_view)
 
     html = templates.TemplateResponse(
         "order_detail.html",
@@ -540,6 +548,7 @@ async def order_detail(request: Request, order_id: int, back: str = ""):
         | {
             "order": order,
             "is_mine": is_mine,
+            "admin_view": admin_view,
             "is_taken_by_someone_else": bool(order.taken_by_token) and not is_mine,
             "dispatcher_url": link,
             "group_is_public": bool(group_name),

@@ -479,6 +479,22 @@ async def test_closed_order_page_is_gone_for_strangers(client, make_order, statu
     assert "Написать диспетчеру" not in response.text
 
 
+@pytest.mark.parametrize(
+    "status", [OrderStatus.EXPIRED, OrderStatus.CANCELLED, OrderStatus.AGREED]
+)
+async def test_closed_order_page_is_open_for_admin(client, make_order, monkeypatch, status):
+    monkeypatch.setattr("app.web.routes.is_admin", lambda request: True)
+    order = await make_order(status=status)
+    _as_driver(client, TOKEN_B)
+
+    response = await client.get(f"/orders/{order.id}")
+
+    assert response.status_code == 200
+    assert "Режим админа" in response.text
+    assert "больше не доступен" not in response.text
+    assert "Договорился с диспетчером" not in response.text
+
+
 async def test_closed_order_stays_visible_in_owners_history(client, make_order):
     order = await make_order(status=OrderStatus.EXPIRED, taken_by_token=TOKEN_A)
     _as_driver(client, TOKEN_A)
