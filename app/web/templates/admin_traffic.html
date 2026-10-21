@@ -1,0 +1,131 @@
+{% extends "admin_base.html" %}
+{% block title %}Трафик — админка «Лента заказов»{% endblock %}
+
+{% block content %}
+<div class="metrics">
+  <div class="metric">
+    <div class="metric-value">{{ t.total }}</div>
+    <div class="metric-label">заходов за {{ t.days }} дн.</div>
+  </div>
+  <div class="metric">
+    <div class="metric-value">{{ t.visitors }}</div>
+    <div class="metric-label">посетителей (по дням)</div>
+  </div>
+  <div class="metric ok">
+    <div class="metric-value">{{ t.new_users }}</div>
+    <div class="metric-label">новых регистраций</div>
+  </div>
+  <div class="metric">
+    <div class="metric-value">{{ t.logged_in }}</div>
+    <div class="metric-label">заходов уже вошедших</div>
+  </div>
+  <div class="metric">
+    <div class="metric-value">{{ t.devices.mobile }} / {{ t.devices.desktop }} / {{ t.devices.telegram }}</div>
+    <div class="metric-label">телефон / компьютер / Telegram</div>
+  </div>
+</div>
+
+<div class="period">
+  Период:
+  {% for option in [1, 7, 14, 30, 90] %}
+    <a href="/admin/traffic?days={{ option }}" class="{{ 'current' if option == t.days else '' }}">{{ option }} дн.</a>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <h2>Откуда приходят · {{ t.days }} дн.</h2>
+  <p class="muted">
+    Заход — первая страница после паузы в полчаса. Источник берётся из метки в ссылке (<code>?utm_source=…</code>,
+    <code>?src=…</code>), затем из сайта, с которого перешли, затем из браузера (встроенный браузер Telegram);
+    остальное — «прямой заход». Роботы не считаются. Данные копятся с момента включения сбора.
+    Регистрации отнесены к источнику по IP — приблизительно.
+  </p>
+  {% if t.rows %}
+    <table>
+      <thead><tr>
+        <th>Источник</th><th class="num">Заходов</th><th class="num">Доля</th><th class="num">Посетителей</th>
+        <th class="num">Регистраций</th><th class="num" title="Регистраций на заход">Конверсия</th><th></th>
+      </tr></thead>
+      <tbody>
+        {% for r in t.rows %}
+          <tr>
+            <td>{{ source_label(r.source) }}</td>
+            <td class="num"><b>{{ r.sessions }}</b></td>
+            <td class="num">{{ '%.0f'|format(r.share * 100) }}%</td>
+            <td class="num">{{ r.visitors }}</td>
+            <td class="num">{{ r.signups or '—' }}</td>
+            <td class="num">{% if r.conversion %}{{ '%.1f'|format(r.conversion * 100) }}%{% else %}—{% endif %}</td>
+            <td class="bar-cell"><div class="bar" style="width: {{ (r.share * 100)|round(1) }}%"></div></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if t.signups_unknown %}
+      <p class="muted">Регистраций с неизвестным источником: {{ t.signups_unknown }} из {{ t.signups_total }} — перед входом не нашёлся заход с того же IP.</p>
+    {% endif %}
+  {% else %}
+    <p class="muted">Пока заходов нет: сбор включён недавно.</p>
+  {% endif %}
+</div>
+
+{% if t.hosts %}
+<div class="card">
+  <h2>С каких сайтов переходят</h2>
+  <table>
+    <thead><tr><th>Сайт</th><th>Источник</th><th class="num">Заходов</th></tr></thead>
+    <tbody>
+      {% for h in t.hosts %}
+        <tr><td>{{ h.host }}</td><td>{{ source_label(h.source) }}</td><td class="num">{{ h.sessions }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if t.campaigns %}
+<div class="card">
+  <h2>Метки в ссылках</h2>
+  <p class="muted">Своя метка в ссылке: <code>https://lentazakazov.ru/about?utm_source=канал&amp;utm_campaign=пост</code> — и здесь будет видно, какая ссылка сколько привела.</p>
+  <table>
+    <thead><tr><th>Источник</th><th>Канал (medium)</th><th>Кампания</th><th class="num">Заходов</th></tr></thead>
+    <tbody>
+      {% for c in t.campaigns %}
+        <tr><td>{{ source_label(c.source) }}</td><td>{{ c.medium or '—' }}</td><td>{{ c.campaign or '—' }}</td><td class="num">{{ c.sessions }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Куда попадают сначала</h2>
+  {% if t.landings %}
+    <table>
+      <thead><tr><th>Страница</th><th class="num">Заходов</th></tr></thead>
+      <tbody>
+        {% for page, count in t.landings %}
+          <tr><td>{{ page }}</td><td class="num">{{ count }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">Пока нет данных.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>По дням</h2>
+  <table>
+    <tbody>
+      {% for row in t.per_day %}
+        <tr>
+          <td class="nowrap">{{ row.day.strftime('%d.%m') }} <span class="muted">{{ ['пн','вт','ср','чт','пт','сб','вс'][row.day.weekday()] }}</span></td>
+          <td class="num">{{ row.sessions }}</td>
+          <td class="bar-cell"><div class="bar" style="width: {{ (row.share * 100)|round(1) }}%"></div></td>
+          <td class="muted">{% for source, count in row.top %}{{ source_label(source) }} {{ count }}{% if not loop.last %} · {% endif %}{% endfor %}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

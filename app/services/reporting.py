@@ -31,6 +31,7 @@ from app.models import (
     Payment,
     PendingMessage,
     PendingStatus,
+    SiteVisit,
     UserEvent,
     WorkGroup,
 )
@@ -764,4 +765,147 @@ async def subscription_metrics(*, days: int = 30) -> dict:
         "days": days, "total": total, "new": new, "trial": trial, "paid": paid,
         "left_unpaid": left_unpaid, "left_paid": left_paid, "new_paying": len(new_paying),
         "conversion": (counted_payers / finished) if finished else None,
+    }
+
+
+#: Вход через бота — это тот же человек, что секунду назад смотрел сайт в другом браузере: такие строки
+#: с ``telegram_id`` в разбивке по источникам не считаем (иначе «прямые заходы» раздуются входами).
+_LOGIN_FLOW_MINUTES = 30
+_UNKNOWN_SOURCE = "unknown"
+
+
+def _preceded_by_anonymous(row, anonymous_by_ip: dict) -> bool:
+    """True, если этот заход вошедшего пользователя — продолжение анонимного захода с того же IP."""
+    for earlier in anonymous_by_ip.get(row.ip_hash, ()):
+        if timedelta(0) <= row.created_at - earlier.created_at <= timedelta(minutes=_LOGIN_FLOW_MINUTES):
+            return True
+    return False
+
+
+async def traffic_overview(*, days: int = 30, hosts_limit: int = 15, landings_limit: int = 10) -> dict:
+    """Откуда идут посетители: источники, переходы с сайтов, метки, страницы входа, устройства, регистрации.
+
+    Один заход — один сеанс (см. app.web.traffic). Посетители считаются по дневному хэшу, поэтому один человек в
+    разные дни — разные «посетители». Регистрации относятся к источнику по IP: последний анонимный заход с того
+    же IP не раньше чем за сутки до регистрации. Для мобильных сетей, где один IP у многих, это приблизительно.
+    """
+    days = max(1, days)
+    today = _msk_day(now_utc_naive())
+    first = today - timedelta(days=days - 1)
+    since = datetime.combine(first, time.min) - MSK_OFFSET
+    async with SessionLocal() as session:
+        visits = (
+            await session.execute(
+                select(SiteVisit)
+                .where(SiteVisit.created_at >= since - timedelta(days=1))
+                .order_by(SiteVisit.created_at)
+            )
+        ).scalars().all()
+        new_drivers = (
+            await session.execute(
+                select(Driver.telegram_id, Driver.created_at).where(Driver.created_at >= since)
+            )
+        ).all()
+
+    anonymous_by_ip: dict[str, list[SiteVisit]] = {}
+    for row in visits:
+        if row.telegram_id is None:
+            anonymous_by_ip.setdefault(row.ip_hash, []).append(row)
+
+    sessions = [
+        row for row in visits
+        if row.created_at >= since
+        and not (row.telegram_id is not None and _preceded_by_anonymous(row, anonymous_by_ip))
+    ]
+
+    by_source: dict[str, dict] = {}
+    hosts: Counter = Counter()
+    campaigns: Counter = Counter()
+    landings: Counter = Counter()
+    devices: Counter = Counter()
+    per_day: dict[date, Counter] = {}
+    visitors_per_day: dict[date, set] = {}
+    for row in sessions:
+        entry = by_source.setdefault(
+            row.source, {"source": row.source, "sessions": 0, "visitors": set(), "logged_in": 0}
+        )
+        entry["sessions"] += 1
+        entry["visitors"].add(row.visitor)
+        entry["logged_in"] += 1 if row.telegram_id is not None else 0
+        if row.referrer_host:
+            hosts[(row.referrer_host, row.source)] += 1
+        if row.utm_campaign or row.utm_medium:
+            campaigns[(row.source, row.utm_medium or "", row.utm_campaign or "")] += 1
+        landings[row.landing] += 1
+        devices[row.device] += 1
+        day = _msk_day(row.created_at)
+        per_day.setdefault(day, Counter())[row.source] += 1
+        visitors_per_day.setdefault(day, set()).add(row.visitor)
+
+    total = len(sessions)
+    signups_by_source: Counter = Counter()
+    first_logged: dict[int, SiteVisit] = {}
+    for row in visits:
+        if row.telegram_id is not None and row.telegram_id not in first_logged:
+            first_logged[row.telegram_id] = row
+    for telegram_id, registered_at in new_drivers:
+        source = _UNKNOWN_SOURCE
+        login_visit = first_logged.get(telegram_id)
+        for row in reversed(anonymous_by_ip.get(login_visit.ip_hash, ()) if login_visit else ()):
+            if timedelta(0) <= registered_at - row.created_at <= timedelta(days=1, minutes=5):
+                source = row.source
+                break
+        signups_by_source[source] += 1
+
+    rows = []
+    for entry in sorted(by_source.values(), key=lambda e: (-e["sessions"], e["source"])):
+        signups = signups_by_source.get(entry["source"], 0)
+        rows.append(
+            {
+                "source": entry["source"],
+                "sessions": entry["sessions"],
+                "visitors": len(entry["visitors"]),
+                "logged_in": entry["logged_in"],
+                "share": (entry["sessions"] / total) if total else 0.0,
+                "signups": signups,
+                "conversion": (signups / entry["sessions"]) if entry["sessions"] and signups else None,
+            }
+        )
+
+    day_rows = []
+    peak = max((sum(c.values()) for c in per_day.values()), default=0)
+    for offset in range(days):
+        day = first + timedelta(days=offset)
+        counter = per_day.get(day, Counter())
+        count = sum(counter.values())
+        day_rows.append(
+            {
+                "day": day,
+                "sessions": count,
+                "visitors": len(visitors_per_day.get(day, ())),
+                "share": (count / peak) if peak else 0.0,
+                "top": counter.most_common(3),
+            }
+        )
+
+    return {
+        "days": days,
+        "total": total,
+        "visitors": len({row.visitor for row in sessions}),
+        "logged_in": sum(1 for row in sessions if row.telegram_id is not None),
+        "new_users": len(new_drivers),
+        "rows": rows,
+        "signups_unknown": signups_by_source.get(_UNKNOWN_SOURCE, 0),
+        "signups_total": sum(signups_by_source.values()),
+        "hosts": [
+            {"host": host, "source": source, "sessions": count}
+            for (host, source), count in hosts.most_common(hosts_limit)
+        ],
+        "campaigns": [
+            {"source": source, "medium": medium, "campaign": campaign, "sessions": count}
+            for (source, medium, campaign), count in campaigns.most_common(hosts_limit)
+        ],
+        "landings": landings.most_common(landings_limit),
+        "devices": {name: devices.get(name, 0) for name in ("mobile", "desktop", "telegram")},
+        "per_day": list(reversed(day_rows)),
     }

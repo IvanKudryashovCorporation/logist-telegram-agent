@@ -45,6 +45,7 @@ from app.web import queries
 from app.web.deps import is_admin
 from app.web.rate_limit import limiter_stats
 from app.web.templates_env import templates
+from app.web.traffic import source_label
 
 log = logging.getLogger("web.admin")
 
@@ -306,6 +307,20 @@ async def groups_page(request: Request, days: int = 7):
 
     stats = await reporting.group_stats(days=max(1, min(days, 30)))
     return await _render(request, "admin_groups.html", g=stats, section="groups")
+
+
+@router.get("/traffic", response_class=HTMLResponse)
+async def traffic_page(request: Request, days: int = 30):
+    """Откуда на сайт идут посетители: источники, переходы с сайтов, метки, регистрации по источникам."""
+    denied = _guard(request)
+    if denied is not None:
+        return denied
+
+    days = max(1, min(days, 90))
+    overview = await reporting.traffic_overview(days=days)
+    return await _render(
+        request, "admin_traffic.html", t=overview, source_label=source_label, section="traffic",
+    )
 
 
 @router.get("/billing", response_class=HTMLResponse)

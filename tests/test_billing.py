@@ -1474,7 +1474,7 @@ async def test_site_is_installable_as_app(client):
 
     data = manifest.json()
     assert manifest.status_code == 200 and "manifest+json" in manifest.headers["content-type"]
-    assert data["display"] == "standalone" and data["start_url"] == "/"
+    assert data["display"] == "standalone" and data["start_url"] == "/?src=pwa"
     sizes = {icon["sizes"] for icon in data["icons"]}
     assert {"192x192", "512x512"} <= sizes
     for icon in data["icons"]:

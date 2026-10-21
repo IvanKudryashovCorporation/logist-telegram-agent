@@ -30,6 +30,7 @@ from app.web import billing_routes, bot_login
 from app.web import routes as public_routes
 from app.web.last_seen import LastSeenMiddleware
 from app.web.rate_limit import RateLimitMiddleware
+from app.web.traffic import TrafficMiddleware
 
 log = logging.getLogger("web")
 
@@ -51,7 +52,7 @@ _WEB_MANIFEST = {
     "short_name": "Лента",
     "description": "Свежие заказы такси и межгорода из Telegram-групп в одной ленте.",
     "lang": "ru",
-    "start_url": "/",
+    "start_url": "/?src=pwa",
     "scope": "/",
     "display": "standalone",
     "orientation": "portrait",
@@ -144,6 +145,7 @@ def create_app() -> FastAPI:
     # Порядок важен: middleware, добавленные позже, выполняются раньше.
     application.add_middleware(RateLimitMiddleware)
     application.add_middleware(LastSeenMiddleware)
+    application.add_middleware(TrafficMiddleware)
     application.add_middleware(SecurityHeadersMiddleware)
 
     STATIC_DIR.mkdir(parents=True, exist_ok=True)
