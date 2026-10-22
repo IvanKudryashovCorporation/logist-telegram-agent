@@ -46,6 +46,7 @@ from app.models import (
     WorkGroup,
 )
 from app.parsing import stats as parse_stats
+from app.services import wakeup
 from app.parsing.bot_noise import strip_bot_noise
 from app.parsing.closed import ACTION_CLOSED_LOCK, has_bot_taken_mark, has_closed_lock
 from app.parsing.llm_parser import content_key, parse_orders, text_hash, text_key
@@ -540,6 +541,8 @@ async def upsert_order_text(
                 missing_fields=missing_total,
             )
             await db.commit()
+        if result_ids:
+            wakeup.wake(wakeup.NOTIFY, wakeup.GEOCODE)  # новый или обновлённый заказ: не ждём таймера воркеров
         _report_shadow(shadow_twin, result_ids, text, chat_id, message_id)
         return result_ids
 

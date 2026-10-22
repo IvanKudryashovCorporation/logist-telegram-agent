@@ -15,6 +15,7 @@ from app import geo, plausibility, routing
 from app.config import settings
 from app.db.base import SessionLocal
 from app.models import HIDDEN_STATUSES, Order
+from app.services import wakeup
 from app.timeutil import now_utc_naive
 
 log = logging.getLogger("app.routes")
@@ -237,7 +238,4 @@ async def run_routing_worker(stop_event: asyncio.Event) -> None:
             delay = _UNAVAILABLE_BACKOFF
         except Exception:
             log.exception("Ошибка расчёта расстояний")
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=delay)
-        except asyncio.TimeoutError:
-            continue
+        await wakeup.sleep_or_wake(wakeup.ROUTING, stop_event, delay, debounce=0.5)

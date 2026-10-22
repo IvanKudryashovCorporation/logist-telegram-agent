@@ -39,6 +39,7 @@ from app.models import (
 )
 from app.search import vehicle_type_of
 from app.services import billing
+from app.services import wakeup
 from app.timeutil import now_msk_naive, now_utc_naive
 from app.web import queries
 from app.web.filters import VEHICLE_CHOICES, Filters
@@ -641,7 +642,8 @@ async def run_subscription_worker(stop_event: asyncio.Event) -> None:
         log.info("Уведомления о заказах выключены: нет токена бота")
         return
     interval = max(10, settings.subscription_poll_seconds)
-    log.info("Уведомления по фильтрам запущены: проход раз в %s с", interval)
+    log.info("Уведомления по фильтрам запущены: проход раз в %s с и сразу после нового заказа", interval)
+    woken = False
     while not stop_event.is_set():
         try:
             sent = await notify_once()
@@ -649,15 +651,14 @@ async def run_subscription_worker(stop_event: asyncio.Event) -> None:
                 log.info("Отправлено уведомлений о заказах: %s", sent)
         except Exception:
             log.exception("Ошибка воркера уведомлений")
-        try:
-            await retract_withdrawn()
-        except Exception:
-            log.exception("Ошибка уборки снятых уведомлений")
-        try:
-            await _billing_tick()
-        except Exception:
-            log.exception("Ошибка фоновых задач подписки")
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=interval)
-        except asyncio.TimeoutError:
-            continue
+        # Уборка снятых уведомлений и платёжные задачи нужны раз в круг таймера, а не на каждый новый заказ.
+        if not woken:
+            try:
+                await retract_withdrawn()
+            except Exception:
+                log.exception("Ошибка уборки снятых уведомлений")
+            try:
+                await _billing_tick()
+            except Exception:
+                log.exception("Ошибка фоновых задач подписки")
+        woken = await wakeup.sleep_or_wake(wakeup.NOTIFY, stop_event, interval)

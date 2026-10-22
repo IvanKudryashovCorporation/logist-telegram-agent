@@ -21,6 +21,7 @@ from app.config import settings
 from app.db.base import SessionLocal
 from app.models import HIDDEN_STATUSES, ActionLog, ActorType, Order
 from app.search import refresh_derived
+from app.services import wakeup
 from app.timeutil import now_utc_naive
 
 log = logging.getLogger("app.geocode")
@@ -227,6 +228,8 @@ async def run_geocode_worker(stop_event: asyncio.Event) -> None:
             done = await geocode_pending()
             if done:
                 log.info("Геокодировано заказов: %s", done)
+                # Координаты готовы: водители с радиусом в фильтре получат уведомление сразу, а расстояние посчитается следом.
+                wakeup.wake(wakeup.NOTIFY, wakeup.ROUTING)
                 # Есть что догонять (бэкфилл) — следующий проход сразу: темп
                 # всё равно ограничен 1 запросом/сек внутри геокодера.
                 delay = 1
@@ -235,7 +238,4 @@ async def run_geocode_worker(stop_event: asyncio.Event) -> None:
             delay = _UNAVAILABLE_BACKOFF
         except Exception:
             log.exception("Ошибка геокодера")
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=delay)
-        except asyncio.TimeoutError:
-            continue
+        await wakeup.sleep_or_wake(wakeup.GEOCODE, stop_event, delay, debounce=0.5)
