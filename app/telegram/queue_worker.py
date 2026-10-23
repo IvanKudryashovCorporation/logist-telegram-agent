@@ -199,7 +199,7 @@ async def run_queue_worker(
         log.info("Очередь повторного разбора отключена (QUEUE_ENABLED=false)")
         return
 
-    interval = max(5, settings.queue_poll_seconds)
+    interval = max(2, settings.queue_poll_seconds)
     log.info("Воркер очереди разбора запущен: опрос раз в %s с", interval)
     while not stop_event.is_set():
         try:

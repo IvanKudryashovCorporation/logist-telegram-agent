@@ -26,6 +26,8 @@
           {% if sb.state == 'off' %}<span class="muted">не включена</span>
           {% elif sb.state == 'admin' %}админ: без ограничений
           {% elif sb.state == 'expired' %}<span class="tag warn">закончилась</span>
+          {% elif sb.state == 'paid' and not u.paid_real %}<span class="tag info" title="Платежа не было: дни начислил администратор">начислено админом</span>
+            осталось {{ sb.days }} дн. (до {{ sb.until.strftime('%d.%m.%Y') }})
           {% else %}<span class="tag {{ 'ok' if sb.state == 'paid' else 'info' }}">{{ 'оплачено' if sb.state == 'paid' else 'пробный период' }}</span>
             осталось {{ sb.days }} дн. (до {{ sb.until.strftime('%d.%m.%Y') }}){% endif %}
           {% if u.driver.auto_renew %}<span class="tag info">автопродление</span>{% endif %}

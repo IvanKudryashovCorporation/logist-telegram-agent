@@ -492,9 +492,50 @@ async def _verify_cities(result: ParseResult, text: str, today: str) -> ParseRes
     return final
 
 
+async def _race(text: str, today: str, priority: bool) -> ParseResult:
+    """Быстрый путь: основной провайдер получает одну попытку, и при любой ошибке (429, таймаут, 5xx) запрос сразу
+    уходит резервному. Если основной просто медленный, резервный стартует параллельно через ``llm_hedge_after_seconds``,
+    и берётся первый успешный ответ. Так заказ не ждёт повторов основного провайдера и очереди повторов."""
+    errors: list[ParseUnavailable] = []
+    fallback: Optional["asyncio.Future[ParseResult]"] = None
+    primary = asyncio.ensure_future(_parse_with(text, today, False, priority, max_attempts=1))
+    hedge = settings.llm_hedge_after_seconds
+    try:
+        try:
+            return await asyncio.wait_for(asyncio.shield(primary), timeout=hedge if hedge > 0 else None)
+        except ParseUnavailable as exc:
+            errors.append(exc)
+            log.warning("Основной LLM не ответил (%s) — сразу резервный %s", exc, settings.llm_fallback_model)
+        except asyncio.TimeoutError:
+            log.warning("Основной LLM медлит больше %.0f с — параллельно запускаем резервный %s", hedge,
+                        settings.llm_fallback_model)
+        fallback = asyncio.ensure_future(
+            _parse_with(text, today, True, max_attempts=max(1, settings.llm_fallback_retries))
+        )
+        pending = {fallback} | ({primary} if not primary.done() else set())
+        while pending:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                try:
+                    return task.result()
+                except ParseUnavailable as exc:
+                    errors.append(exc)
+        raise ParseUnavailable(
+            (f"основной: {errors[0]}; резервный: {errors[1]}" if len(errors) >= 2 else "; ".join(map(str, errors)))
+            or "провайдеры недоступны",
+            rate_limited=all(error.rate_limited for error in errors) if errors else False,
+        )
+    finally:
+        for task in (primary, fallback):
+            if task is not None and not task.done():
+                task.cancel()
+
+
 async def _parse_uncached(text: str, urgent: bool = True, priority: bool = False) -> ParseResult:
     # Диспетчеры пишут «сегодня» по Москве; с 00:00 до 03:00 МСК на сервере (UTC) ещё вчера.
     today = now_msk_naive().date().isoformat()
+    if _fallback_client is not None and settings.llm_fast_failover:
+        return await _verify_cities(await _race(text, today, priority), text, today)
     try:
         return await _verify_cities(await _parse_with(text, today, fallback=False, priority=priority), text, today)
     except ParseUnavailable as primary_error:
@@ -509,9 +550,11 @@ async def _parse_uncached(text: str, urgent: bool = True, priority: bool = False
             raise ParseUnavailable(f"основной: {primary_error}; резервный: {fallback_error}") from fallback_error
 
 
-async def _parse_with(text: str, today: str, fallback: bool, priority: bool = False) -> ParseResult:
+async def _parse_with(
+    text: str, today: str, fallback: bool, priority: bool = False, max_attempts: Optional[int] = None
+) -> ParseResult:
     """Разбор одним провайдером с повторами при временных сбоях."""
-    max_attempts = max(1, settings.llm_max_retries)
+    max_attempts = max(1, max_attempts if max_attempts is not None else settings.llm_max_retries)
     model = settings.llm_fallback_model if fallback else settings.llm_model
     last_error: Optional[BaseException] = None
 

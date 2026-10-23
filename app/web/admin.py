@@ -105,6 +105,7 @@ async def dashboard(request: Request, days: int = 7):
     statuses = await reporting.order_status_breakdown()
     parse = await reporting.parse_summary(days=days)
     queue = await reporting.queue_summary()
+    delay = await reporting.delay_summary(hours=24)
     daily = await reporting.orders_per_day(days=days)
     routes = await reporting.popular_routes(days=days)
     hidden = await reporting.hidden_breakdown(days=days)
@@ -128,6 +129,7 @@ async def dashboard(request: Request, days: int = 7):
         statuses=statuses,
         parse=parse,
         queue=queue,
+        delay=delay,
         daily=daily,
         routes=routes,
         hidden=hidden,

@@ -148,9 +148,13 @@ async def main() -> None:
         log.info(
             "Слушаю заявки в %s рабочих группах (аккаунтов: %s).", len(chat_clients), len(clients)
         )
-    if watching:
-        log.info("Без вступления читаем (опросом) групп: %s", len(watching))
-    work_group_ids = list(chat_clients) + [g.tg_chat_id for g in watching]
+    polled_only = [g for g in watching if not g.member]
+    if polled_only:
+        log.info("Без вступления читаем (опросом) групп: %s", len(polled_only))
+    backup = len(watching) - len(polled_only)
+    if backup:
+        log.info("Страховочный опрос приоритетных групп (события приходят пачками): %s", backup)
+    work_group_ids = list(chat_clients) + [g.tg_chat_id for g in polled_only]
 
     # Уведомления владельца ходят через тот же Telethon-клиент, поэтому
     # подключаются только после client.start().
@@ -174,8 +178,12 @@ async def main() -> None:
     background = _start_background(
         client, stop_event, client_for=lambda chat_id: queue_clients.get(chat_id, client)
     )
-    if watching:
+    if polled_only:
         background.append(asyncio.create_task(run_watch_worker(clients, stop_event), name="watcher"))
+    if backup:
+        background.append(
+            asyncio.create_task(run_watch_worker(clients, stop_event, members_only=True), name="watcher-members")
+        )
 
     log.info("Ожидание событий. Ctrl+C для остановки.")
     try:

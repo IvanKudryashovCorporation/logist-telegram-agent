@@ -228,9 +228,31 @@ async def run(daily: int) -> None:
     print("Готово.\n" + summary(state))
 
 
-async def apply(restart: bool = False) -> int:
+def rebalance(state: dict, away_from: str = "logist") -> int:
+    """Группы, в которые ещё не вступали, переходят от одного аккаунта к остальным (по суммарному трафику)."""
+    others = [name for name in ACCOUNTS if name != away_from]
+    load = {name: 0.0 for name in others}
+    for group in state["groups"].values():
+        if group["account"] in load and group["status"] in ("joined", "requested", "pending"):
+            load[group["account"]] += group["weight"]
+    moved = 0
+    pending = [g for g in state["groups"].values() if g["account"] == away_from and g["status"] == "pending"]
+    for group in sorted(pending, key=lambda g: -g["weight"]):
+        target = min(others, key=lambda name: load[name])
+        group["account"] = target
+        load[target] += group["weight"]
+        moved += 1
+    return moved
+
+
+async def apply(restart: bool = False, include_main: bool = False) -> int:
+    """Переводит вступившие группы на события. Группы основного аккаунта — только с ``--include-main``: у него события
+    из приоритетных каналов приходят пачками, пока эту проблему не закрыли, такие группы лучше оставить в опросе."""
     state = load_state()
-    done = [(int(gid), g) for gid, g in state.get("groups", {}).items() if g["status"] == "joined" and not g.get("applied")]
+    done = [
+        (int(gid), g) for gid, g in state.get("groups", {}).items()
+        if g["status"] == "joined" and not g.get("applied") and (include_main or g["account"] != "logist")
+    ]
     async with SessionLocal() as session:
         for gid, group in done:
             await session.execute(
@@ -256,6 +278,8 @@ def main() -> None:
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--status", action="store_true")
+    parser.add_argument("--rebalance", action="store_true", help="группы основного аккаунта, куда ещё не вступали, отдать другим")
+    parser.add_argument("--include-main", action="store_true", help="с --apply: включить и группы основного аккаунта")
     parser.add_argument("--restart", action="store_true", help="с --apply: перезапустить агента, если что-то переведено")
     parser.add_argument("--daily", type=int, default=15, help="не больше вступлений в сутки на аккаунт")
     args = parser.parse_args()
@@ -265,8 +289,14 @@ def main() -> None:
         print(summary(state))
     elif args.run:
         asyncio.run(run(args.daily))
+    elif args.rebalance:
+        state = load_state()
+        moved = rebalance(state)
+        save_state(state)
+        print(f"Передано другим аккаунтам: {moved} групп.")
+        print(summary(state))
     elif args.apply:
-        asyncio.run(apply(args.restart))
+        asyncio.run(apply(args.restart, args.include_main))
     elif args.status:
         print(summary(load_state()))
     else:

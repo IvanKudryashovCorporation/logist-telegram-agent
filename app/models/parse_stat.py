@@ -40,6 +40,8 @@ class ParseStat(Base, TimestampMixin):
     prompt_tokens: Mapped[Optional[int]] = mapped_column(Integer)
     completion_tokens: Mapped[Optional[int]] = mapped_column(Integer)
     latency_ms: Mapped[Optional[int]] = mapped_column(Integer)
+    #: Сколько прошло от публикации сообщения в Telegram до сохранения заказа, мс (для ``outcome=order``).
+    delay_ms: Mapped[Optional[int]] = mapped_column(Integer)
     attempts: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     error: Mapped[Optional[str]] = mapped_column(Text)
 

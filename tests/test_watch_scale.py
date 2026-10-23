@@ -232,3 +232,43 @@ async def test_activity_counts_messages_per_hour(session):
     activity = await watcher.activity_by_chat(2, now=now)
 
     assert activity == {-100: 3.0}  # 6 сообщений за 2 часа; старое сообщение другой группы не считается
+
+
+# --- Страховочный опрос приоритетных групп, где аккаунт состоит ----------------------------------------
+
+
+async def test_priority_member_group_is_polled_as_a_backup(session, monkeypatch):
+    from app.models import WorkGroup
+
+    monkeypatch.setattr(watcher.settings, "priority_chat_ids", "-1004413141153")
+    monkeypatch.setattr(watcher.settings, "watch_member_backup", True)
+    session.add_all([
+        WorkGroup(tg_chat_id=-1004413141153, title="PRO", watch_only=False, is_active=True),  # состоит, приоритетная
+        WorkGroup(tg_chat_id=-1005555, title="обычная", watch_only=False, is_active=True),  # состоит, не приоритетная
+        WorkGroup(tg_chat_id=-1006666, title="опрос", watch_only=True, username="poll", is_active=True),
+    ])
+    await session.commit()
+
+    groups = await watcher.watch_groups()
+
+    assert {g.title: g.member for g in groups} == {"опрос": False, "PRO": True}
+
+
+def test_member_backup_group_is_due_every_cycle(monkeypatch):
+    monkeypatch.setattr(watcher.settings, "watch_adaptive", True)
+    group = _group(id=9, member=True, last_message_id=5)
+
+    assert all(9 in watcher.schedule([group], cycle, {}) for cycle in range(8))
+
+
+async def test_member_backup_first_poll_takes_only_the_last_minutes():
+    old = Msg(1, NOW - timedelta(hours=2))
+    fresh = Msg(2, NOW - timedelta(minutes=1))
+    recorder = Recorder()
+
+    counts = await watcher.poll_group(
+        FakeClient([old, fresh]), _group(member=True), handle=recorder.handle, handle_deleted=recorder.handle_deleted,
+        now=NOW, check_changes=True,
+    )
+
+    assert recorder.handled == [(2, False)] and counts["new"] == 1  # старое уже разобрано событиями

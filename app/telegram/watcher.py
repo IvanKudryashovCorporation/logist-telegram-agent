@@ -43,6 +43,8 @@ EDIT_WINDOW = 40
 EDIT_POLLS = 3
 #: Пауза после опроса группы, секунд: не частим запросами (групп опрашивается несколько одновременно).
 GROUP_GAP = 0.15
+#: Сколько последних минут разбираем при первом опросе группы, где аккаунт состоит (страховка к событиям).
+MEMBER_BACKUP_MINUTES = 15
 #: Как часто пересчитываем активность групп (по журналу разбора), секунд.
 ACTIVITY_REFRESH_SECONDS = 300
 
@@ -54,6 +56,8 @@ class WatchGroup:
     username: Optional[str]
     session_name: Optional[str]
     last_message_id: Optional[int]
+    #: Аккаунт в группе состоит (события приходят сами); опрос — только страховка и читает лишь свежее.
+    member: bool = False
 
 
 def _entities_of(client) -> dict:
@@ -87,10 +91,27 @@ async def watch_groups() -> list[WatchGroup]:
                 .order_by(WorkGroup.id)
             )
         ).scalars().all()
-        return [
+        groups = [
             WatchGroup(g.id, g.tg_chat_id, g.title, g.username, g.session_name or None, g.last_message_id)
             for g in rows
         ]
+        priority = settings.priority_chats
+        if priority and settings.watch_member_backup:
+            members = (
+                await session.execute(
+                    select(WorkGroup)
+                    .where(
+                        WorkGroup.is_active.is_(True), WorkGroup.watch_only.is_(False),
+                        WorkGroup.tg_chat_id.in_(list(priority)),
+                    )
+                    .order_by(WorkGroup.id)
+                )
+            ).scalars().all()
+            groups += [
+                WatchGroup(g.id, g.tg_chat_id, g.title, g.username, g.session_name or None, g.last_message_id, True)
+                for g in members
+            ]
+        return groups
 
 
 async def _save_last_id(group_id: int, last_id: int) -> None:
@@ -136,9 +157,13 @@ async def poll_group(
     last = group.last_message_id
 
     if last is None:
-        # Первый опрос: берём недавнее, но дальше следим только за новым.
+        # Первый опрос: берём недавнее, но дальше следим только за новым. Для группы, где аккаунт состоит,
+        # прошлое уже разобрано событиями: берём только последние минуты (на случай пропущенного).
         recent = await client.get_messages(entity, limit=INITIAL_LIMIT)
-        cutoff = now - timedelta(hours=max(1, settings.watch_initial_hours))
+        cutoff = (
+            now - timedelta(minutes=MEMBER_BACKUP_MINUTES)
+            if group.member else now - timedelta(hours=max(1, settings.watch_initial_hours))
+        )
         new = sorted((m for m in recent if m.date >= cutoff), key=lambda m: m.id)
         newest = max((m.id for m in recent), default=0)
     else:
@@ -153,7 +178,7 @@ async def poll_group(
     edited = 0
     if last is not None and check_changes:
         edit_since = now - timedelta(
-            seconds=max(15, settings.watch_poll_seconds) * max(1, settings.watch_slow_every) * EDIT_POLLS
+            seconds=max(10, settings.watch_poll_seconds) * max(1, settings.watch_slow_every) * EDIT_POLLS
         )
         for message in await client.get_messages(entity, limit=EDIT_WINDOW):
             stamp = getattr(message, "edit_date", None)
@@ -215,6 +240,9 @@ def schedule(groups: list[WatchGroup], cycle: int, activity: dict[int, float]) -
         return {group.id: 1 for group in groups}
     due: dict[int, int] = {}
     for group in groups:
+        if group.member:
+            due[group.id] = 1  # страховка к событиям: каждый круг
+            continue
         every = poll_every(activity.get(group.tg_chat_id, 0.0))
         if group.last_message_id is None or every == 1 or (cycle + group.id) % every == 0:
             due[group.id] = every
@@ -252,7 +280,7 @@ async def _poll_session(
                 # Редко опрашиваемые группы проверяем на правки и удаления при каждом опросе: иначе правка
                 # успела бы выйти из окна поиска раньше следующей проверки.
                 rare = (every or {}).get(group.id, 1) > 1
-                counts = await poll_group(client, group, check_changes=check_changes or rare)
+                counts = await poll_group(client, group, check_changes=(check_changes or rare) and not group.member)
                 if any(counts.values()):
                     log.info("«%s»: %s", group.title, counts)
             except FloodWaitError as exc:
@@ -266,17 +294,24 @@ async def _poll_session(
     await asyncio.gather(*(poll_one(group) for group in groups))
 
 
-async def run_watch_worker(clients: dict, stop_event: asyncio.Event) -> None:
-    """Фоновый цикл опроса групп без вступления. ``clients`` — {имя сессии | None: клиент}."""
-    interval = max(15, settings.watch_poll_seconds)
-    log.info("Наблюдение за группами без вступления: круг не чаще раза в %s с", interval)
+async def run_watch_worker(clients: dict, stop_event: asyncio.Event, *, members_only: bool = False) -> None:
+    """Фоновый цикл опроса. ``clients`` — {имя сессии | None: клиент}.
+
+    ``members_only=False`` — группы «без вступления» (круг не чаще раза в ``WATCH_POLL_SECONDS``);
+    ``members_only=True`` — отдельный быстрый цикл для приоритетных групп, где аккаунт состоит (страховка к событиям)."""
+    interval = max(2, settings.watch_member_poll_seconds) if members_only else max(10, settings.watch_poll_seconds)
+    log.info(
+        "%s: круг не чаще раза в %s с",
+        "Страховочный опрос приоритетных групп" if members_only else "Наблюдение за группами без вступления",
+        interval,
+    )
     cycle = 0
     activity: dict[int, float] = {}
     activity_at = float("-inf")
     while not stop_event.is_set():
         started = asyncio.get_running_loop().time()
         try:
-            groups = await watch_groups()
+            groups = [group for group in await watch_groups() if group.member == members_only]
         except Exception:
             log.exception("Не удалось получить список групп для наблюдения")
             groups = []

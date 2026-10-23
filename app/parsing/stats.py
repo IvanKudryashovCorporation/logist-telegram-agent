@@ -26,6 +26,7 @@ def build_stat(
     orders_found: int = 0,
     missing_fields: int = 0,
     error: Optional[str] = None,
+    delay_ms: Optional[int] = None,
 ) -> ParseStat:
     """Собирает строку метрики из результата разбора."""
     stat = ParseStat(
@@ -36,6 +37,7 @@ def build_stat(
         orders_found=orders_found,
         missing_fields=missing_fields,
         error=error,
+        delay_ms=delay_ms,
     )
     if result is not None:
         stat.model = result.model

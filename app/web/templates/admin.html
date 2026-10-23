@@ -43,6 +43,10 @@
     <div class="metric-value">{{ parse.avg_latency_ms }} мс</div>
     <div class="metric-label">средняя задержка LLM</div>
   </div>
+  <div class="metric {{ 'ok' if delay.within_5s_pct is not none and delay.within_5s_pct >= 95 else ('warn' if delay.count else '') }}">
+    <div class="metric-value">{{ delay.median_s }} с</div>
+    <div class="metric-label">публикация → лента, медиана за 24 ч (p95 {{ delay.p95_s }} с, ≤5 с: {{ delay.within_5s_pct if delay.within_5s_pct is not none else '—' }}%)</div>
+  </div>
 </div>
 
 <div class="period">

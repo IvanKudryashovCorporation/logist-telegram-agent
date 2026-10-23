@@ -29,6 +29,10 @@
       <div class="metric-value">{{ s.paid }}</div>
       <div class="metric-label">оплатили подписку</div>
     </div>
+    <div class="metric">
+      <div class="metric-value">{{ s.gifted }}</div>
+      <div class="metric-label">дни начислил админ</div>
+    </div>
     <div class="metric {{ 'warn' if s.expired else '' }}">
       <div class="metric-value">{{ s.expired }}</div>
       <div class="metric-label">подписка закончилась</div>
@@ -107,7 +111,8 @@
             </td>
             <td class="nowrap">
               {% set sb = u.sub %}
-              {% if sb.state == 'paid' %}<span class="tag ok">оплачено · {{ sb.days }} дн.</span>
+              {% if sb.state == 'paid' and u.paid_real %}<span class="tag ok">оплачено · {{ sb.days }} дн.</span>
+              {% elif sb.state == 'paid' %}<span class="tag info" title="Дни начислил администратор, платежа не было">начислено админом · {{ sb.days }} дн.</span>
               {% elif sb.state == 'trial' %}<span class="tag info">пробный · {{ sb.days }} дн.</span>
               {% elif sb.state == 'expired' %}<span class="tag warn">закончилась</span>
               {% else %}<span class="muted">—</span>{% endif %}

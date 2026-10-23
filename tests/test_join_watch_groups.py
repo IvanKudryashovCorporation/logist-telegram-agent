@@ -43,3 +43,21 @@ def test_accounts_with_many_groups_already_get_fewer_new_ones():
     mapping = assign(groups, {}, {g["id"]: 100 for g in groups}, base)
 
     assert list(mapping.values()).count("logist") < list(mapping.values()).count("acc_4077")
+
+
+def test_rebalance_moves_pending_groups_away_from_the_main_account():
+    from scripts.join_watch_groups import rebalance
+
+    def group(account, status, weight):
+        return {"account": account, "status": status, "weight": weight}
+
+    state = {"groups": {
+        "1": group("logist", "pending", 100), "2": group("logist", "pending", 50), "3": group("logist", "requested", 70),
+        "4": group("logist", "joined", 10), "5": group("acc_4077", "pending", 60), "6": group("acc_crimea", "pending", 60),
+    }}
+
+    moved = rebalance(state)
+
+    assert moved == 2
+    assert {state["groups"]["1"]["account"], state["groups"]["2"]["account"]} <= {"acc_4077", "acc_crimea"}
+    assert state["groups"]["3"]["account"] == "logist" and state["groups"]["4"]["account"] == "logist"  # заявка и вступление остаются

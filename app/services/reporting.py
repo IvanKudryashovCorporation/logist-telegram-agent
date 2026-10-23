@@ -271,6 +271,18 @@ USER_SORTS = {
 }
 
 
+async def _real_payers(session) -> set[int]:
+    """Кто платил сам: успешный платёж через платёжного провайдера (ручные начисления админа не в счёт)."""
+    from app.models.payment import KIND_ADMIN, PAYMENT_SUCCEEDED
+
+    rows = await session.execute(
+        select(Payment.telegram_id).where(
+            Payment.status == PAYMENT_SUCCEEDED, Payment.kind != KIND_ADMIN, Payment.provider != "admin"
+        ).distinct()
+    )
+    return set(rows.scalars().all())
+
+
 async def users_overview(*, q: str = "", sort: str = "login", limit: int = 200) -> dict:
     """Все зарегистрированные пользователи (вошедшие через Telegram) с короткой статистикой."""
     now = now_utc_naive()
@@ -287,6 +299,7 @@ async def users_overview(*, q: str = "", sort: str = "login", limit: int = 200) 
         subs: dict[int, list] = {}
         for sub in (await session.execute(select(OrderSubscription))).scalars().all():
             subs.setdefault(sub.telegram_id, []).append(sub)
+        real_payers = await _real_payers(session)
 
     stats = _stats_by_token(rows)
     needle = q.strip().lower().lstrip("@")
@@ -308,6 +321,8 @@ async def users_overview(*, q: str = "", sort: str = "login", limit: int = 200) 
                 "last_login": _msk(driver.last_login_at),
                 "is_new": driver.created_at >= week,
                 "sub": billing.describe(driver, driver.telegram_id, now),
+                #: Платил сам (есть успешный платёж через провайдера), а не только получил дни от админа.
+                "paid_real": driver.telegram_id in real_payers,
             }
         )
 
@@ -329,7 +344,8 @@ async def users_overview(*, q: str = "", sort: str = "login", limit: int = 200) 
             "active_week": sum(1 for d in drivers if d.last_login_at and d.last_login_at >= week),
             "took_orders": sum(1 for d in drivers if stats.get(d.token, UserStats()).taken),
             "with_notifications": sum(1 for group in subs.values() if any(s.is_active for s in group)),
-            "paid": sum(1 for u in users if u["sub"].state == billing.STATE_PAID),
+            "paid": sum(1 for u in users if u["sub"].state == billing.STATE_PAID and u["paid_real"]),
+            "gifted": sum(1 for u in users if u["sub"].state == billing.STATE_PAID and not u["paid_real"]),
             "expired": sum(1 for u in users if u["sub"].state == billing.STATE_EXPIRED),
             "subscription_on": billing.enabled(),
         },
@@ -413,6 +429,7 @@ async def user_detail(telegram_id: int, *, orders_limit: int = 50, actions_limit
         )
         # Действия водителя с заказами: в details каждого записан префикс его токена (в том числе у заказов,
         # от которых он уже отказался и которых нет в списке «взятых»).
+        real_payers = await _real_payers(session)
         actions = list(
             (
                 await session.execute(
@@ -460,6 +477,7 @@ async def user_detail(telegram_id: int, *, orders_limit: int = 50, actions_limit
         "subscriptions": subs,
         "sub": billing.describe(driver, telegram_id),
         "payments": payments,
+        "paid_real": telegram_id in real_payers,
         "registered": _msk(driver.created_at),
         "last_login": _msk(driver.last_login_at),
         "orders": orders[:orders_limit],
@@ -588,6 +606,34 @@ async def parse_summary(days: int = 7) -> dict:
         "completion_tokens": completion_tokens,
         "total_tokens": prompt_tokens + completion_tokens,
         "avg_latency_ms": int(latency_weighted / latency_rows) if latency_rows else 0,
+    }
+
+
+async def delay_summary(hours: int = 24) -> dict:
+    """«Публикация → заказ в ленте»: медиана, 95-й процентиль и доля заказов, уложившихся в 5 секунд (цель)."""
+    since = now_utc_naive() - timedelta(hours=max(1, hours))
+    async with SessionLocal() as session:
+        row = (
+            await session.execute(
+                select(
+                    func.count(ParseStat.id),
+                    func.percentile_disc(0.5).within_group(ParseStat.delay_ms),
+                    func.percentile_disc(0.95).within_group(ParseStat.delay_ms),
+                    func.count(ParseStat.id).filter(ParseStat.delay_ms <= 5000),
+                ).where(
+                    ParseStat.created_at >= since,
+                    ParseStat.outcome == ParseOutcome.ORDER,
+                    ParseStat.delay_ms.is_not(None),
+                )
+            )
+        ).one()
+    total, median, p95, fast = row
+    return {
+        "hours": hours,
+        "count": int(total or 0),
+        "median_s": round((median or 0) / 1000, 1),
+        "p95_s": round((p95 or 0) / 1000, 1),
+        "within_5s_pct": round(100 * (fast or 0) / total) if total else None,
     }
 
 

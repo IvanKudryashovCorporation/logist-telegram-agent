@@ -19,7 +19,7 @@
 import asyncio
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy import or_, select
@@ -83,6 +83,21 @@ _DUPLICATE_ASAP_WINDOW = timedelta(hours=6)
 # Сериализуем именно проверку+запись (не разбор LLM — он медленный, но гонки
 # не создаёт), чтобы commit одного вызова был виден SELECT'у следующего.
 _dedup_lock = asyncio.Lock()
+
+
+def _delay_ms(published: Optional[datetime]) -> Optional[int]:
+    """Сколько мс прошло с публикации сообщения (наивный UTC) до сейчас: «публикация → заказ в ленте»."""
+    if published is None:
+        return None
+    return max(0, int((now_utc_naive() - published).total_seconds() * 1000))
+
+
+def _naive_utc_of(value) -> Optional[datetime]:
+    if value is None:
+        return None
+    if value.tzinfo is not None:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
 
 
 def _order_raw_text(parsed: ParsedOrder, fallback_text: str) -> str:
@@ -341,6 +356,7 @@ async def upsert_order_text(
     is_edit: bool = False,
     sent_at: Optional[datetime] = None,
     urgent: bool = True,
+    published_at: Optional[datetime] = None,
 ) -> list[int]:
     """Разбирает текст сообщения и создаёт/обновляет заказы.
 
@@ -539,6 +555,7 @@ async def upsert_order_text(
                 result=parse_result,
                 orders_found=len(parsed_list),
                 missing_fields=missing_total,
+                delay_ms=_delay_ms(published_at or sent_at),
             )
             await db.commit()
         if result_ids:
@@ -853,6 +870,7 @@ async def _handle_message(message, is_edit: bool) -> None:
             dispatcher_tg_id=dispatcher_tg_id,
             dispatcher_username=dispatcher_username,
             is_edit=is_edit,
+            published_at=_naive_utc_of(None if is_edit else getattr(message, "date", None)),
         )
     except Exception as exc:
         unmark_processed(message.chat_id, message.id, variant)

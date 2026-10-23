@@ -131,6 +131,8 @@ def test_proxy_is_passed_only_when_configured():
 
 
 async def test_rate_limit_on_a_queued_message_waits_instead_of_using_the_fallback(monkeypatch):
+    # Классический режим (без быстрого перехода): несрочное сообщение при лимите ждёт основной, а не тратит резерв.
+    monkeypatch.setattr(llm_parser.settings, "llm_fast_failover", False)
     monkeypatch.setattr(llm_parser, "_fallback_client", object())
     seen = _patch_calls(monkeypatch, _status_error(RateLimitError, 429), _response([_ORDER]))
 
