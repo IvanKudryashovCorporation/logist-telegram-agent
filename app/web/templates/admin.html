@@ -13,7 +13,7 @@
   </div>
   <div class="metric">
     <div class="metric-value">{{ "%.1f"|format(daily.average) }}</div>
-    <div class="metric-label">в среднем в день ({{ daily.days }} дн.)</div>
+    <div class="metric-label">в среднем в день ({{ days|period }})</div>
   </div>
   <div class="metric ok">
     <div class="metric-value">{{ statuses.taken }}</div>
@@ -25,7 +25,7 @@
   </div>
   <div class="metric {{ 'warn' if parse.incomplete_rate > 0.2 else 'ok' }}">
     <div class="metric-value">{{ "%.0f"|format(parse.incomplete_rate * 100) }}%</div>
-    <div class="metric-label">неполных полей ({{ parse.days }} дн.)</div>
+    <div class="metric-label">неполных полей ({{ days|period }})</div>
   </div>
   <div class="metric {{ 'ok' if parse.prefilter_saving > 0 else '' }}">
     <div class="metric-value">{{ "%.0f"|format(parse.prefilter_saving * 100) }}%</div>
@@ -33,7 +33,7 @@
   </div>
   <div class="metric">
     <div class="metric-value">{{ parse.total_tokens }}</div>
-    <div class="metric-label">токенов за {{ parse.days }} дн.</div>
+    <div class="metric-label">токенов за {{ days|period }}</div>
   </div>
   <div class="metric {{ 'bad' if queue.failed else '' }}">
     <div class="metric-value">{{ queue.failed }}</div>
@@ -54,10 +54,11 @@
   {% for option in [7, 14, 30, 90] %}
     <a href="/admin?days={{ option }}" class="{{ 'current' if option == days else '' }}">{{ option }} дн.</a>
   {% endfor %}
+  <a href="/admin?days=0" class="{{ 'current' if days >= 3650 else '' }}">Всё время</a>
 </div>
 
 <div class="card" id="daily">
-  <h2>Заказов в день · последние {{ daily.days }} дн.</h2>
+  <h2>Заказов в день · {{ days|period }}</h2>
   <p class="muted">
     Всего {{ daily.total }}, в среднем {{ "%.1f"|format(daily.average) }} в день, максимум {{ daily.peak }}.
     Дни по Москве. Считаются все заказы, что побывали в ленте (в том числе уже забранные или закрытые диспетчером); мусор (предложения водителей, заявки без цены и контакта) и дубли не считаются.
@@ -76,7 +77,7 @@
 </div>
 
 <div class="card" id="routes">
-  <h2>Популярные направления · {{ routes.days }} дн.</h2>
+  <h2>Популярные направления · {{ days|period }}</h2>
   {% if routes.routes %}
     <table>
       <thead>
@@ -118,7 +119,7 @@
 </div>
 
 <div class="card" id="hidden-reasons">
-  <h2>Скрытые заявки и дубли: почему · {{ hidden.days }} дн.</h2>
+  <h2>Скрытые заявки и дубли: почему · {{ days|period }}</h2>
   <p class="muted">
     Принято заявок: {{ hidden.created }}. Дубли отсеиваются при приёме, ещё до записи в базу;
     «снят уборкой позже» — только те, что приём не узнал (например, после правки сообщения).

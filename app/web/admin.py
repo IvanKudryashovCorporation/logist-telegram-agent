@@ -96,12 +96,12 @@ async def _render(request: Request, template: str, **context) -> HTMLResponse:
 
 @router.get("", response_class=HTMLResponse)
 @router.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request, days: int = 7):
+async def dashboard(request: Request, days: int = 0):
     denied = _guard(request)
     if denied is not None:
         return denied
 
-    days = max(1, min(days, 90))
+    days = reporting.normalize_period(days)
     statuses = await reporting.order_status_breakdown()
     parse = await reporting.parse_summary(days=days)
     queue = await reporting.queue_summary()
@@ -301,42 +301,43 @@ async def user_filter(request: Request, telegram_id: int, sub_id: int, action: s
 
 
 @router.get("/groups", response_class=HTMLResponse)
-async def groups_page(request: Request, days: int = 7):
+async def groups_page(request: Request, days: int = 0):
     """Статистика по группам: сколько заказов дала каждая, сколько дублей и спама."""
     denied = _guard(request)
     if denied is not None:
         return denied
 
-    stats = await reporting.group_stats(days=max(1, min(days, 30)))
-    return await _render(request, "admin_groups.html", g=stats, section="groups")
+    days = reporting.normalize_period(days)
+    stats = await reporting.group_stats(days=days)
+    return await _render(request, "admin_groups.html", g=stats, days=days, section="groups")
 
 
 @router.get("/traffic", response_class=HTMLResponse)
-async def traffic_page(request: Request, days: int = 30):
+async def traffic_page(request: Request, days: int = 0):
     """Откуда на сайт идут посетители: источники, переходы с сайтов, метки, регистрации по источникам."""
     denied = _guard(request)
     if denied is not None:
         return denied
 
-    days = max(1, min(days, 90))
+    days = reporting.normalize_period(days)
     overview = await reporting.traffic_overview(days=days)
     return await _render(
-        request, "admin_traffic.html", t=overview, source_label=source_label, section="traffic",
+        request, "admin_traffic.html", t=overview, days=days, source_label=source_label, section="traffic",
     )
 
 
 @router.get("/billing", response_class=HTMLResponse)
-async def billing_page(request: Request, days: int = 30):
+async def billing_page(request: Request, days: int = 0):
     """Платежи и журнал подписки: что пришло, что вернули, что пошло не так."""
     denied = _guard(request)
     if denied is not None:
         return denied
 
-    days = max(1, min(days, 365))
+    days = reporting.normalize_period(days)
     overview = await reporting.billing_overview(days=days)
     funnel = await reporting.subscription_metrics(days=days)
     return await _render(
-        request, "admin_billing.html", o=overview, f=funnel, kind_labels=events.KIND_LABELS,
+        request, "admin_billing.html", o=overview, f=funnel, days=days, kind_labels=events.KIND_LABELS,
         problem_kinds=events.PROBLEM_KINDS, section="billing",
     )
 

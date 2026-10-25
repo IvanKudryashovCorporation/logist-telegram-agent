@@ -5,7 +5,7 @@
 <div class="metrics">
   <div class="metric ok">
     <div class="metric-value">{{ g.totals.orders }}</div>
-    <div class="metric-label">заказов в ленте за {{ g.days }} дн.</div>
+    <div class="metric-label">заказов в ленте за {{ days|period }}</div>
   </div>
   <div class="metric">
     <div class="metric-value">{{ g.totals.duplicates }}</div>
@@ -25,7 +25,7 @@
   <h2>По группам</h2>
   <p class="muted">
     Период:
-    {% for d in (1, 7, 30) %}<a href="/admin/groups?days={{ d }}"{% if d == g.days %} style="font-weight:700"{% endif %}>{{ d }} дн.</a>{% if not loop.last %} · {% endif %}{% endfor %}
+    {% for d in (1, 7, 30) %}<a href="/admin/groups?days={{ d }}"{% if d == days %} style="font-weight:700"{% endif %}>{{ d }} дн.</a> · {% endfor %}<a href="/admin/groups?days=0"{% if days >= 3650 %} style="font-weight:700"{% endif %}>Всё время</a>
     . <b>Заказы</b> — созданные из группы (без дублей). <b>Спам</b> — сообщения, отсеянные как не заявки
     (болтовня, предложения водителей, реклама, без маршрута). <b>Спам на заказ</b> — сколько мусора приходится на один заказ.
   </p>

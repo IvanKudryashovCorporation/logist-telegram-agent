@@ -5,7 +5,7 @@
 <div class="metrics">
   <div class="metric">
     <div class="metric-value">{{ t.total }}</div>
-    <div class="metric-label">заходов за {{ t.days }} дн.</div>
+    <div class="metric-label">заходов за {{ days|period }}</div>
   </div>
   <div class="metric">
     <div class="metric-value">{{ t.visitors }}</div>
@@ -28,12 +28,13 @@
 <div class="period">
   Период:
   {% for option in [1, 7, 14, 30, 90] %}
-    <a href="/admin/traffic?days={{ option }}" class="{{ 'current' if option == t.days else '' }}">{{ option }} дн.</a>
+    <a href="/admin/traffic?days={{ option }}" class="{{ 'current' if option == days else '' }}">{{ option }} дн.</a>
   {% endfor %}
+  <a href="/admin/traffic?days=0" class="{{ 'current' if days >= 3650 else '' }}">Всё время</a>
 </div>
 
 <div class="card">
-  <h2>Откуда приходят · {{ t.days }} дн.</h2>
+  <h2>Откуда приходят · {{ days|period }}</h2>
   <p class="muted">
     Заход — первая страница после паузы в полчаса. Источник берётся из метки в ссылке (<code>?utm_source=…</code>,
     <code>?src=…</code>), затем из сайта, с которого перешли, затем из браузера (встроенный браузер Telegram);

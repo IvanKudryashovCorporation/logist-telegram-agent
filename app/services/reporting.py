@@ -81,6 +81,22 @@ def _msk_day(moment: datetime) -> date:
     return (moment + MSK_OFFSET).date()
 
 
+#: «За всё время» в админке: период в днях, заведомо больше срока хранения данных.
+ALL_TIME_DAYS = 3650
+
+
+def period_text(days) -> str:
+    """Подпись периода: «всё время» или «7 дн.»."""
+    return "всё время" if int(days) >= ALL_TIME_DAYS else f"{int(days)} дн."
+
+
+def normalize_period(days: int, cap: int = ALL_TIME_DAYS) -> int:
+    """Период из адреса: 0 или слишком большой — всё время, иначе не больше ``cap`` дней."""
+    if days <= 0 or days >= ALL_TIME_DAYS:
+        return ALL_TIME_DAYS
+    return max(1, min(days, cap))
+
+
 #: Действия журнала, после которых заказ считается мусором (на ленте его не было нужно видеть): предложения водителей,
 #: заявки без цены и контакта, удалённые группы, ручное скрытие. Заказы, которые забрали или которые диспетчер
 #: удалил/закрыл (🔒, «Отдан»), мусором не считаются: они были в ленте и водитель мог их взять.
@@ -100,6 +116,10 @@ async def orders_per_day(days: int = 7) -> dict:
     """
     days = max(1, days)
     today = _msk_day(now_utc_naive())
+    if days >= ALL_TIME_DAYS:
+        async with SessionLocal() as session:
+            earliest = (await session.execute(select(func.min(Order.created_at)))).scalar_one()
+        days = ((today - _msk_day(earliest)).days + 1) if earliest else 1
     first = today - timedelta(days=days - 1)
     since = datetime.combine(first, time.min) - MSK_OFFSET  # полночь МСК в наивном UTC
     async with SessionLocal() as session:

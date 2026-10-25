@@ -68,6 +68,9 @@ def build_templates() -> Jinja2Templates:
     # ensure_ascii=False — города и подписи на русском, иначе в JSON-островке
     # для автодополнения будут \u044d\u043a\u0440\u0430\u043d\u044b.
     templates.env.filters["tojson"] = lambda value: json.dumps(value, ensure_ascii=False)
+    from app.services.reporting import period_text
+
+    templates.env.filters["period"] = period_text
     templates.env.filters["price"] = lambda value: f"{value:,.0f}".replace(",", " ") if value else ""
     return templates
 

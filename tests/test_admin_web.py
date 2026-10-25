@@ -901,3 +901,23 @@ async def test_admin_header_shows_live_groups_count(client, session, make_order)
 
     assert page.status_code == 200 and "Live ·" in page.text
     assert "admin.css?v=" in page.text and "theme.js?v=" in page.text  # версия в адресе: браузер не держит старые стили
+
+
+async def test_admin_periods_default_to_all_time_and_can_be_switched(client, session, make_order):
+    from app.services import reporting
+
+    await _created(session, await make_order(), 40)  # заказ старше любого короткого периода
+    await _login(client)
+
+    for path in ("/admin", "/admin/groups", "/admin/billing", "/admin/traffic"):
+        page = await client.get(path)
+        assert page.status_code == 200, path
+        assert "Всё время" in page.text and "всё время" in page.text, path  # по умолчанию — за всё время
+
+    short = await client.get("/admin/groups?days=7")
+    assert short.status_code == 200 and "за 7 дн." in short.text
+
+    daily = await reporting.orders_per_day(days=reporting.ALL_TIME_DAYS)
+    assert daily["total"] == 1 and len(daily["rows"]) == 41  # ряд идёт от первого заказа, а не 10 лет нулей
+    assert reporting.period_text(7) == "7 дн." and reporting.period_text(reporting.ALL_TIME_DAYS) == "всё время"
+    assert reporting.normalize_period(0) == reporting.ALL_TIME_DAYS and reporting.normalize_period(500, cap=90) == 90
