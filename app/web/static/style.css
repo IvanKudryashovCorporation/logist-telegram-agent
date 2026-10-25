@@ -1193,12 +1193,16 @@ input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), select, t
 .or-extra form { margin: 0; }
 .or-client { flex-basis: 100%; font-size: 13.5px; font-weight: 600; }
 .or-ago { font-size: 12px; color: var(--muted); margin-left: auto; }
-@media (max-width: 520px) {
-  .order-row { padding: 10px 12px; column-gap: 8px; }
-  .or-price { font-size: 15px; }
-  .or-btn { width: 42px; height: 42px; }
-  .msg-btn { min-width: 100px; padding: 0 14px; gap: 6px; font-size: 13.5px; }
-  .or-actions { gap: 6px; }
+@media (max-width: 600px) {
+  /* Телефон: сверху время, маршрут и цена, ниже на всю ширину сердечко и «Написать» — текст не сжимается в узкую колонку. */
+  .order-row { grid-template-columns: 1fr auto; padding: 12px; column-gap: 10px; row-gap: 10px; align-items: start; }
+  .or-when { white-space: nowrap; }
+  .or-chip { white-space: nowrap; }
+  .or-price { font-size: 16px; padding-top: 1px; }
+  .or-actions { grid-column: 1 / -1; display: grid; grid-template-columns: 46px 1fr; gap: 8px; }
+  .or-actions .contact-form { display: flex; }
+  .or-btn { width: 46px; height: 46px; }
+  .msg-btn { width: 100%; min-width: 0; flex: 1; }
 }
 
 /* ── Кнопка «Фильтры»: отдельная кнопка рядом с вкладками, а не третья вкладка ── */
