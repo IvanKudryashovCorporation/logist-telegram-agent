@@ -464,3 +464,15 @@ def test_migration_rule_matches_the_parser_rule():
 
     for raw in ("4000000", "12000000", "300000", "250000", "1234567", "4000000000", "52000"):
         assert module._fixed(Decimal(raw)) == normalize_price(Decimal(raw)), raw
+
+
+def test_today_without_a_time_means_as_soon_as_possible_not_midnight():
+    today = NOW.date().isoformat()
+    tomorrow = (NOW + timedelta(days=1)).date().isoformat()
+
+    assert resolve_pickup_at(today, None, None, now=NOW) is None  # «СРОЧНО · сегодня» — сейчас, а не 00:00
+    assert resolve_pickup_at(today, "", None, now=NOW) is None
+    assert resolve_pickup_at(today, "15:00", None, now=NOW) == datetime.fromisoformat(f"{today}T15:00")
+    assert resolve_pickup_at(tomorrow, None, None, now=NOW) == datetime.fromisoformat(f"{tomorrow}T00:00")
+    kept = datetime.fromisoformat(f"{today}T18:30")  # у сохранённого заказа с временем правка «сегодня» его не стирает
+    assert resolve_pickup_at(today, None, kept, now=NOW) == kept

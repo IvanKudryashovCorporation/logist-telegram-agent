@@ -82,6 +82,15 @@ def resolve_pickup_at(
     """Время подачи заказа. Если названа дата — как есть. Если названо только
     время: у уже сохранённого заказа дата остаётся прежней (правка не должна
     сдвигать день), у нового — ближайшее такое время: сегодня или завтра."""
+    if pickup_date and not (pickup_time or "").strip():
+        # «Сегодня» без времени — это «в ближайшее время», а не полночь: полночь уже в прошлом, и заказ
+        # сразу пропал бы из ленты (так терялись заявки бота «⚡ СРОЧНО · сегодня»).
+        try:
+            named_day = datetime.fromisoformat(pickup_date).date()
+        except ValueError:
+            named_day = None
+        if named_day is not None and named_day == (now or now_msk_naive()).date():
+            return existing if existing is not None and existing.date() == named_day else None
     explicit = combine_pickup_at(pickup_date, pickup_time)
     if explicit is not None:
         return correct_far_year(explicit, now=now)
