@@ -232,26 +232,6 @@ async def _author_without_username(make_order, session, *, public_group):
     return order
 
 
-async def test_public_group_page_offers_the_message_and_a_direct_chat_as_backup(client, make_order, session):
-    order = await _author_without_username(make_order, session, public_group=True)
-
-    page = await client.get(f"/orders/{order.id}")
-
-    assert "нет публичного @username" in page.text
-    assert "откроет его сообщение в группе" in page.text
-    assert 'href="tg://user?id=555"' in page.text  # запасной вариант рядом
-    assert "Открыть чат напрямую" in page.text
-
-
-async def test_private_group_page_says_the_button_opens_a_personal_chat(client, make_order, session):
-    order = await _author_without_username(make_order, session, public_group=False)
-
-    page = await client.get(f"/orders/{order.id}")
-
-    assert "откроет личный чат" in page.text
-    assert "Открыть чат напрямую" not in page.text  # он и так главная кнопка
-
-
 async def test_station_spellings_are_one_suggestion(session, make_order):
     """«Жд симф», «ж/д Симф» и «ЖД Симферополь» — один вокзал, а не три строки в подсказках."""
     for spelling in ("Жд симф", "ж/д Симф", "ЖД Симферополь"):

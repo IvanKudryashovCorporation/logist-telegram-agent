@@ -74,7 +74,7 @@ def test_place_key_depends_on_region_hint():
 
 @pytest.mark.parametrize(
     ("value", "expected"),
-    [("25", 25), ("200", 200), ("0", 0), ("", 0), ("abc", 0), ("30", 0), ("-50", 0), ("1000000", 0)],
+    [("25", 25), ("200", 200), ("0", 0), ("", 0), ("abc", 0), ("30", 30), ("-50", 0), ("701", 0), ("1000000", 0)],
 )
 def test_parse_radius_whitelist(value, expected):
     assert geo.parse_radius(value) == expected
@@ -366,10 +366,10 @@ async def test_feed_route_applies_radius_and_keeps_it_in_form(client, make_order
     response = await client.get("/", params={"from_city": "Краснодар", "from_radius": "25"})
 
     assert response.status_code == 200
-    assert f'href="/orders/{near.id}' in response.text
-    assert f'href="/orders/{far.id}' not in response.text
+    assert f'data-order-id="{near.id}"' in response.text
+    assert f'data-order-id="{far.id}"' not in response.text
     assert "~14 км от «Краснодар»" in response.text
-    assert 'name="from_radius" value="25"' in response.text
+    assert 'name="from_radius"' in response.text and 'value="25"' in response.text  # бегунок стоит на 25
 
 
 # --- Адрес поправляет неверно найденную деревню -----------------------------------

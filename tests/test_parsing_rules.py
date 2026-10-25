@@ -150,7 +150,7 @@ def test_message_says_asap_even_if_flag_is_missing():
     assert "в ближайшее время" in dispatcher_message(order)
 
 
-async def test_detail_page_shows_asap_instead_of_not_specified(client, make_order):
+async def test_feed_row_shows_asap_instead_of_not_specified(client, make_order):
     order = await make_order(from_city="Осиново", price="25000", pickup_at=None)
     order_id = order.id
     # make_order не знает про флаг — ставим его так, как это делает разбор.
@@ -161,10 +161,10 @@ async def test_detail_page_shows_asap_instead_of_not_specified(client, make_orde
         row.pickup_asap = True
         await db.commit()
 
-    page = await client.get(f"/orders/{order_id}")
+    page = await client.get("/")
 
     assert page.status_code == 200
-    assert "в ближайшее время" in page.text
+    assert "В ближайшее время" in page.text
     assert "не указана" not in page.text
 
 

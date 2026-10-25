@@ -741,3 +741,64 @@ async def test_notification_says_whether_the_car_is_a_minivan_or_a_car(make_orde
 
     assert order_line(minivan).endswith("🚐 минивэн") and order_line(plain).endswith("🚗 легковой")
     assert "🚐 минивэн" in build_message([minivan], {}) and "🚗 легковой" in build_message([minivan, plain], {})
+
+
+# --- Правка сохранённого фильтра ----------------------------------------------------------
+
+
+async def test_saved_filter_can_be_edited_in_place(client, session, telegram_login_on):
+    await _login(client)
+    await client.post("/filter", data={"from_city": "Краснодар", "from_radius": "50", "notify": "on"})
+    sub = (await session.execute(select(OrderSubscription))).scalar_one()
+
+    page = (await client.get("/filters")).text
+    assert f"edit={sub.id}" in page and "Изменить" in page  # кнопка «Изменить» ведёт в ленту с этим фильтром
+
+    editor = (await client.get(f"/?from_city=Краснодар&from_radius=50&edit={sub.id}&filters_open=1")).text
+    assert f'name="edit_id" value="{sub.id}"' in editor and "Сохранить" in editor
+    assert "details class=\"filters-details\" id=\"filtersDetails\" open" in editor  # панель открыта сразу
+
+    response = await client.post(
+        "/filter", data={"edit_id": str(sub.id), "from_city": "Краснодар", "from_radius": "130", "price_min": "7000"}
+    )
+
+    assert response.status_code == 303 and response.headers["location"] == "/filters"
+    await session.refresh(sub)
+    assert sub.params["from_radius"] == "130" and sub.params["price_min"] == "7000"
+    assert len((await session.execute(select(OrderSubscription))).scalars().all()) == 1  # копия не создалась
+
+
+async def test_edit_cannot_touch_someone_elses_filter(client, session, telegram_login_on):
+    await _login(client)
+    other = OrderSubscription(telegram_id=999, params={"from_city": "Сочи"}, since=now_utc_naive())
+    session.add(other)
+    await session.commit()
+
+    response = await client.post("/filter", data={"edit_id": str(other.id), "from_city": "Ялта"})
+
+    assert response.status_code == 303
+    await session.refresh(other)
+    assert other.params == {"from_city": "Сочи"}
+
+
+async def test_edit_into_an_existing_filter_is_refused(client, session, telegram_login_on):
+    await _login(client)
+    await client.post("/filter", data={"from_city": "Краснодар", "notify": "on"})
+    await client.post("/filter", data={"from_city": "Ялта", "notify": "on"})
+    second = (await session.execute(select(OrderSubscription).order_by(OrderSubscription.id))).scalars().all()[1]
+
+    await client.post("/filter", data={"edit_id": str(second.id), "from_city": "Краснодар"})
+
+    await session.refresh(second)
+    assert second.params["from_city"] == "Ялта"
+
+
+async def test_edit_without_conditions_is_refused(client, session, telegram_login_on):
+    await _login(client)
+    await client.post("/filter", data={"from_city": "Краснодар", "notify": "on"})
+    sub = (await session.execute(select(OrderSubscription))).scalar_one()
+
+    await client.post("/filter", data={"edit_id": str(sub.id), "from_radius": "50"})
+
+    await session.refresh(sub)
+    assert sub.params["from_city"] == "Краснодар"

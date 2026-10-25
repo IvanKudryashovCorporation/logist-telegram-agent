@@ -286,68 +286,73 @@
       });
     })();
 
+    // «Написать диспетчеру» в строке заказа: текст сообщения кладём в буфер, а чат откроет сервер.
     (function () {
-      var select = document.getElementById('sortSelect');
-      if (!select) return;
-
-      var latInput = document.getElementById('sortLat');
-      var lonInput = document.getElementById('sortLon');
-      var form = document.getElementById('searchForm');
-      var lastValue = select.value; // на случай отказа геолокации — откатиться сюда
-      var dirSelect = document.getElementById('dirSelect');
-      var defaults = {};
-      try { defaults = JSON.parse(dirSelect.getAttribute('data-defaults') || '{}'); } catch (e) {}
-
-      // Направление меняется отдельно — сразу перезагружаем ленту.
-      dirSelect.addEventListener('change', function () { form.submit(); });
-
-      select.addEventListener('change', function () {
-        // Новая сортировка — с её обычным направлением (свежие и дорогие сверху,
-        // ближайшая подача первой); водитель может переключить его после.
-        if (defaults[select.value]) dirSelect.value = defaults[select.value];
-        if (select.value !== 'distance') {
-          form.submit();
-          return;
-        }
-        if (!('geolocation' in navigator)) {
-          alert('Геолокация недоступна в этом браузере.');
-          select.value = lastValue;
-          return;
-        }
-        select.disabled = true;
-        navigator.geolocation.getCurrentPosition(
-          function (pos) {
-            latInput.value = pos.coords.latitude;
-            lonInput.value = pos.coords.longitude;
-            select.disabled = false;
-            form.submit();
-          },
-          function () {
-            select.disabled = false;
-            alert('Не удалось определить местоположение — проверьте разрешение геолокации в браузере (нужен HTTPS).');
-            select.value = lastValue;
-          },
-          { enableHighAccuracy: false, timeout: 10000 }
-        );
-      });
-    })();
-
-    (function () {
-      var form = document.getElementById('contactForm');
-      if (!form) return;
-      var text = form.getAttribute('data-message') || '';
-
-      function copy() {
+      document.addEventListener('submit', function (event) {
+        var form = event.target;
+        if (!form.classList || !form.classList.contains('contact-form')) return;
+        var text = form.getAttribute('data-message') || '';
         try {
           if (navigator.clipboard && navigator.clipboard.writeText) {
             navigator.clipboard.writeText(text).catch(function () {});
           }
         } catch (e) { /* буфер недоступен — ссылка с ?text= всё равно сработает */ }
+      });
+    })();
+
+    // Сердечко: добавить заказ в «Избранное» или убрать, не перезагружая страницу.
+    (function () {
+      function bump(delta) {
+        document.querySelectorAll('.tabs a[href="/favorites"] .tab-count').forEach(function (el) {
+          el.textContent = Math.max(0, (parseInt(el.textContent, 10) || 0) + delta);
+        });
       }
 
-      // Копируем при отправке формы: если у диспетчера нет @username (или
-      // клиент Telegram не подхватит ?text=), текст останется в буфере.
-      form.addEventListener('submit', copy);
+      document.addEventListener('click', function (event) {
+        var button = event.target.closest ? event.target.closest('.fav-btn') : null;
+        if (!button || button.disabled) return;
+        event.preventDefault();
+        button.disabled = true;
+        fetch('/orders/' + button.getAttribute('data-order-id') + '/favorite', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Accept': 'application/json' }
+        })
+          .then(function (response) {
+            if (response.status === 401) {
+              location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
+              return null;
+            }
+            return response.ok ? response.json() : null;
+          })
+          .then(function (data) {
+            button.disabled = false;
+            if (!data) return;
+            var on = !!data.favorite;
+            var was = button.classList.contains('on');
+            button.classList.toggle('on', on);
+            button.setAttribute('aria-pressed', on ? 'true' : 'false');
+            if (on !== was) bump(on ? 1 : -1);
+            // На странице «Избранное» снятое сердечко убирает строку из списка.
+            var row = button.closest('#favoritesList .order-row');
+            if (row && !on) row.remove();
+          })
+          .catch(function () { button.disabled = false; });
+      });
+    })();
+
+    // Бегунок радиуса: подпись «+ N км» обновляется на лету.
+    (function () {
+      document.querySelectorAll('.radius-slider input[type="range"]').forEach(function (range) {
+        var output = range.parentNode.querySelector('.radius-value');
+        function paint() {
+          var value = parseInt(range.value, 10) || 0;
+          if (output) output.textContent = value ? '+ ' + value + ' км' : 'Только город';
+          range.style.setProperty('--fill', (value / (parseInt(range.max, 10) || 1) * 100) + '%');
+        }
+        range.addEventListener('input', paint);
+        paint();
+      });
     })();
 
 
@@ -367,12 +372,13 @@
       }
       details.addEventListener('toggle', fitPanel);
       window.addEventListener('resize', fitPanel);
+      fitPanel();
 
       form.addEventListener('submit', function () { details.open = false; });
 
       var countEl = document.getElementById('filterApplyCount');
       if (!countEl) return;
-      var SKIP = { notify: 1, sort: 1, dir: 1, lat: 1, lon: 1 };
+      var SKIP = { notify: 1, edit_id: 1 };
       var timer = null;
       var controller = null;
       var lastQuery = null;
@@ -421,43 +427,6 @@
         document.documentElement.dataset.theme = next;
         try { localStorage.setItem('theme', next); } catch (e) { /* без хранилища тема живёт до перезагрузки */ }
       });
-    })();
-
-    // Возврат из карточки заказа в ленту на то же место прокрутки. Позицию
-    // запоминаем при клике по карточке, а восстанавливаем, только если на ленту
-    // пришли с карточки заказа или кнопкой «назад» (обычный заход — с начала).
-    (function () {
-      var KEY = 'scrollBeforeCard';
-
-      function page() {
-        var params = new URLSearchParams(location.search);
-        params.delete('_cb');
-        params.sort();
-        return location.pathname + '?' + params.toString();
-      }
-
-      document.addEventListener('click', function (event) {
-        var card = event.target.closest ? event.target.closest('a.card') : null;
-        if (!card) return;
-        try {
-          sessionStorage.setItem(KEY, JSON.stringify({ page: page(), y: Math.round(window.scrollY) }));
-        } catch (e) { /* хранилище недоступно — вернёмся в начало, как раньше */ }
-      });
-
-      var saved = null;
-      try { saved = JSON.parse(sessionStorage.getItem(KEY) || 'null'); } catch (e) { saved = null; }
-      if (!saved || saved.page !== page() || !saved.y) return;
-
-      var entries = performance.getEntriesByType ? performance.getEntriesByType('navigation') : [];
-      var cameBack = entries.length > 0 && entries[0].type === 'back_forward';
-      var fromOrder = /\/orders\//.test(document.referrer || '');
-      if (!cameBack && !fromOrder) return;
-
-      function restore() { window.scrollTo(0, saved.y); }
-      restore();
-      // Страница могла дорисоваться после первой прокрутки — повторяем, но только
-      // если пользователь сам ещё никуда не прокрутил.
-      window.addEventListener('load', function () { if (window.scrollY < 10) restore(); });
     })();
 
 // Страница подписки: закрытие баннера и состояние «Создаём платёж…» на кнопках оплаты.

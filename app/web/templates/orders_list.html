@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Лента заказов{% endblock %}
 {% block content %}
+{% from "_order_row.html" import order_row %}
 
 {% if filters.radius_missing %}
   <div class="radius-hint">
@@ -9,63 +10,9 @@
 {% endif %}
 
 {% if orders %}
-  <div class="grid">
+  <div class="order-list">
     {% for order in orders %}
-      {% set geo_notes = filters.radius_notes(order) %}
-      <a class="card {{ 'overdue' if is_overdue(order) else '' }}" href="/orders/{{ order.id }}{% if request.url.query %}?back={{ request.url.query | urlencode }}{% endif %}">
-        <div class="card-top">
-          <div>
-            <div class="card-time {{ '' if order.pickup_at else 'asap' }}">{{ order.pickup_at.strftime("%H:%M") if order.pickup_at else "В ближайшее время" }}</div>
-            <div class="card-subtext">{{ pickup_subtext(order) }}</div>
-          </div>
-          {% if order.client_price %}<div class="card-price">{{ "%.0f"|format(order.client_price) }} ₽</div>{% endif %}
-        </div>
-
-        {% if order.status.value == "needs_clarification" %}
-          <div style="margin-top: 8px;"><span class="badge badge-warn">Уточняется</span></div>
-        {% endif %}
-
-        <div class="route-block">
-          <div class="route-point">
-            <span class="route-marker from"></span>
-            <div>
-              <div class="route-point-city">{{ order.from_city or "?" }}</div>
-              {% if geo_notes.from %}<div class="route-point-geo">{{ geo_notes.from }}</div>{% endif %}
-              {% if order.from_address %}<div class="route-point-address">{{ order.from_address }}</div>{% endif %}
-            </div>
-          </div>
-          {% for stop in order.via_points or [] %}
-            <div class="route-point">
-              <span class="route-marker via"></span>
-              <div><div class="route-point-city">{{ stop.name }}</div></div>
-            </div>
-          {% endfor %}
-          <div class="route-point">
-            <span class="route-marker to"></span>
-            <div>
-              <div class="route-point-city">{{ order.to_city or "?" }}</div>
-              {% if geo_notes.to %}<div class="route-point-geo">{{ geo_notes.to }}</div>{% endif %}
-              {% if order.to_address %}<div class="route-point-address">{{ order.to_address }}</div>{% endif %}
-            </div>
-          </div>
-{% set distance = distance_label(order) %}
-          {% if distance %}<div class="route-distance">Расстояние: {{ distance }}{% set per_km = price_per_km_label(order) %}{% if per_km %} · {{ per_km }}{% endif %}</div>{% endif %}
-        </div>
-
-        {% set tags = order_tags(order) %}
-        {% if tags %}
-          <div class="tags-row">
-            {% for text, dark in tags %}
-              <span class="pill {{ 'dark' if dark else '' }}">{{ text }}</span>
-            {% endfor %}
-          </div>
-        {% endif %}
-
-        <div class="card-footer">
-          <span class="card-footer-meta">{{ relative_ago(order.created_at) }}</span>
-          <span class="card-footer-more">Подробнее →</span>
-        </div>
-      </a>
+      {{ order_row(order, "feed", order.id in favorite_set, request.url.query, filters.radius_notes(order)) }}
     {% endfor %}
   </div>
 {% else %}

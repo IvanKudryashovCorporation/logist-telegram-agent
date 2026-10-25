@@ -47,6 +47,8 @@ TEMPLATE_GLOBALS = {
     "bucket_titles": presenters.BUCKET_TITLES,
     "dispatcher_link": presenters.dispatcher_link,
     "pickup_label": presenters.pickup_label,
+    "row_when": presenters.row_when,
+    "dispatcher_message": presenters.dispatcher_message,
     "pickup_subtext": presenters.pickup_subtext,
     "distance_label": presenters.distance_label,
     "message_link": presenters.message_link,

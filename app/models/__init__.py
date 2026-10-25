@@ -10,6 +10,7 @@ from app.models.enums import (
     ParseOutcome,
     PendingStatus,
 )
+from app.models.favorite import OrderFavorite
 from app.models.geo_place import GeoPlace
 from app.models.log import ActionLog
 from app.models.notification import Notification
@@ -33,6 +34,7 @@ __all__ = [
     "GeoPlace",
     "Notification",
     "Order",
+    "OrderFavorite",
     "OrderStatus",
     "OrderSubscription",
     "ParseOutcome",

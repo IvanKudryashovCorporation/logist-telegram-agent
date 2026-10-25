@@ -91,12 +91,12 @@ async def test_feature_disabled_by_default_in_tests():
     assert settings.telegram_login_enabled is False
 
 
-async def test_anonymous_can_open_order_detail_when_login_disabled(client, make_order):
+async def test_order_card_is_closed_even_when_login_disabled(client, make_order):
     order = await make_order()
 
     response = await client.get(f"/orders/{order.id}")
 
-    assert response.status_code == 200
+    assert response.status_code == 303 and response.headers["location"] == "/"
 
 
 async def test_anonymous_can_open_my_orders_when_login_disabled(client):
@@ -125,22 +125,20 @@ def telegram_login_on(monkeypatch):
     yield
 
 
-async def test_guest_can_open_order_card_without_login(client, make_order, telegram_login_on):
-    order = await make_order(client_phone="+79991234567", dispatcher_username="secret_disp")
+async def test_guest_sees_the_feed_without_contacts_or_dispatcher_links(client, make_order, telegram_login_on):
+    await make_order(client_phone="+79991234567", dispatcher_username="secret_disp")
 
-    response = await client.get(f"/orders/{order.id}")
+    response = await client.get("/")
 
     assert response.status_code == 200
     # Гость не «хозяин» свободного заказа: телефон клиента скрыт, а ссылка на
     # диспетчера в разметку не попадает (её выдаёт только POST после входа).
     assert "+79991234567" not in response.text
     assert "t.me/secret_disp" not in response.text
-    assert "войдите через Telegram" in response.text
-    assert ">0<" in response.text.split("Мои заказы", 1)[1][:80]  # у гостя нет «своих»
 
 
 @pytest.mark.parametrize("action", ["contact", "agree", "complete", "take"])
-async def test_guest_action_sends_to_login_and_back_to_the_card(
+async def test_guest_action_sends_to_login_and_back_to_the_feed(
     client, make_order, telegram_login_on, action
 ):
     order = await make_order()
@@ -148,11 +146,9 @@ async def test_guest_action_sends_to_login_and_back_to_the_card(
     response = await client.post(f"/orders/{order.id}/{action}?back=sort%3Dprice")
 
     assert response.status_code == 303
-    # После входа водитель вернётся на карточку (с параметрами ленты), а не на
+    # После входа водитель вернётся в ленту (с её параметрами), а не на
     # адрес POST-запроса, который как GET дал бы 405.
-    assert response.headers["location"] == (
-        f"/login?next=%2Forders%2F{order.id}%3Fback%3Dsort%253Dprice"
-    )
+    assert response.headers["location"] == "/login?next=%2F%3Fsort%3Dprice"
 
 
 async def test_after_login_contact_opens_dispatcher_chat(client, make_order, telegram_login_on):
@@ -200,9 +196,6 @@ async def test_full_login_cycle_creates_driver_and_grants_access(client, make_or
     assert driver.first_name == "Иван"
 
     # Сессия из cookie реально пускает на закрытые страницы.
-    detail = await client.get(f"/orders/{order.id}")
-    assert detail.status_code == 200
-
     my_page = await client.get("/my")
     assert my_page.status_code == 200
 
@@ -268,12 +261,12 @@ async def test_take_order_uses_stable_telegram_token(client, make_order, session
 async def test_logout_revokes_access(client, make_order, telegram_login_on):
     order = await make_order()
     await client.get("/auth/telegram", params=_signed_params())
-    assert (await client.get(f"/orders/{order.id}")).status_code == 200
+    assert (await client.get("/my")).status_code == 200
 
     await client.post("/auth/logout")
 
-    # Карточка открыта и гостю, а вот действия и «Мои заказы» — снова через вход.
-    assert (await client.get(f"/orders/{order.id}")).status_code == 200
+    # Лента открыта и гостю, а вот действия и «Избранное» — снова через вход.
+    assert (await client.get("/")).status_code == 200
     action = await client.post(f"/orders/{order.id}/contact")
     assert action.status_code == 303
     assert action.headers["location"].startswith("/login")

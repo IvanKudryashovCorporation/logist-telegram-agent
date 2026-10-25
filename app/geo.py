@@ -42,8 +42,10 @@ log = logging.getLogger("app.geo")
 
 Coords = tuple[float, float]
 
-#: Допустимые значения радиуса, км (0 — только сам город).
-RADIUS_CHOICES: tuple[int, ...] = (0, 25, 50, 100, 200, 300, 500, 700)
+#: Радиус, км: бегунок на сайте от 0 (только сам город) до ``RADIUS_MAX`` с шагом ``RADIUS_STEP``.
+RADIUS_MAX = 700
+RADIUS_STEP = 5
+RADIUS_CHOICES: tuple[int, ...] = tuple(range(0, RADIUS_MAX + 1, RADIUS_STEP))
 
 #: Километров в градусе широты (и долготы на экваторе).
 KM_PER_DEGREE = 111.2
@@ -87,12 +89,12 @@ def flat_distance_km(center: Coords, point: Coords) -> float:
 
 
 def parse_radius(value) -> int:
-    """Радиус из query-параметра: только значения из белого списка, иначе 0."""
+    """Радиус из query-параметра: целое число от 0 до ``RADIUS_MAX`` км, иначе 0."""
     try:
         parsed = int(str(value).strip())
     except (TypeError, ValueError):
         return 0
-    return parsed if parsed in RADIUS_CHOICES else 0
+    return parsed if 0 < parsed <= RADIUS_MAX else 0
 
 
 # --- Нормализация названий ---------------------------------------------------

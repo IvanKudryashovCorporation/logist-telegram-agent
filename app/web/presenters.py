@@ -169,6 +169,22 @@ def pickup_label(order: Order, *, now: Optional[datetime] = None) -> str:
     return f"{clock}, {order.pickup_at.strftime('%d.%m')}"
 
 
+def row_when(order: Order, *, now: Optional[datetime] = None) -> str:
+    """Время подачи для строки списка: «Завтра | 06:00», «27.10 | 14:35», «Сегодня | 12:10» или «В ближайшее время»."""
+    if order.pickup_at is None:
+        return "В ближайшее время"
+    today = (now or now_msk_naive()).date()
+    pickup_date = order.pickup_at.date()
+    clock = order.pickup_at.strftime("%H:%M")
+    if pickup_date == today:
+        day = "Сегодня"
+    elif pickup_date == today + timedelta(days=1):
+        day = "Завтра"
+    else:
+        day = order.pickup_at.strftime("%d.%m")
+    return f"{day} | {clock}"
+
+
 def distance_label(order: Order) -> str:
     """«243 км» — или пустая строка, если расстояния нет."""
     km = order.distance_km

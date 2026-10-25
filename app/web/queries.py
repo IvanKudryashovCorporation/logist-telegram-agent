@@ -32,6 +32,7 @@ from app.models import (
     ActorType,
     Driver,
     Order,
+    OrderFavorite,
     OrderStatus,
     OrderSubscription,
     WorkGroup,
@@ -356,11 +357,11 @@ async def header_counts(session: AsyncSession, token: str, telegram_id: Optional
             select(func.count()).select_from(Order).where(*feed_conditions())
         )
     ).scalar_one()
-    my_count = (
-        await session.execute(
-            select(func.count()).select_from(Order).where(Order.taken_by_token == token)
-        )
-    ).scalar_one()
+    # «Избранное»: отмеченные сердечком и те, по которым договорились (без повторов).
+    my_ids = select(Order.id).where(Order.taken_by_token == token).union(
+        select(OrderFavorite.order_id).where(OrderFavorite.owner_token == token)
+    )
+    my_count = (await session.execute(select(func.count()).select_from(my_ids.subquery()))).scalar_one()
     # Сколько групп сейчас читает агент — а не из скольких уже пришли заказы:
     # новые группы молчат, пока в них не появится заявка, и счётчик «застревал».
     groups_count = (

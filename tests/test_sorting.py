@@ -1,5 +1,6 @@
 """Сортировка ленты: по расстоянию и цене за км, в обе стороны."""
 
+import re
 from datetime import timedelta
 from decimal import Decimal
 
@@ -107,35 +108,6 @@ async def test_site_accepts_new_sorts_and_direction(client, trio):
             assert response.status_code == 200, (sort, direction)
 
 
-async def test_site_orders_cards_by_direction(client, trio):
-    def positions(html):
-        return [html.index(f"/orders/{trio[key]}") for key in ("a", "b", "c")]
-
-    desc = (await client.get("/?sort=trip_km&dir=desc")).text
-    asc = (await client.get("/?sort=trip_km&dir=asc")).text
-
-    a, b, c = positions(desc)
-    assert b < a < c
-    a, b, c = positions(asc)
-    assert c < a < b
-
-
-async def test_site_shows_direction_picker_with_selected_value(client, trio):
-    page = await client.get("/?sort=per_km&dir=asc")
-
-    assert 'id="dirSelect"' in page.text
-    assert "Цене за км" in page.text
-    assert 'value="asc" selected' in page.text
-    assert "dir%3Dasc" in page.text  # ссылка карточки «назад к ленте» хранит направление
-
-
-async def test_unknown_direction_falls_back_to_default(client, trio):
-    page = await client.get("/?sort=price&dir=sideways")
-
-    assert page.status_code == 200
-    assert 'value="desc" selected' in page.text
-
-
 async def test_price_decimal_is_not_broken_by_per_km_expression(session, make_order):
     """Цена — Numeric, расстояние — Float: выражение должно работать на обеих БД."""
     await _order(make_order, session, price="8000.50", km=100.0)
@@ -145,9 +117,10 @@ async def test_price_decimal_is_not_broken_by_per_km_expression(session, make_or
     assert page.items[0].client_price == Decimal("8000.50")
 
 
-async def test_buttons_have_different_colors(client, make_order):
-    order = await make_order()
-    page = await client.get(f"/orders/{order.id}")
+async def test_site_has_no_sorting_and_ignores_sort_params(client, trio):
+    plain = (await client.get("/")).text
+    tweaked = (await client.get("/?sort=trip_km&dir=asc")).text
 
-    assert page.text.count('class="btn-contact"') == 1  # «Написать диспетчеру»
-    assert page.text.count('class="btn-ok"') == 1  # «Договорился с диспетчером»
+    assert "sortSelect" not in plain and 'id="dirSelect"' not in plain
+    ids = lambda html: re.findall(r'/orders/(\d+)/contact', html)  # noqa: E731
+    assert ids(plain) == ids(tweaked) and len(ids(plain)) == 3  # порядок один и тот же: свежие сверху

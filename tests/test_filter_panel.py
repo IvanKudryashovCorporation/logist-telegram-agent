@@ -19,14 +19,13 @@ async def _seed(make_order):
 # --- «Радиус» вместо «Только город» ----------------------------------------------------
 
 
-async def test_radius_select_says_radius(client, make_order):
+async def test_radius_is_a_slider_that_says_city_only(client, make_order):
     await _seed(make_order)
 
     page = await client.get("/")
 
-    assert "Только город" not in page.text
-    assert '<option value="0"' in page.text and ">Радиус</option>" in page.text
-    assert "+ 50 км" in page.text
+    assert 'type="range"' in page.text and 'class="radius-value"' in page.text  # бегунок вместо списка
+    assert "Только город" in page.text
 
 
 # --- Счётчик ---------------------------------------------------------------------------

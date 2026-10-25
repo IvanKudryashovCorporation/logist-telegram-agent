@@ -162,23 +162,20 @@ def test_price_per_km_label():
     assert presenters.price_per_km_label(Order(distance_km=0.4, client_price=8000)) == ""
 
 
-async def test_site_shows_distance_on_feed_and_card(client, make_order, session):
+async def test_site_shows_distance_in_the_feed_row(client, make_order, session):
     order = await make_order(from_coords=PETROZAVODSK, to_coords=SORTAVALA)
     order.distance_km = 243.5
     await session.commit()
 
     feed = await client.get("/")
-    card = await client.get(f"/orders/{order.id}")
 
-    for page in (feed, card):
-        assert "Расстояние: 244 км · 57 ₽/км" in page.text  # цена заказа по умолчанию 14000
+    assert "244 км · 57 ₽/км" in feed.text  # цена заказа по умолчанию 14000
 
 
 async def test_site_without_distance_shows_nothing(client, make_order):
-    order = await make_order()
+    await make_order()
 
-    assert "Расстояние:" not in (await client.get("/")).text
-    assert "Расстояние:" not in (await client.get(f"/orders/{order.id}")).text
+    assert " км" not in (await client.get("/")).text.split('class="order-list"', 1)[1].split("</main>", 1)[0]
 
 
 async def test_geocoding_again_resets_the_distance(make_order, session, fake_osrm):

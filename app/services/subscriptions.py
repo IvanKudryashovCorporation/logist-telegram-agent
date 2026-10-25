@@ -38,8 +38,7 @@ from app.models import (
     WorkGroup,
 )
 from app.search import vehicle_type_of
-from app.services import billing
-from app.services import wakeup
+from app.services import billing, wakeup
 from app.timeutil import now_msk_naive, now_utc_naive
 from app.web import queries
 from app.web.filters import VEHICLE_CHOICES, Filters
@@ -176,6 +175,28 @@ async def add_subscription(
     session.add(sub)
     await session.commit()
     return sub, ADDED
+
+
+async def update_subscription(
+    session, telegram_id: int, sub_id: int, params: dict
+) -> tuple[Optional[OrderSubscription], str]:
+    """Меняет условия уже сохранённого фильтра.
+
+    ``exists`` — такой же фильтр у водителя уже есть (другой): две копии не плодим, правка не применяется.
+    Время ``since`` двигаем на «сейчас»: по новым условиям присылаем только то, что появится дальше.
+    """
+    sub = await get_subscription(session, telegram_id, sub_id)
+    if sub is None:
+        return None, "missing"
+    for other in await list_subscriptions(session, telegram_id):
+        if other.id != sub.id and other.params == params:
+            return sub, EXISTS
+    if sub.params != params:
+        sub.params = params
+        sub.since = now_utc_naive()
+        sub.error = None
+        await session.commit()
+    return sub, "updated"
 
 
 async def set_subscription_active(

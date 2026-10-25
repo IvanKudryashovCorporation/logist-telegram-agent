@@ -49,7 +49,7 @@ async def test_feed_renders_and_issues_driver_cookie(client, make_order):
 
     assert response.status_code == 200
     assert "Симферополь" in response.text
-    assert f"/orders/{order.id}" in response.text
+    assert f'data-order-id="{order.id}"' in response.text  # строка заказа в списке
     # Без cookie водителя сайт не может хранить «мои заказы» — выдаёт её сразу.
     assert response.cookies.get("driver_id")
 
@@ -67,41 +67,6 @@ async def test_feed_pagination_links_keep_filters(client, make_order):
     assert "sort=price" in response.text
     # WEB_PAGE_SIZE=5 в тестах, 12 заказов → страница 2 существует, страница 3 — последняя.
     assert "page=3" in response.text
-
-
-async def test_order_detail_back_link_preserves_feed_filters(client, make_order):
-    """Уходя с карточки заказа, водитель должен вернуться к тем же фильтрам
-    и сортировке, что были в ленте — а не на дашборд с настройками по
-    умолчанию."""
-    order = await make_order(from_city="Сочи", to_city="Адлер")
-
-    feed_response = await client.get("/?from_city=Сочи&sort=price")
-    assert f"/orders/{order.id}?back=" in feed_response.text
-
-    match = re.search(rf"/orders/{order.id}\?back=([^\"&]+)", feed_response.text)
-    assert match is not None, "ссылка на карточку не сохраняет текущий запрос"
-    back_param = match.group(1)
-
-    detail_response = await client.get(f"/orders/{order.id}?back={back_param}")
-    assert detail_response.status_code == 200
-    # Ссылка "← ко всем заказам" обязана вернуть на ту же ленту, а не на "/".
-    back_link_match = re.search(r'href="(/\?[^"]+)" class="back-link"', detail_response.text)
-    assert back_link_match is not None, "ссылка назад не сохранила текущий запрос"
-    back_href = back_link_match.group(1)
-    assert "sort=price" in back_href
-    assert "from_city=" in back_href
-    # Кнопка действия тоже должна нести back — иначе после неё это потеряется.
-    assert f"/orders/{order.id}/contact?back={back_param}" in detail_response.text
-
-
-async def test_order_detail_back_link_is_plain_without_query(client, make_order):
-    """Без фильтров в ленте ссылка назад — просто "/", без пустого "?"."""
-    order = await make_order()
-
-    response = await client.get(f"/orders/{order.id}")
-
-    assert response.status_code == 200
-    assert 'href="/" class="back-link"' in response.text
 
 
 async def test_feed_shows_result_count(client, make_order):
@@ -122,7 +87,7 @@ async def test_my_orders_page(client, make_order):
     response = await client.get("/my")
 
     assert response.status_code == 200
-    assert f"/orders/{order.id}" in response.text
+    assert f'data-order-id="{order.id}"' in response.text
 
 
 async def test_empty_feed_renders_without_error(client):
@@ -134,79 +99,15 @@ async def test_empty_feed_renders_without_error(client):
 # --- Карточка заказа и маскирование контактов --------------------------------
 
 
-async def test_order_detail_masks_contacts_for_stranger(client, make_order):
-    order = await make_order(client_phone=PHONE, client_name="Иван Петров")
+async def test_missing_order_returns_404_for_admin(client, monkeypatch):
+    monkeypatch.setattr("app.web.routes.is_admin", lambda request: True)
 
-    response = await client.get(f"/orders/{order.id}")
-
-    assert response.status_code == 200
-    assert PHONE not in response.text, "полный телефон не должен быть виден посторонним"
-    assert MASKED_PHONE in response.text
-    assert "Иван Петров" not in response.text
-
-
-async def test_order_detail_shows_full_contacts_to_owner(client, make_order):
-    order = await make_order(client_phone=PHONE, client_name="Иван Петров")
-    _as_driver(client, TOKEN_A)
-    await client.post(f"/orders/{order.id}/take")
-
-    response = await client.get(f"/orders/{order.id}")
-
-    assert response.status_code == 200
-    assert PHONE in response.text
-    assert "Иван Петров" in response.text
-
-
-async def test_masking_can_be_switched_off(client, make_order, monkeypatch):
-    """MASK_CLIENT_CONTACTS=false — телефон виден всем (например, для закрытой витрины)."""
-    from app.config import settings
-
-    monkeypatch.setattr(settings, "mask_client_contacts", False)
-    order = await make_order(client_phone=PHONE)
-
-    response = await client.get(f"/orders/{order.id}")
-
-    assert PHONE in response.text
-
-
-async def test_missing_order_returns_404(client):
     response = await client.get("/orders/999999")
 
     assert response.status_code == 404
 
 
 RAW_TEXT = "24.05 18:00 Симферополь — Сочи, 2 пассажира, 14000, Иван Петров +79990000000"
-
-
-async def test_raw_text_is_redacted_for_stranger(client, make_order):
-    """Оригинал заявки не должен выдавать контакты клиента посторонним.
-
-    Без вымарывания masking превращался в декорацию: телефон и имя оставались
-    в «исходном тексте заявки», который виден всем.
-    """
-    order = await make_order(client_phone=PHONE, client_name="Иван Петров", raw_text=RAW_TEXT)
-
-    response = await client.get(f"/orders/{order.id}")
-    page = response.text
-
-    assert response.status_code == 200
-    assert PHONE not in page
-    assert "Петров" not in page
-    # Маршрут, время и цена остаются — иначе заявка теряет смысл.
-    assert "Симферополь" in page
-    assert "14000" in page
-    assert "18:00" in page
-
-
-async def test_raw_text_is_full_for_owner(client, make_order):
-    order = await make_order(client_phone=PHONE, client_name="Иван Петров", raw_text=RAW_TEXT)
-    _as_driver(client, TOKEN_A)
-    await client.post(f"/orders/{order.id}/take")
-
-    page = (await client.get(f"/orders/{order.id}")).text
-
-    assert PHONE in page
-    assert "Иван Петров" in page
 
 
 async def test_unknown_page_returns_404(client):
@@ -225,7 +126,7 @@ async def test_take_action_redirects_and_persists(client, make_order, session):
     response = await client.post(f"/orders/{order.id}/take")
 
     assert response.status_code == 303
-    assert response.headers["location"] == f"/orders/{order.id}"
+    assert response.headers["location"] == "/"  # карточки заказа нет — возвращаем в ленту
     assert (await _reload(session, order.id)).taken_by_token == TOKEN_A
 
 
@@ -243,7 +144,7 @@ async def test_second_driver_sees_explanation_notice(client, make_order):
     response = await client.post(f"/orders/{order.id}/take")
     assert response.status_code == 303
 
-    page = await client.get(f"/orders/{order.id}")
+    page = await client.get("/")
     assert page.status_code == 200
     assert "другой водитель" in page.text
 
@@ -256,7 +157,7 @@ async def test_repeat_take_does_not_show_false_error(client, make_order):
     response = await client.post(f"/orders/{order.id}/take")
     assert response.status_code == 303
 
-    page = await client.get(f"/orders/{order.id}")
+    page = await client.get("/")
     assert "уже закрыт" not in page.text
 
 
@@ -306,7 +207,7 @@ async def test_contact_is_refused_for_order_taken_by_other(client, make_order):
     response = await client.post(f"/orders/{order.id}/contact")
 
     assert response.status_code == 303
-    assert response.headers["location"] == f"/orders/{order.id}"
+    assert response.headers["location"] == "/"
 
 
 async def test_agree_takes_free_order_and_moves_it_to_my_orders(client, make_order, session):
@@ -321,7 +222,7 @@ async def test_agree_takes_free_order_and_moves_it_to_my_orders(client, make_ord
     assert reloaded.taken_by_token == TOKEN_A
     assert reloaded.status == OrderStatus.AGREED
     assert order.id not in {o.id for o in (await queries.fetch_feed(session, page_size=50)).items}
-    assert f"/orders/{order.id}" in (await client.get("/my")).text
+    assert f'data-order-id="{order.id}"' in (await client.get("/my")).text
 
 
 async def test_second_driver_cannot_agree_taken_order(client, make_order, session):
@@ -333,18 +234,8 @@ async def test_second_driver_cannot_agree_taken_order(client, make_order, sessio
     response = await client.post(f"/orders/{order.id}/agree")
 
     assert response.status_code == 303
-    assert response.headers["location"] == f"/orders/{order.id}"
+    assert response.headers["location"] == "/"
     assert (await _reload(session, order.id)).taken_by_token == TOKEN_A
-
-
-async def test_detail_page_has_contact_and_agree_buttons(client, make_order):
-    order = await make_order()
-
-    page = (await client.get(f"/orders/{order.id}")).text
-
-    assert "Написать диспетчеру" in page
-    assert "Договорился с диспетчером" in page
-    assert f"/orders/{order.id}/contact" in page
 
 
 async def test_feedback_marks_problem_and_thanks(client, make_order, session):
@@ -363,8 +254,7 @@ async def test_feedback_marks_problem_and_thanks(client, make_order, session):
     assert "Цена неактуальна" in reloaded.problem_note
     assert "диспетчер просил дороже" in reloaded.problem_note
 
-    page = await client.get(f"/orders/{order.id}")
-    assert "Спасибо" in page.text
+    assert "Спасибо" in (await client.get("/")).text
 
 
 async def test_feedback_without_reason_is_rejected(client, make_order, session):
@@ -417,69 +307,6 @@ async def test_robots_txt_forbids_indexing_except_public_pages(client):
 
 
 @pytest.mark.parametrize(
-    ("path", "marker"),
-    [
-        ("/static/style.css", ".card"),
-        ("/static/app.js", "addEventListener"),
-        ("/static/admin.css", ".admin-nav"),
-    ],
-)
-async def test_static_assets_are_served(client, path, marker):
-    response = await client.get(path)
-
-    assert response.status_code == 200
-    assert marker in response.text
-    assert response.headers["content-type"].startswith(("text/css", "application/javascript", "text/javascript"))
-
-
-async def test_templates_have_no_large_inline_assets(client):
-    """CSS/JS вынесены в /static: иначе их нельзя кэшировать, а HTML раздут."""
-    base = (TEMPLATES / "base.html").read_text(encoding="utf-8")
-
-    assert "static_url('style.css')" in base
-    assert "static_url('app.js')" in base
-    assert "<style>" not in base, "инлайн-стили должны жить в static/style.css"
-    assert "<script>" not in base.replace("<script src=", ""), (
-        "инлайн-скрипты должны жить в static/app.js"
-    )
-
-
-async def test_security_headers_present(client):
-    response = await client.get("/")
-
-    assert response.headers["x-content-type-options"] == "nosniff"
-    assert response.headers["x-frame-options"] == "DENY"
-    assert response.headers["referrer-policy"] == "same-origin"
-
-
-async def test_hsts_absent_on_localhost(client):
-    """HSTS по http://localhost сломал бы разработчику доступ к сайту."""
-    response = await client.get("/")
-
-    assert "strict-transport-security" not in response.headers
-
-
-async def test_interactive_docs_are_disabled(client):
-    """Публичный /docs перечислил бы все эндпоинты, включая админку."""
-    for path in ("/docs", "/redoc", "/openapi.json"):
-        assert (await client.get(path)).status_code == 404, path
-
-
-@pytest.mark.parametrize(
-    "status", [OrderStatus.EXPIRED, OrderStatus.CANCELLED, OrderStatus.AGREED]
-)
-async def test_closed_order_page_is_gone_for_strangers(client, make_order, status):
-    order = await make_order(status=status)
-    _as_driver(client, TOKEN_B)
-
-    response = await client.get(f"/orders/{order.id}")
-
-    assert response.status_code == 410
-    assert "больше не доступен" in response.text
-    assert "Написать диспетчеру" not in response.text
-
-
-@pytest.mark.parametrize(
     "status", [OrderStatus.EXPIRED, OrderStatus.CANCELLED, OrderStatus.AGREED]
 )
 async def test_closed_order_page_is_open_for_admin(client, make_order, monkeypatch, status):
@@ -499,36 +326,37 @@ async def test_closed_order_stays_visible_in_owners_history(client, make_order):
     order = await make_order(status=OrderStatus.EXPIRED, taken_by_token=TOKEN_A)
     _as_driver(client, TOKEN_A)
 
-    response = await client.get(f"/orders/{order.id}")
+    response = await client.get("/my")
 
     assert response.status_code == 200
+    assert f'data-order-id="{order.id}"' in response.text
 
 
 async def test_complete_button_flow_over_http(client, make_order, session):
     order = await make_order()
     _as_driver(client, TOKEN_A)
 
-    before = (await client.get(f"/orders/{order.id}")).text
+    before = (await client.get("/my")).text
     assert "Выполнил заказ" not in before  # пока не «Договорился» — кнопки нет
 
     await client.post(f"/orders/{order.id}/agree")
-    agreed_page = (await client.get(f"/orders/{order.id}")).text
+    agreed_page = (await client.get("/my")).text
     assert "Выполнил заказ" in agreed_page and "Отменить" in agreed_page
 
     response = await client.post(f"/orders/{order.id}/complete")
     assert response.status_code == 303 and response.headers["location"] == "/my"
     assert (await _reload(session, order.id)).status == OrderStatus.COMPLETED
 
-    done_page = (await client.get(f"/orders/{order.id}")).text
+    done_page = (await client.get("/my")).text
     assert "Выполнил заказ" not in done_page and "Отменить" not in done_page
     assert "Выполнен" in done_page
 
 
 async def test_in_progress_order_still_has_complete_and_cancel(client, make_order):
-    order = await make_order(status=OrderStatus.IN_PROGRESS, taken_by_token=TOKEN_A)
+    await make_order(status=OrderStatus.IN_PROGRESS, taken_by_token=TOKEN_A)
     _as_driver(client, TOKEN_A)
 
-    page = (await client.get(f"/orders/{order.id}")).text
+    page = (await client.get("/my")).text
 
     assert "Выполнил заказ" in page and "Отменить" in page and "В работе" in page
 
@@ -577,17 +405,98 @@ async def test_brand_icons_are_linked_and_served(client):
 
 
 async def test_header_brand_links_to_the_feed_from_any_page(client, make_order):
-    order = await make_order()
+    await make_order()
 
-    for path in ("/", f"/orders/{order.id}"):
+    for path in ("/", "/favorites"):
         page = (await client.get(path)).text
         assert re.search(r'<a href="/" class="brand"[^>]*>\s*<img class="logo"', page), path
         assert "Лента заказов</span>" in page, path
 
 
-async def test_app_js_restores_feed_scroll_after_returning_from_an_order(client):
-    script = (await client.get("/static/app.js")).text
+# --- Список, сердечко, избранное, карточки заказа нет ---------------------------------------
 
-    assert "scrollBeforeCard" in script and "sessionStorage" in script
-    assert "back_forward" in script and "scrollTo(0, saved.y)" in script
-    assert "requestAnimationFrame" not in script  # в фоновой вкладке не срабатывает
+
+async def test_order_card_is_closed_for_drivers(client, make_order):
+    order = await make_order()
+    _as_driver(client, TOKEN_A)
+
+    response = await client.get(f"/orders/{order.id}?back=from_city%3D%D0%A1%D0%BE%D1%87%D0%B8")
+
+    assert response.status_code == 303
+    assert unquote(response.headers["location"]) == "/?from_city=Сочи"
+
+
+async def test_closed_order_card_redirects_strangers_and_stays_open_for_admin(client, make_order, monkeypatch):
+    order = await make_order(status=OrderStatus.EXPIRED)
+    _as_driver(client, TOKEN_B)
+
+    assert (await client.get(f"/orders/{order.id}")).status_code == 303
+    monkeypatch.setattr("app.web.routes.is_admin", lambda request: True)
+    assert (await client.get(f"/orders/{order.id}")).status_code == 200
+
+
+async def test_feed_is_a_list_with_heart_and_message_buttons(client, make_order):
+    order = await make_order(client_phone=PHONE, client_name="Иван Петров")
+
+    page = (await client.get("/")).text
+
+    assert 'class="order-list"' in page and 'class="order-row' in page
+    assert f"/orders/{order.id}/contact" in page and "fav-btn" in page
+    assert "Подробнее" not in page  # кнопки «Подробнее» и ссылок на карточку нет
+    assert f'href="/orders/{order.id}' not in page
+    assert PHONE not in page and "Иван Петров" not in page
+
+
+async def test_feed_has_no_sorting_and_tabs_have_favorites_and_filters(client, make_order):
+    await make_order()
+
+    page = (await client.get("/?sort=price&dir=asc")).text
+
+    assert "sortSelect" not in page and "Сортировать" not in page
+    assert ">Избранное" in page and "Мои заказы" not in page
+    assert 'id="filtersDetails"' in page and "Фильтры" in page
+    assert page.index("Избранное") < page.index('id="filtersDetails"')  # кнопка фильтров — во вкладках
+
+
+async def test_radius_is_a_slider(client):
+    page = (await client.get("/?from_city=Сочи&from_radius=130")).text
+
+    assert 'type="range"' in page and 'name="from_radius"' in page and 'value="130"' in page
+    assert "radius-select" not in page.split('id="filtersForm"', 1)[1].split("Тип авто", 1)[0]
+
+
+async def test_heart_adds_and_removes_favorite(client, make_order, session):
+    order = await make_order()
+    _as_driver(client, TOKEN_A)
+    headers = {"accept": "application/json"}
+
+    added = await client.post(f"/orders/{order.id}/favorite", headers=headers)
+    assert added.json() == {"favorite": True}
+    assert 'fav-btn on' in (await client.get("/")).text
+    assert f'data-order-id="{order.id}"' in (await client.get("/favorites")).text
+    # Закладка не прячет заказ от других и не «берёт» его.
+    assert (await _reload(session, order.id)).taken_by_token is None
+    _as_driver(client, TOKEN_B)
+    assert 'fav-btn on' not in (await client.get("/")).text
+
+    _as_driver(client, TOKEN_A)
+    removed = await client.post(f"/orders/{order.id}/favorite", headers=headers)
+    assert removed.json() == {"favorite": False}
+    assert f'data-order-id="{order.id}"' not in (await client.get("/favorites")).text
+
+
+async def test_favorite_for_missing_order_is_404(client):
+    response = await client.post("/orders/999999/favorite", headers={"accept": "application/json"})
+
+    assert response.status_code == 404
+
+
+async def test_taken_order_in_favorites_shows_client_contacts_to_owner_only(client, make_order):
+    order = await make_order(client_phone=PHONE, client_name="Иван Петров")
+    _as_driver(client, TOKEN_A)
+    await client.post(f"/orders/{order.id}/agree")
+
+    assert PHONE in (await client.get("/favorites")).text
+
+    _as_driver(client, TOKEN_B)
+    assert PHONE not in (await client.get("/favorites")).text

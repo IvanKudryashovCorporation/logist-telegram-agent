@@ -95,5 +95,5 @@ async def test_header_has_no_search_box_or_live_badge_and_shows_profile_tile(cli
     for html in (guest, page):
         assert "Город, телефон или цена" not in html  # поле поиска убрано
         assert "live-badge" not in html and "Live ·" not in html  # «Live» перенесён в админку
-        assert 'id="sortSelect"' in html and 'id="filtersDetails"' in html and 'class="toolbar-row"' in html
+        assert 'id="sortSelect"' not in html and 'id="filtersDetails"' in html  # сортировки нет, «Фильтры» — кнопка
     assert 'class="header-profile-tile' in page and "ivan_driver" in page and "userpic/320/ivan.jpg" in page

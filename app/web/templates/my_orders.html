@@ -1,76 +1,40 @@
 {% extends "base.html" %}
-{% block title %}Мои заказы — Лента заказов{% endblock %}
+{% block title %}Избранное — Лента заказов{% endblock %}
 {% block content %}
+{% from "_order_row.html" import order_row %}
 
 {% if is_logged_in %}
-  <div class="hint">Заказы, по которым вы договорились. Статистика и выход — в <a href="/profile">профиле</a>.</div>
+  <div class="hint">Заказы с сердечком и те, по которым вы договорились. Статистика и выход — в <a href="/profile">профиле</a>.</div>
 {% else %}
-  <div class="hint">Заказы, которые вы взяли. Хранятся на этом устройстве, без регистрации. Другим водителям они больше не видны.</div>
+  <div class="hint">Избранные заказы хранятся на этом устройстве, без регистрации. Другим водителям они не видны.</div>
+{% endif %}
+
+{% if favorites %}
+  <div class="section-title today"><span class="section-dot"></span>Избранное<span class="section-count">{{ favorites|length }}</span></div>
+  <div class="order-list" id="favoritesList">
+    {% for order in favorites %}
+      {{ order_row(order, "favorite", True) }}
+    {% endfor %}
+  </div>
 {% endif %}
 
 {% for key in ["today", "tomorrow", "later", "no_date"] %}
   {% set orders = buckets[key] %}
   {% if orders %}
     <div class="section-title {{ key }}">
-      <span class="section-dot"></span>{{ bucket_titles[key] }}
+      <span class="section-dot"></span>Договорились · {{ bucket_titles[key] | lower }}
       <span class="section-count">{{ orders|length }}</span>
     </div>
-    <div class="grid">
+    <div class="order-list">
       {% for order in orders %}
-        <a class="card {{ 'overdue' if is_overdue(order) else '' }}" href="/orders/{{ order.id }}">
-          <div class="card-top">
-            <div>
-              <div class="card-time {{ '' if order.pickup_at else 'asap' }}">{{ order.pickup_at.strftime("%H:%M") if order.pickup_at else "В ближайшее время" }}</div>
-              <div class="card-subtext">{{ pickup_subtext(order) }}</div>
-            </div>
-            {% if order.client_price %}<div class="card-price">{{ "%.0f"|format(order.client_price) }} ₽</div>{% endif %}
-          </div>
-
-          {% if order.status.value in ("agreed", "in_progress", "completed") %}
-            {% set badge_classes = {"agreed": "badge-ok", "in_progress": "badge-info", "completed": "badge-muted"} %}
-            <div style="margin-top: 8px;"><span class="badge {{ badge_classes[order.status.value] }}">{{ status_labels[order.status] }}</span></div>
-          {% endif %}
-
-          <div class="route-block">
-            <div class="route-point">
-              <span class="route-marker from"></span>
-              <div>
-                <div class="route-point-city">{{ order.from_city or "?" }}</div>
-                {% if order.from_address %}<div class="route-point-address">{{ order.from_address }}</div>{% endif %}
-              </div>
-            </div>
-            <div class="route-point">
-              <span class="route-marker to"></span>
-              <div>
-                <div class="route-point-city">{{ order.to_city or "?" }}</div>
-                {% if order.to_address %}<div class="route-point-address">{{ order.to_address }}</div>{% endif %}
-              </div>
-            </div>
-{% set distance = distance_label(order) %}
-            {% if distance %}<div class="route-distance">Расстояние: {{ distance }}{% set per_km = price_per_km_label(order) %}{% if per_km %} · {{ per_km }}{% endif %}</div>{% endif %}
-          </div>
-
-          {% set tags = order_tags(order) %}
-          {% if tags %}
-            <div class="tags-row">
-              {% for text, dark in tags %}
-                <span class="pill {{ 'dark' if dark else '' }}">{{ text }}</span>
-              {% endfor %}
-            </div>
-          {% endif %}
-
-          <div class="card-footer">
-            <span class="card-footer-meta">взят {{ relative_ago(order.taken_at) }}</span>
-            <span class="card-footer-more">Подробнее →</span>
-          </div>
-        </a>
+        {{ order_row(order, "taken", False) }}
       {% endfor %}
     </div>
   {% endif %}
 {% endfor %}
 
-{% if buckets.values() | map("length") | sum == 0 %}
-  <div class="empty">Пока пусто — на странице заказа нажмите «Взять заказ», он появится здесь.</div>
+{% if not favorites and buckets.values() | map("length") | sum == 0 %}
+  <div class="empty">В избранном пока пусто — нажмите сердечко у заказа в ленте.</div>
 {% endif %}
 
 {% endblock %}

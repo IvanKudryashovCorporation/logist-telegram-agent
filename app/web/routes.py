@@ -27,12 +27,14 @@ from app.services.subscriptions import (
     delete_subscription,
     describe_filters,
     feed_path,
+    get_subscription,
     has_criteria,
     list_subscriptions,
     set_subscription_active,
+    update_subscription,
 )
 from app.timeutil import now_msk_naive
-from app.web import queries
+from app.web import favorites, queries
 from app.web.deps import (
     attach_driver_cookie,
     clear_flash,
@@ -72,10 +74,15 @@ def _parse_coords(lat: str, lon: str) -> Optional[tuple[float, float]]:
 
 
 def _order_url(order_id: int, back: str = "") -> str:
-    """Ссылка на карточку заказа, сохраняющая ``back`` (фильтры/сортировка
-    ленты, откуда пришёл водитель) через все действия на странице заказа."""
-    url = f"/orders/{order_id}"
-    return f"{url}?back={quote(back, safe='')}" if back else url
+    """Куда вернуть водителя после действия с заказом: карточки заказа нет, поэтому в ленту
+    (с теми же фильтрами, откуда он пришёл — ``back``)."""
+    return f"/?{back}" if back else "/"
+
+
+def _owner_token(request: Request, anonymous_token: str) -> str:
+    """Чьё это избранное: ``tg:<id>`` после входа через Telegram, иначе анонимная cookie."""
+    telegram_id = logged_in_telegram_id(request)
+    return f"tg:{telegram_id}" if telegram_id is not None else anonymous_token
 
 
 def _login_redirect(request: Request, next_url: Optional[str] = None) -> RedirectResponse:
@@ -144,6 +151,8 @@ async def feed(
     lat: str = "",
     lon: str = "",
     page: int = 1,
+    edit: int = 0,
+    filters_open: int = 0,
 ):
     token, new_token = driver_token(request)
     telegram_id = logged_in_telegram_id(request)
@@ -164,18 +173,13 @@ async def feed(
         date_from=date_from, date_to=date_to, time_from=time_from, time_to=time_to,
         price_min=price_min, price_max=price_max, from_radius=from_radius, to_radius=to_radius,
     )
-    if sort not in queries.SORT_LABELS:
-        sort = queries.DEFAULT_SORT
-    direction = queries.effective_direction(sort, dir)
-    coords = _parse_coords(lat, lon) if sort == "distance" else None
+    # Сортировки на сайте нет: всегда свежие сверху (старые ссылки с sort/dir просто игнорируем).
+    sort = queries.DEFAULT_SORT
+    direction = queries.effective_direction(sort, "")
+    coords = None
     if telegram_id is not None and any(value for value in filters.as_dict().values()):
         # Фильтр задан ссылкой (а не формой) — тоже запоминаем.
-        view = {key: value for key, value in filters.as_dict().items() if value}
-        if request.query_params.get("sort") in queries.SORT_LABELS:
-            view["sort"] = request.query_params["sort"]
-            if request.query_params.get("dir") in queries.DIRECTION_LABELS:
-                view["dir"] = request.query_params["dir"]
-        await _remember_filter(telegram_id, view)
+        await _remember_filter(telegram_id, {key: value for key, value in filters.as_dict().items() if value})
 
     async with SessionLocal() as session:
         await _attach_radius_centers(session, filters)
@@ -193,6 +197,12 @@ async def feed(
             telegram_id=logged_in_telegram_id(request) if settings.telegram_login_enabled else None,
         )
         cities = await queries.known_cities(session)
+        favorite_set = await favorites.favorite_ids(
+            session, _owner_token(request, token), [order.id for order in feed_page.items]
+        )
+        editing = None
+        if edit and telegram_id is not None:
+            editing = await get_subscription(session, telegram_id, edit)
 
     html = templates.TemplateResponse(
         "orders_list.html",
@@ -211,10 +221,10 @@ async def feed(
             # Галочка «сохранить в Мои фильтры»: каждое «Применить» не должно плодить фильтры,
             # поэтому по умолчанию снята — водитель отмечает её, когда фильтр нужен надолго.
             "notify_checked": False,
-            "sort": sort,
-            "direction": direction,
-            "lat": lat,
-            "lon": lon,
+            "favorite_set": favorite_set,
+            # Фильтр, который сейчас правят: форма сохранит изменения в него, а не создаст новый.
+            "editing": editing,
+            "open_filters": bool(filters_open or editing),
         },
     )
     attach_driver_cookie(html, new_token)
@@ -254,24 +264,30 @@ async def feed_count(
     return JSONResponse({"total": total}, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/favorites", response_class=HTMLResponse)
 @router.get("/my", response_class=HTMLResponse)
-async def my_orders_page(request: Request):
+async def favorites_page(request: Request):
+    """«Избранное»: заказы с сердечком и, ниже, те, по которым уже договорились."""
     token, new_token, login_required = resolve_driver(request)
     if login_required:
         return _login_redirect(request)
 
     async with SessionLocal() as session:
-        orders = await queries.my_orders(session, token)
+        taken = await queries.my_orders(session, token)
+        marked = await favorites.favorite_orders(session, token)
         counts = await queries.header_counts(session, token)
 
+    taken_ids = {order.id for order in taken}
+    marked = [order for order in marked if order.id not in taken_ids]  # договорились — показываем ниже, не дважды
     today = now_msk_naive().date()
     buckets: dict[str, list] = {"today": [], "tomorrow": [], "later": [], "no_date": []}
-    for order in orders:
+    for order in taken:
         buckets[order_bucket(order, today)].append(order)
 
     html = templates.TemplateResponse(
         "my_orders.html",
-        _base_context(request, counts, pop_flash(request)) | {"buckets": buckets},
+        _base_context(request, counts, pop_flash(request))
+        | {"buckets": buckets, "favorites": marked, "favorite_set": {order.id for order in marked}},
     )
     attach_driver_cookie(html, new_token)
     clear_flash(html)
@@ -341,22 +357,35 @@ async def apply_filter(request: Request):
     params = filters.as_dict()
 
     view = {key: value for key, value in params.items() if value}
-    for extra in ("q", "lat", "lon"):
-        if form.get(extra):
-            view[extra] = str(form[extra])[:200]
-    if str(form.get("sort") or "") in queries.SORT_LABELS:
-        view["sort"] = str(form["sort"])
-        if str(form.get("dir") or "") in queries.DIRECTION_LABELS:
-            view["dir"] = str(form["dir"])
+    if form.get("q"):
+        view["q"] = str(form["q"])[:200]
     target = f"/?{urlencode(view)}" if view else "/"
 
     _token, new_token, login_required = resolve_driver(request)
     if login_required:
         return _login_redirect(request, target)
 
-    await _remember_filter(logged_in_telegram_id(request), view)
     tg_id = logged_in_telegram_id(request)
     summary = "; ".join(describe_filters(params)) or "без условий"
+
+    edit_id = str(form.get("edit_id") or "")
+    if edit_id.isdigit():
+        # Правка сохранённого фильтра из «Мои фильтры»: не создаём новый, а меняем этот.
+        if not has_criteria(params):
+            return _redirect(
+                "/filters", new_token,
+                "Чтобы сохранить фильтр, задайте хотя бы одно условие: город, тип авто, дату, время или цену.",
+            )
+        async with SessionLocal() as session:
+            sub, outcome = await update_subscription(session, tg_id, int(edit_id), params)
+        if sub is None:
+            return _redirect("/filters", new_token, "Такого фильтра уже нет.")
+        if outcome == EXISTS:
+            return _redirect("/filters", new_token, "Такой фильтр уже есть в «Мои фильтры» — изменения не сохранены.")
+        await user_events.record(user_events.FILTER_SAVED, tg_id, f"изменён: {summary}")
+        return _redirect("/filters", new_token, "Фильтр изменён.")
+
+    await _remember_filter(tg_id, view)
     await user_events.record(user_events.FILTER_APPLIED, tg_id, summary)
 
     notice = ""
@@ -404,7 +433,10 @@ async def my_filters_page(request: Request):
         _base_context(request, counts, pop_flash(request))
         | {
             "filters_items": [
-                {"sub": sub, "lines": describe_filters(sub.params), "link": feed_path(sub.params)}
+                {
+                    "sub": sub, "lines": describe_filters(sub.params), "link": feed_path(sub.params),
+                    "edit_link": feed_path({**sub.params, "edit": sub.id, "filters_open": 1}),
+                }
                 for sub in subs
             ],
             "max_filters": settings.max_filters_per_driver,
@@ -499,10 +531,11 @@ async def profile_page(request: Request):
 
 @router.get("/orders/{order_id}", response_class=HTMLResponse)
 async def order_detail(request: Request, order_id: int, back: str = ""):
+    if not is_admin(request):
+        # Карточки заказа для водителей нет: всё нужное — в строке ленты (сердечко и «написать диспетчеру»).
+        return RedirectResponse(_order_url(order_id, back), status_code=303)
     token, new_token, login_required = resolve_driver(request)
     if login_required:
-        # Гость: карточку смотреть можно, но ничего не «его». Вход нужен только
-        # для действий (написать диспетчеру, договориться) — см. POST-маршруты.
         token, new_token = "", None
 
     async with SessionLocal() as session:
@@ -605,6 +638,29 @@ async def take_order(request: Request, order_id: int, back: str = ""):
         _order_url(order_id, back), new_token,
         "" if result.ok else result.message,
     )
+
+
+@router.post("/orders/{order_id}/favorite")
+async def toggle_favorite(request: Request, order_id: int, back: str = ""):
+    """Сердечко: добавить заказ в «Избранное» или убрать. Для fetch из ленты отвечает JSON, иначе перенаправляет."""
+    token, new_token, login_required = resolve_driver(request)
+    wants_json = "application/json" in request.headers.get("accept", "")
+    if login_required:
+        if wants_json:
+            return JSONResponse({"error": "login"}, status_code=401)
+        return _login_redirect(request, _order_url(order_id, back))
+
+    async with SessionLocal() as session:
+        state = await favorites.toggle_favorite(session, token, order_id)
+    if state is None:
+        return JSONResponse({"error": "not_found"}, status_code=404) if wants_json else HTMLResponse(
+            "Заказ не найден", status_code=404
+        )
+    if wants_json:
+        response = JSONResponse({"favorite": state}, headers={"Cache-Control": "no-store"})
+        attach_driver_cookie(response, new_token)
+        return response
+    return _redirect(_order_url(order_id, back) if back else "/my", new_token)
 
 
 @router.post("/orders/{order_id}/contact")

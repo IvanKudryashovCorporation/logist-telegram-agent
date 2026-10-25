@@ -197,7 +197,7 @@ async def test_donor_distance_is_not_used_for_an_order_with_stops(session, make_
     assert done[stopped.id] == 430.0
 
 
-async def test_card_and_text_show_the_stops(client, make_order, session):
+async def test_feed_row_and_text_show_the_stops(client, make_order, session):
     from app.web.presenters import dispatcher_message, route_text
 
     order = await make_order(from_city="Пермь", to_city="Пермь Аэропорт")
@@ -207,8 +207,7 @@ async def test_card_and_text_show_the_stops(client, make_order, session):
 
     assert route_text(order) == "Пермь → Соликамск → Пермь Аэропорт"
     assert "Пермь → Соликамск → Пермь Аэропорт" in dispatcher_message(order)
-    assert "Соликамск" in (await client.get("/")).text
-    assert "Остановка 1" in (await client.get(f"/orders/{order.id}")).text
+    assert "Пермь → Соликамск → Пермь Аэропорт" in " ".join((await client.get("/")).text.split())
 
 
 async def test_notification_text_shows_the_stops(make_order):

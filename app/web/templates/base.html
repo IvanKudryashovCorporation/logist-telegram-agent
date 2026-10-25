@@ -96,60 +96,19 @@
     <div class="header-controls">
       <div class="tabs">
         <a href="/" class="{{ 'active' if request.url.path == '/' else '' }}">Лента <span class="tab-count">{{ lenta_count or 0 }}</span></a>
-        <a href="/my" class="{{ 'active' if request.url.path.startswith('/my') else '' }}">Мои заказы <span class="tab-count">{{ my_count or 0 }}</span></a>
+        <a href="/favorites" class="{{ 'active' if request.url.path in ('/favorites', '/my') else '' }}">Избранное <span class="tab-count">{{ my_count or 0 }}</span></a>
         {% if is_admin %}
           <a href="/admin" class="{{ 'active' if request.url.path.startswith('/admin') else '' }}">Админка</a>
         {% endif %}
       </div>
-      <form class="search-box" method="get" action="/" id="searchForm">
-        <input type="hidden" name="q" value="{{ q or '' }}">
         {% if filters is defined %}
-          <input type="hidden" name="from_city" value="{{ filters.from_city }}">
-          <input type="hidden" name="to_city" value="{{ filters.to_city }}">
-          <input type="hidden" name="vehicle" value="{{ filters.vehicle }}">
-          <input type="hidden" name="date_from" value="{{ filters.date_from.isoformat() if filters.date_from else '' }}">
-          <input type="hidden" name="date_to" value="{{ filters.date_to.isoformat() if filters.date_to else '' }}">
-          <input type="hidden" name="time_from" value="{{ filters.time_from.strftime('%H:%M') if filters.time_from else '' }}">
-          <input type="hidden" name="time_to" value="{{ filters.time_to.strftime('%H:%M') if filters.time_to else '' }}">
-          <input type="hidden" name="price_min" value="{{ filters.price_min or '' }}">
-          <input type="hidden" name="price_max" value="{{ filters.price_max or '' }}">
-          <input type="hidden" name="from_radius" value="{{ filters.from_radius or '' }}">
-          <input type="hidden" name="to_radius" value="{{ filters.to_radius or '' }}">
-        {% endif %}
-      </form>
-      <div class="toolbar-row">
-      {% if sort is defined %}
-        <div class="sort-picker">
-          <label for="sortSelect" class="sort-picker-label">Сортировать по</label>
-          <select name="sort" id="sortSelect" form="searchForm">
-            {% for value, label in sort_labels.items() %}
-              <option value="{{ value }}" {{ 'selected' if sort == value else '' }}>{{ label }}</option>
-            {% endfor %}
-          </select>
-          <select name="dir" id="dirSelect" form="searchForm" aria-label="Порядок сортировки"
-                  data-defaults="{{ default_directions | tojson | forceescape }}">
-            {% for value, label in direction_labels.items() %}
-              <option value="{{ value }}" {{ 'selected' if direction == value else '' }}>{{ '↓' if value == 'desc' else '↑' }} {{ label }}</option>
-            {% endfor %}
-          </select>
-          <input type="hidden" name="lat" id="sortLat" value="{{ lat or '' }}" form="searchForm">
-          <input type="hidden" name="lon" id="sortLon" value="{{ lon or '' }}" form="searchForm">
-        </div>
-      {% endif %}
-      {% if filters is defined %}
-        <details class="filters-details" id="filtersDetails">
+        <details class="filters-details" id="filtersDetails"{% if open_filters %} open{% endif %}>
           <summary>
-            Фильтры
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg>Фильтры
             {% if filters.active_count %}<span class="tab-count">{{ filters.active_count }}</span>{% endif %}
           </summary>
           <form class="filters-panel" id="filtersForm" {% if is_logged_in %}method="post" action="/filter"{% else %}method="get" action="/"{% endif %}>
             <input type="hidden" name="q" value="{{ q or '' }}">
-            {% if sort is defined %}
-              <input type="hidden" name="sort" value="{{ sort }}">
-              <input type="hidden" name="dir" value="{{ direction }}">
-              <input type="hidden" name="lat" value="{{ lat or '' }}">
-              <input type="hidden" name="lon" value="{{ lon or '' }}">
-            {% endif %}
             <div>
               <label>Откуда</label>
               <div class="city-picker">
@@ -158,11 +117,10 @@
                 <div class="city-chips"></div>
                 <input type="hidden" name="from_city" value="{{ filters.from_city }}">
               </div>
-              <select name="from_radius" class="radius-select" aria-label="Радиус">
-                {% for km in radius_choices %}
-                  <option value="{{ km }}" {{ 'selected' if filters.from_radius == km else '' }}>{{ 'Радиус' if km == 0 else '+ ' ~ km ~ ' км' }}</option>
-                {% endfor %}
-              </select>
+              <div class="radius-slider">
+                <input type="range" name="from_radius" min="0" max="700" step="5" value="{{ filters.from_radius or 0 }}" aria-label="Радиус вокруг города">
+                <output class="radius-value">{{ ('+ ' ~ filters.from_radius ~ ' км') if filters.from_radius else 'Только город' }}</output>
+              </div>
             </div>
             <div>
               <label>Куда</label>
@@ -172,11 +130,10 @@
                 <div class="city-chips"></div>
                 <input type="hidden" name="to_city" value="{{ filters.to_city }}">
               </div>
-              <select name="to_radius" class="radius-select" aria-label="Радиус">
-                {% for km in radius_choices %}
-                  <option value="{{ km }}" {{ 'selected' if filters.to_radius == km else '' }}>{{ 'Радиус' if km == 0 else '+ ' ~ km ~ ' км' }}</option>
-                {% endfor %}
-              </select>
+              <div class="radius-slider">
+                <input type="range" name="to_radius" min="0" max="700" step="5" value="{{ filters.to_radius or 0 }}" aria-label="Радиус вокруг города">
+                <output class="radius-value">{{ ('+ ' ~ filters.to_radius ~ ' км') if filters.to_radius else 'Только город' }}</output>
+              </div>
             </div>
             <div>
               <label>Тип авто</label>
@@ -227,7 +184,10 @@
                 <input type="number" min="0" name="price_max" value="{{ filters.price_max or '' }}" placeholder="До">
               </div>
             </div>
-            {% if is_logged_in %}
+            {% if editing %}
+              <input type="hidden" name="edit_id" value="{{ editing.id }}">
+              <div class="hint notify-toggle">Вы меняете сохранённый фильтр. «Сохранить» запишет изменения в «Мои фильтры».</div>
+            {% elif is_logged_in %}
               <a href="/filters" class="btn btn-secondary my-filters-btn">Мои фильтры ({{ filters_count or 0 }})</a>
               <label class="notify-toggle">
                 <input type="checkbox" name="notify" {{ 'checked' if notify_checked else '' }}>
@@ -238,14 +198,15 @@
               <div class="hint notify-toggle">Войдите, чтобы получать новые заказы по фильтру в Telegram.</div>
             {% endif %}
             <div class="filters-actions">
-              <button type="submit" id="filterApply">Применить{% if page_info is defined and page_info %} <span id="filterApplyCount">({{ page_info.total }})</span>{% endif %}</button>
-              <a href="/?reset=1{{ '&q=' + (q | urlencode) if q else '' }}" class="btn btn-secondary">Сбросить</a>
+              <button type="submit" id="filterApply">{{ 'Сохранить' if editing else 'Применить' }}{% if page_info is defined and page_info %} <span id="filterApplyCount">({{ page_info.total }})</span>{% endif %}</button>
+              {% if editing %}<a href="/filters" class="btn btn-secondary">Отмена</a>{% else %}<a href="/?reset=1{{ '&q=' + (q | urlencode) if q else '' }}" class="btn btn-secondary">Сбросить</a>{% endif %}
             </div>
           </form>
         </details>
-        <script id="knownCitiesData" type="application/json">{{ (known_cities or []) | tojson | safe }}</script>
-      {% endif %}
-      </div>
+          <script id="knownCitiesData" type="application/json">{{ (known_cities or []) | tojson | safe }}</script>
+        {% else %}
+          <a href="/?filters_open=1" class="filters-btn"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg>Фильтры{% if filters_count %} <span class="tab-count">{{ filters_count }}</span>{% endif %}</a>
+        {% endif %}
     </div>
   </header>
   <main>
