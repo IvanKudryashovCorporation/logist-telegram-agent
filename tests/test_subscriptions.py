@@ -41,12 +41,12 @@ class Outbox:
 
 
 def _taken_ids(box, index: int) -> list[int]:
-    """Какие заказы пришли в сообщении: номера из кнопок «Взять» (в тексте ссылок на заказы нет)."""
+    """Какие заказы пришли в сообщении: номера из кнопки «Подробнее на сайте» (в тексте ссылок на заказы нет)."""
     return [
-        int(button["callback_data"].removeprefix("take:"))
+        int(button["url"].rsplit("/orders/", 1)[1])
         for row in box.markups[index]["inline_keyboard"]
         for button in row
-        if button.get("callback_data", "").startswith("take:")
+        if "/orders/" in button.get("url", "")
     ]
 
 
@@ -82,7 +82,7 @@ async def test_matching_new_order_is_sent_with_buttons_not_a_link_in_the_text(se
     assert "Новый заказ по вашему фильтру" in text and "Краснодар → Сочи" in text and "3000 ₽" in text
     assert "/orders/" not in text  # водитель нажимает кнопки, а не ссылку на заказ
     buttons = [b for row in box.markups[0]["inline_keyboard"] for b in row]
-    assert {"text": "✅ Взять заказ", "callback_data": f"take:{order.id}"} in buttons
+    assert not any("Взять" in b["text"] or "callback_data" in b for b in buttons)  # как на сайте: сначала напишите диспетчеру
     chat = next(b for b in buttons if "Написать диспетчеру" in b["text"])
     assert chat["url"].startswith("https://t.me/dispatcher_test?text=")  # сразу чат с диспетчером
     assert any(b.get("url") == f"https://example.test/orders/{order.id}" for b in buttons)  # «Подробнее»
@@ -453,7 +453,7 @@ async def test_old_digest_is_rewritten_without_the_withdrawn_order(session, make
     assert (chat, message_id) == (1001, 501)
     assert "Керчь" in text and "Ялта" not in text  # осталась только живая заявка
     rows = tg.edit_markups[0]["inline_keyboard"]
-    assert len(rows) == 2 and any(b.get("callback_data", "").startswith("take:") for b in rows[0])  # кнопки на месте
+    assert len(rows) == 2 and any("Написать" in b["text"] or b["text"].startswith("✉️") for b in rows[0])  # кнопки на месте
 
 
 async def test_other_cancellations_do_not_remove_the_message(session, make_order):

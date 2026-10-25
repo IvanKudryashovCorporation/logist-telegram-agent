@@ -96,18 +96,18 @@ async def test_no_chat_button_when_it_could_not_open(make_order):
     order = await _order(make_order)
     order.dispatcher_username = None  # есть только tg_id
 
-    take_only = svc.build_keyboard([order], {})["inline_keyboard"][0]
+    rows = svc.build_keyboard([order], {})["inline_keyboard"]
 
-    assert [b["text"] for b in take_only] == ["✅ Взять заказ"]
+    assert [[b["text"] for b in row] for row in rows] == [["Подробнее на сайте"]]  # «Взять» в боте больше нет
 
 
-async def test_digest_has_a_pair_of_buttons_per_order(make_order):
+async def test_digest_has_a_chat_button_per_order(make_order):
     orders = [await _order(make_order, dispatcher_username=f"d{i}") for i in range(3)]
 
     rows = svc.build_keyboard(orders, {})["inline_keyboard"]
 
-    assert [[b["text"] for b in row] for row in rows] == [["✉️ 1", "✅ Взять 1"], ["✉️ 2", "✅ Взять 2"], ["✉️ 3", "✅ Взять 3"]]
-    assert [row[1]["callback_data"] for row in rows] == [f"take:{o.id}" for o in orders]
+    assert [[b["text"] for b in row] for row in rows] == [["✉️ 1"], ["✉️ 2"], ["✉️ 3"]]
+    assert not any("callback_data" in b for row in rows for b in row)
 
 
 async def test_message_text_has_no_order_link(make_order):

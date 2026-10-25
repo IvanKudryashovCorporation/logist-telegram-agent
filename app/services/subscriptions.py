@@ -3,8 +3,8 @@
 Фоновый воркер раз в ``SUBSCRIPTION_POLL_SECONDS`` секунд берёт свежие свободные
 заказы, проверяет каждый по фильтру каждой активной подписки (тем же
 ``Filters.matches``, что и лента сайта, включая радиус) и пишет водителю через
-бота. Каждый заказ — отдельное сообщение с кнопками «Написать диспетчеру» (сразу чат с ним) и
-«Взять заказ» (обработка нажатия — :mod:`app.web.bot_orders`). Повторно по одному заказу не пишем
+бота. Каждый заказ — отдельное сообщение с кнопкой «Написать диспетчеру» (сразу чат с ним), как на сайте;
+старые сообщения с «Взять заказ» по-прежнему обрабатывает :mod:`app.web.bot_orders`. Повторно по одному заказу не пишем
 (таблица ``subscription_notifications``). Если за проход подходит очень много заказов, первые
 ``SUBSCRIPTION_MAX_LINES`` приходят отдельными сообщениями, а про остальные — одно «и ещё N».
 
@@ -259,18 +259,21 @@ def chat_url(order: Order, group_username: Optional[str]) -> Optional[str]:
 
 
 def build_keyboard(orders: list[Order], group_names: dict[int, Optional[str]]) -> dict:
-    """Кнопки под уведомлением: у одного заказа — «Написать диспетчеру» и «Взять заказ»;
-    у списка — по паре кнопок на строку с номером заказа."""
+    """Кнопки под уведомлением, как на сайте: «Написать диспетчеру» (у списка — ``✉️ N`` на строку заказа).
+
+    «Взять заказ» здесь нет: водитель сначала пишет диспетчеру и только договорившись отмечает заказ на сайте.
+    Если в чат к диспетчеру сослаться нельзя (закрытая группа, скрытый автор), у заказа из списка вместо
+    письма кнопка ``🔎 N`` на карточку заказа, а у одного заказа есть «Подробнее на сайте».
+    """
     shown = orders[: settings.subscription_max_lines]
     rows: list[list[dict]] = []
     for number, order in enumerate(shown, 1):
         single = len(shown) == 1
-        row: list[dict] = []
         url = chat_url(order, group_names.get(order.source_chat_id))
         if url:
-            row.append({"text": "✉️ Написать диспетчеру" if single else f"✉️ {number}", "url": url})
-        row.append({"text": "✅ Взять заказ" if single else f"✅ Взять {number}", "callback_data": f"take:{order.id}"})
-        rows.append(row)
+            rows.append([{"text": "✉️ Написать диспетчеру" if single else f"✉️ {number}", "url": url}])
+        elif not single:
+            rows.append([{"text": f"🔎 {number}", "url": order_url(order)}])
         if single:
             rows.append([{"text": "Подробнее на сайте", "url": order_url(order)}])
     return {"inline_keyboard": rows}
