@@ -416,21 +416,27 @@ async def test_header_brand_links_to_the_feed_from_any_page(client, make_order):
 # --- Список, сердечко, избранное, карточки заказа нет ---------------------------------------
 
 
-async def test_order_card_is_closed_for_drivers(client, make_order):
-    order = await make_order()
+async def test_feed_row_opens_the_order_card(client, make_order):
+    order = await make_order(from_city="Сочи", client_phone=PHONE, client_name="Иван Петров")
     _as_driver(client, TOKEN_A)
+
+    feed = (await client.get("/?from_city=Сочи")).text
+    assert f'href="/orders/{order.id}?back=' in feed  # строка ведёт на «Подробнее»
 
     response = await client.get(f"/orders/{order.id}?back=from_city%3D%D0%A1%D0%BE%D1%87%D0%B8")
 
-    assert response.status_code == 303
-    assert unquote(response.headers["location"]) == "/?from_city=Сочи"
+    assert response.status_code == 200
+    assert f"Заказ №{order.id}" in response.text
+    assert PHONE not in response.text and "Иван Петров" not in response.text  # контакты скрыты до «Договорился»
+    assert "from_city=" in response.text  # ссылка «назад» хранит фильтр ленты
 
 
-async def test_closed_order_card_redirects_strangers_and_stays_open_for_admin(client, make_order, monkeypatch):
+async def test_closed_order_card_is_gone_for_strangers_and_open_for_admin(client, make_order, monkeypatch):
     order = await make_order(status=OrderStatus.EXPIRED)
     _as_driver(client, TOKEN_B)
 
-    assert (await client.get(f"/orders/{order.id}")).status_code == 303
+    gone = await client.get(f"/orders/{order.id}")
+    assert gone.status_code == 410 and "больше не доступен" in gone.text
     monkeypatch.setattr("app.web.routes.is_admin", lambda request: True)
     assert (await client.get(f"/orders/{order.id}")).status_code == 200
 
@@ -442,8 +448,8 @@ async def test_feed_is_a_list_with_heart_and_message_buttons(client, make_order)
 
     assert 'class="order-list"' in page and 'class="order-row' in page
     assert f"/orders/{order.id}/contact" in page and "fav-btn" in page
-    assert "Подробнее" not in page  # кнопки «Подробнее» и ссылок на карточку нет
-    assert f'href="/orders/{order.id}' not in page
+    assert "Подробнее" not in page  # отдельной кнопки нет: открывается кликом по строке
+    assert f'href="/orders/{order.id}' in page
     assert PHONE not in page and "Иван Петров" not in page
 
 

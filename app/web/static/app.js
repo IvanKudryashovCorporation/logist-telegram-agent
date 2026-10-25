@@ -286,6 +286,16 @@
       });
     })();
 
+    // Клик по строке заказа (мимо кнопок и ссылок) открывает страницу заказа.
+    (function () {
+      document.addEventListener('click', function (event) {
+        var row = event.target.closest ? event.target.closest('.order-row') : null;
+        if (!row || event.target.closest('a, button, form, input, label')) return;
+        var link = row.querySelector('a.or-main');
+        if (link) location.href = link.href;
+      });
+    })();
+
     // «Написать диспетчеру» в строке заказа: текст сообщения кладём в буфер, а чат откроет сервер.
     (function () {
       document.addEventListener('submit', function (event) {

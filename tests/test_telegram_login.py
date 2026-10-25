@@ -91,12 +91,12 @@ async def test_feature_disabled_by_default_in_tests():
     assert settings.telegram_login_enabled is False
 
 
-async def test_order_card_is_closed_even_when_login_disabled(client, make_order):
+async def test_anonymous_can_open_order_detail_when_login_disabled(client, make_order):
     order = await make_order()
 
     response = await client.get(f"/orders/{order.id}")
 
-    assert response.status_code == 303 and response.headers["location"] == "/"
+    assert response.status_code == 200
 
 
 async def test_anonymous_can_open_my_orders_when_login_disabled(client):

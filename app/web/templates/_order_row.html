@@ -3,7 +3,7 @@
 {% macro order_row(order, mode="feed", is_fav=False, back="", geo_notes=None) %}
   {% set closed = order.status.value in ("expired", "cancelled", "completed") %}
   <div class="order-row {{ 'overdue' if is_overdue(order) else '' }} {{ 'is-closed' if closed else '' }}" data-order-id="{{ order.id }}">
-    <div class="or-main">
+    <a class="or-main" href="/orders/{{ order.id }}{% if back %}?back={{ back | urlencode }}{% endif %}">
       <div class="or-when {{ 'asap' if not order.pickup_at else '' }}">{{ row_when(order) }}</div>
       <div class="or-route">
         {{ order.from_city or "?" }}{% for stop in order.via_points or [] %} → {{ stop.name }}{% endfor %} → {{ order.to_city or "?" }}
@@ -26,7 +26,7 @@
           <span class="badge badge-muted">{{ status_labels[order.status] }}</span>
         {% endif %}
       </div>
-    </div>
+    </a>
     <div class="or-price">{% if order.client_price %}{{ order.client_price|price }} ₽{% endif %}</div>
     <div class="or-actions">
       <button type="button" class="or-btn fav-btn {{ 'on' if is_fav else '' }}" data-order-id="{{ order.id }}"

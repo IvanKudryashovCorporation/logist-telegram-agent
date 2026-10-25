@@ -531,9 +531,6 @@ async def profile_page(request: Request):
 
 @router.get("/orders/{order_id}", response_class=HTMLResponse)
 async def order_detail(request: Request, order_id: int, back: str = ""):
-    if not is_admin(request):
-        # Карточки заказа для водителей нет: всё нужное — в строке ленты (сердечко и «написать диспетчеру»).
-        return RedirectResponse(_order_url(order_id, back), status_code=303)
     token, new_token, login_required = resolve_driver(request)
     if login_required:
         token, new_token = "", None

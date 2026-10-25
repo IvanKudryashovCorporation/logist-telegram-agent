@@ -1155,7 +1155,9 @@ input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), select, t
 }
 .order-row.overdue { background: var(--overdue-bg); border-color: var(--overdue-border); }
 .order-row.is-closed { opacity: .65; }
-.or-main { min-width: 0; }
+.or-main { min-width: 0; color: inherit; text-decoration: none; }
+.order-row { cursor: pointer; }
+.order-row:hover { border-color: var(--accent); }
 .or-when { font-size: 14px; font-weight: 700; color: var(--accent); }
 .or-when.asap { color: var(--accent); }
 .order-row.overdue .or-when { color: var(--overdue); }
