@@ -82,6 +82,17 @@ def test_via_points_and_address():
     assert order.to_city == "Пермь" and order.to_address == "аэропорт Большое Савино"
 
 
+def test_address_and_info_lines_from_real_message():
+    text = (
+        "✅ Заказ  ·  28.10 в 12:00\n📍 Псков → Печоры\n"
+        "📌 Куда, как в заказе: Садово-дачное товарищество Куничина Гора (Псковская обл., Печор.р-н)\n"
+        "👥 1 чел · 💰 3 500 ₽\n🚗 Класс: Стандарт\nℹ️ 500\n\n👤 Диспетчер: @liderdisp"
+    )
+    order = one(text)
+    assert (order.from_city, order.to_city, order.client_price) == ("Псков", "Печоры", 3500)
+    assert order.to_address.startswith("Садово-дачное товарищество Куничина Гора")
+
+
 def test_non_breaking_spaces_in_price():
     assert one("✅ Заказ · сегодня\n📍 Сочи → Анапа\n💰 12 000 ₽").client_price == 12000
 

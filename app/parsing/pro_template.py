@@ -43,6 +43,8 @@ _HEADER_TOKEN = re.compile(
 _PRICE = re.compile(r"^(\d[\d  \s]*)(?:[.,]\d+)?\s*(?:₽|руб\w*\.?|р\.?)?$")
 _PASSENGERS = re.compile(r"^(\d{1,2})\s*(?:чел\w*|пасс\w*)?\.?$", re.IGNORECASE)
 _USERNAME = re.compile(r"@([A-Za-z0-9_]{4,32})")
+#: «📌 Куда, как в заказе: СНТ Куничина Гора (Псковская обл.)» — уточнение адреса после маршрута.
+_ADDRESS = re.compile(r"^(откуда|куда)\b[^:]*:\s*(.+)$", re.IGNORECASE)
 _CAR_CLASS = re.compile(r"^класс\s*:\s*(.+)$", re.IGNORECASE)
 #: «Обычный» класс: схема заявки хранит car_class только для нестандартных машин.
 _STANDARD_CLASSES = {"стандарт", "эконом", "стандартный", "обычный", "любой", "econom", "standard"}
@@ -178,6 +180,17 @@ def _parse_segment(segment: str, order: ParsedOrder, seen: set[str]) -> None:
             raise TemplateFailure(f"не удалось прочитать класс авто: «{body[:40]}»")
         car_class = match.group(1).strip()
         order.car_class = None if car_class.lower() in _STANDARD_CLASSES else car_class
+    elif "📌" in segment or re.match(r"^(?:откуда|куда)\b", low):
+        match = _ADDRESS.match(body)
+        if match is None:
+            raise TemplateFailure(f"не удалось прочитать адрес: «{body[:60]}»")
+        address = match.group(2).strip()
+        if match.group(1).lower() == "откуда":
+            order.from_address = order.from_address or address
+        else:
+            order.to_address = order.to_address or address
+    elif "ℹ" in segment:
+        return  # справочная строка бота («ℹ️ 500», «Группа закрытая…»): на заявку не влияет
     elif "🕒" in segment or low.startswith("опубликован"):
         return  # время публикации заявки не касается
     elif "👤" in segment or low.startswith("диспетчер"):
