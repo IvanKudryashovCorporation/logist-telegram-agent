@@ -195,6 +195,26 @@
   {% endif %}
 </div>
 
+{% if pro_template %}
+<div class="card">
+  <h2>Шаблонный разбор (без LLM) за {{ parse.days }} дней</h2>
+  <table>
+    <thead><tr><th>Группа</th><th class="num">Разобрал шаблон</th><th class="num">Ушло в LLM</th><th class="num">Доля шаблона</th></tr></thead>
+    <tbody>
+      {% for row in pro_template %}
+        <tr>
+          <td>{{ row.title }}</td>
+          <td class="num">{{ row.template }}</td>
+          <td class="num {{ 'error-text' if row.llm else '' }}">{{ row.llm }}</td>
+          <td class="num">{{ "%.0f"|format(row.share * 100) }}%</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted">Что ушло в LLM после провала шаблона, помечено в parse_stats.error («template_fail: причина»); владельцу приходит уведомление с текстом.</p>
+</div>
+{% endif %}
+
 <div class="card">
   <h2>Очередь повторного разбора</h2>
   <table>

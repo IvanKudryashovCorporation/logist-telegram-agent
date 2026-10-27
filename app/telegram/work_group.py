@@ -49,10 +49,12 @@ from app.parsing import stats as parse_stats
 from app.services import wakeup
 from app.parsing.bot_noise import strip_bot_noise
 from app.parsing.closed import ACTION_CLOSED_LOCK, has_bot_taken_mark, has_closed_lock
-from app.parsing.llm_parser import content_key, parse_orders, text_hash, text_key
+from app.parsing import template_alerts
+from app.parsing.llm_parser import ParseResult, content_key, parse_orders, text_hash, text_key
 from app.parsing.order_builder import apply_parsed_fields, extract_contact_username, resolve_pickup_at
 from app.parsing.prefilter import PrefilterDecision, prefilter
 from app.parsing.price import has_price_request
+from app.parsing.pro_template import FALLBACK_ERROR_PREFIX, parse_pro_message
 from app.parsing.schema import ParsedOrder
 from app.parsing.stale import is_stale
 from app.telegram import pending as pending_queue
@@ -376,7 +378,8 @@ async def upsert_order_text(
     Бросает :class:`ParseUnavailable`, если LLM недоступна, — вызывающий код
     обязан поставить сообщение в очередь.
     """
-    text = strip_bot_noise((text or "").strip())
+    original_text = (text or "").strip()
+    text = strip_bot_noise(original_text)
     if not text:
         return []
     priority = chat_id in settings.priority_chats
@@ -488,13 +491,28 @@ async def upsert_order_text(
                 return [twin.id]
             shadow_twin = twin
 
-        # Несрочное (из очереди) сообщение при лимите провайдера ждёт, а не уходит в платный резерв.
-        if not urgent:
-            parse_result = await parse_orders(text, urgent=False)
-        elif priority:
-            parse_result = await parse_orders(text, priority=True)
-        else:
-            parse_result = await parse_orders(text)
+        # Группа с заявками бота: сначала шаблон, LLM — только для того, что он не разобрал.
+        parse_result: Optional[ParseResult] = None
+        template_note: Optional[str] = None
+        if settings.template_parse_enabled and chat_id in settings.template_chats:
+            outcome = parse_pro_message(text)
+            if outcome.result is not None:
+                parse_result = outcome.result
+            else:
+                template_note = f"{FALLBACK_ERROR_PREFIX}: {outcome.reason}"
+                if outcome.bot_format:
+                    template_alerts.notify_failure(
+                        chat_id, message_id, outcome.reason or "?", original_text, text_hash(text)
+                    )
+                log.info("Шаблон не разобрал chat=%s msg=%s (%s) — отдаём LLM", chat_id, message_id, outcome.reason)
+        if parse_result is None:
+            # Несрочное (из очереди) сообщение при лимите провайдера ждёт, а не уходит в платный резерв.
+            if not urgent:
+                parse_result = await parse_orders(text, urgent=False)
+            elif priority:
+                parse_result = await parse_orders(text, priority=True)
+            else:
+                parse_result = await parse_orders(text)
         parsed_list = parse_result.orders
 
         if not parsed_list:
@@ -508,6 +526,7 @@ async def upsert_order_text(
                 chat_id=chat_id,
                 message_id=message_id,
                 result=parse_result,
+                error=template_note,
             )
             await db.commit()
             # Пример того, что предфильтр пропустил, а LLM отвергла: по ним видно, какие правила добавить до LLM.
@@ -556,6 +575,7 @@ async def upsert_order_text(
                 orders_found=len(parsed_list),
                 missing_fields=missing_total,
                 delay_ms=_delay_ms(published_at or sent_at),
+                error=template_note,
             )
             await db.commit()
         if result_ids:

@@ -104,6 +104,7 @@ async def dashboard(request: Request, days: int = 0):
     days = reporting.normalize_period(days)
     statuses = await reporting.order_status_breakdown()
     parse = await reporting.parse_summary(days=days)
+    pro_template = await reporting.template_summary(days=days)
     queue = await reporting.queue_summary()
     delay = await reporting.delay_summary(hours=24)
     daily = await reporting.orders_per_day(days=days)
@@ -128,6 +129,7 @@ async def dashboard(request: Request, days: int = 0):
         "admin.html",
         statuses=statuses,
         parse=parse,
+        pro_template=pro_template,
         queue=queue,
         delay=delay,
         daily=daily,

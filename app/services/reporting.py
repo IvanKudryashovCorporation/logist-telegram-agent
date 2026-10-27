@@ -629,6 +629,44 @@ async def parse_summary(days: int = 7) -> dict:
     }
 
 
+async def template_summary(days: int = 7) -> list[dict]:
+    """Шаблонный разбор по группам: сколько сообщений разобрал шаблон, сколько ушло в LLM после его провала.
+
+    Шаблонные строки ``parse_stats`` помечены ``model='template'``; ушедшие в LLM — ``error`` с префиксом
+    ``template_fail``. Остальное в группе (сообщения не по формату бота) в долю не входит."""
+    from app.parsing.pro_template import FALLBACK_ERROR_PREFIX, TEMPLATE_MODEL
+
+    since = now_utc_naive() - timedelta(days=max(1, days))
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(
+                    ParseStat.chat_id,
+                    func.count(ParseStat.id).filter(ParseStat.model == TEMPLATE_MODEL),
+                    func.count(ParseStat.id).filter(ParseStat.error.like(f"{FALLBACK_ERROR_PREFIX}%")),
+                )
+                .where(ParseStat.created_at >= since, ParseStat.chat_id.is_not(None))
+                .group_by(ParseStat.chat_id)
+            )
+        ).all()
+        titles = dict((await session.execute(select(WorkGroup.tg_chat_id, WorkGroup.title))).all())
+    result = []
+    for chat_id, by_template, to_llm in rows:
+        if not by_template and not to_llm:
+            continue
+        total = int(by_template) + int(to_llm)
+        result.append(
+            {
+                "chat_id": chat_id,
+                "title": titles.get(chat_id) or str(chat_id),
+                "template": int(by_template),
+                "llm": int(to_llm),
+                "share": int(by_template) / total if total else 0.0,
+            }
+        )
+    return sorted(result, key=lambda row: -(row["template"] + row["llm"]))
+
+
 async def delay_summary(hours: int = 24) -> dict:
     """«Публикация → заказ в ленте»: медиана, 95-й процентиль и доля заказов, уложившихся в 5 секунд (цель)."""
     since = now_utc_naive() - timedelta(hours=max(1, hours))
