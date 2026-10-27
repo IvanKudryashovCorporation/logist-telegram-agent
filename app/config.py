@@ -139,6 +139,13 @@ class Settings(BaseSettings):
     #: Чаты с высоким приоритетом разбора (tg_chat_id через запятую): их сообщения идут в LLM вне очереди,
     #: при лимите основного провайдера сразу уходят в резервный, а очередь повторов берёт их первыми.
     priority_chat_ids: str = ""
+    #: Чаты, где заявки бота («ProPoisk_zakazov») разбираются шаблоном без LLM (tg_chat_id через запятую).
+    #: Пусто — берутся приоритетные чаты (PRIORITY_CHAT_IDS), где этот бот и публикует.
+    template_chat_ids: str = ""
+    #: Выключатель шаблонного разбора: False — все сообщения идут в LLM, как раньше.
+    template_parse_enabled: bool = True
+    #: Сколько уведомлений владельцу «шаблон не разобрал сообщение» в час; остальные склеиваются в счётчик.
+    template_alert_per_hour: int = 5
     #: Секрет подписи сессий (cookie входа через Telegram).
     session_secret: str = ""
 
@@ -321,6 +328,15 @@ class Settings(BaseSettings):
             if part.lstrip("-").isdigit():
                 ids.add(int(part))
         return ids
+
+    @property
+    def template_chats(self) -> set[int]:
+        ids: set[int] = set()
+        for part in self.template_chat_ids.replace(";", ",").split(","):
+            part = part.strip()
+            if part.lstrip("-").isdigit():
+                ids.add(int(part))
+        return ids or self.priority_chats
 
     @property
     def admin_ids(self) -> set[int]:
