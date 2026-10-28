@@ -93,6 +93,12 @@ def test_address_and_info_lines_from_real_message():
     assert order.to_address.startswith("Садово-дачное товарищество Куничина Гора")
 
 
+def test_time_window_in_header():
+    order = one("✅ Заказ  ·  29.10 10:00–11:00\n📍 Москва → Жерновка\n👥 2 чел · 💰 4 000 ₽\n🚗 Класс: Стандарт\nℹ️ два маленьких попугая в переноске\n👤 Диспетчер: @MosVipTaxi")
+    assert (order.pickup_date, order.pickup_time) == ("2026-10-29", "10:00")
+    assert order.passengers == 2
+
+
 def test_non_breaking_spaces_in_price():
     assert one("✅ Заказ · сегодня\n📍 Сочи → Анапа\n💰 12 000 ₽").client_price == 12000
 

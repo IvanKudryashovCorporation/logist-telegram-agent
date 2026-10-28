@@ -104,6 +104,8 @@ def _header_date(word: Optional[str], d: Optional[str], m: Optional[str], y: Opt
 def _parse_header(line: str, order: ParsedOrder, today: date) -> None:
     """«✅ Заказ · ⚡ СРОЧНО · сегодня в 18:00»: срочность, день и время подачи."""
     cleaned = _HEADER_SEPARATORS.sub("|", line)
+    # Окно подачи «10:00–11:00»: берём начало, конец отбрасываем.
+    cleaned = re.sub(r"(\d{1,2}:\d{2})\s*[-–—]\s*\d{1,2}:\d{2}", r"\1", cleaned)
     cleaned = re.sub(r"[^\w\s:.|/-]", " ", cleaned).lower()
     if "срочно" in cleaned:
         order.is_urgent = True
