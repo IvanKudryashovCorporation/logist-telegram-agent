@@ -499,8 +499,8 @@ async def upsert_order_text(
             if outcome.result is not None:
                 parse_result = outcome.result
             else:
-                template_note = f"{FALLBACK_ERROR_PREFIX}: {outcome.reason}"
-                if outcome.bot_format:
+                if outcome.bot_format:  # болтовня в группе — не провал шаблона, в статистику не идёт
+                    template_note = f"{FALLBACK_ERROR_PREFIX}: {outcome.reason}"
                     template_alerts.notify_failure(
                         chat_id, message_id, outcome.reason or "?", original_text, text_hash(text)
                     )

@@ -99,6 +99,13 @@ def test_time_window_in_header():
     assert order.passengers == 2
 
 
+def test_no_time_marker_in_header():
+    order = one("✅ Заказ · завтра · время не указано\n📍 Москва → Тула\n💰 5 000 ₽")
+    assert (order.pickup_date, order.pickup_time) == ("2026-10-28", None)
+    order = one("✅ Заказ · 30.10 время не указано\n📍 Москва → Тула\n💰 5 000 ₽")
+    assert order.pickup_date == "2026-10-30"
+
+
 def test_non_breaking_spaces_in_price():
     assert one("✅ Заказ · сегодня\n📍 Сочи → Анапа\n💰 12 000 ₽").client_price == 12000
 

@@ -107,6 +107,7 @@ def _parse_header(line: str, order: ParsedOrder, today: date) -> None:
     # Окно подачи «10:00–11:00»: берём начало, конец отбрасываем.
     cleaned = re.sub(r"(\d{1,2}:\d{2})\s*[-–—]\s*\d{1,2}:\d{2}", r"\1", cleaned)
     cleaned = re.sub(r"[^\w\s:.|/-]", " ", cleaned).lower()
+    cleaned = cleaned.replace("время не указано", " ")  # «завтра · время не указано» — просто день без часа
     if "срочно" in cleaned:
         order.is_urgent = True
         cleaned = cleaned.replace("срочно", " ")
