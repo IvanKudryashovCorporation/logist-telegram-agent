@@ -276,8 +276,10 @@ async def advance_agreed_orders(
 
         # Сначала «выполнен» (и из «договорились», и из «в работе»): заказ,
         # у которого дедлайн давно позади, не должен задерживаться в «в работе».
+        # Взятый водителем заказ (в том числе просто «взятый» кнопкой в боте — статус у него
+        # остаётся «Новая») закрывается сам через ``auto_complete_hours`` после дедлайна.
         completed = await _move(
-            (OrderStatus.AGREED, OrderStatus.IN_PROGRESS),
+            (OrderStatus.AGREED, OrderStatus.IN_PROGRESS, OrderStatus.NEW, OrderStatus.NEEDS_CLARIFICATION),
             _deadline_passed(finish_hours),
             OrderStatus.COMPLETED,
             "auto_completed",

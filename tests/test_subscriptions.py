@@ -88,6 +88,15 @@ async def test_matching_new_order_is_sent_with_buttons_not_a_link_in_the_text(se
     assert any(b.get("url") == f"https://example.test/orders/{order.id}" for b in buttons)  # «Подробнее»
 
 
+async def test_order_without_username_does_not_trigger_notification(session, make_order):
+    await _subscribe(session, from_city="Краснодар")
+    await _fresh_order(make_order, from_city="Краснодар", dispatcher_username=None)
+    box = Outbox()
+
+    assert await notify_once(send=box) == 0
+    assert box.messages == []
+
+
 async def test_non_matching_order_is_not_sent(session, make_order):
     await _subscribe(session, from_city="Краснодар")
     await _fresh_order(make_order, from_city="Ялта", to_city="Керчь")

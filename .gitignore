@@ -16,3 +16,4 @@ venv/
 .offsite_backup_passphrase
 closed_groups_links.txt
 closed_free_groups.txt
+.cptr

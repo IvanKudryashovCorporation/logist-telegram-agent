@@ -114,11 +114,16 @@ def feed_conditions(*, now=None) -> list:
     * скрытые статусы (CANCELLED / AGREED / EXPIRED) — нет;
     * уже взятые другим водителем — нет;
     * заявки с прошедшим временем подачи — нет (они же уходят в EXPIRED фоном).
+    * без публичного @username диспетчера — нет (числовой Telegram ID недостаточен).
     """
     reference = now or now_msk_naive()
     return [
         Order.status.notin_(HIDDEN_STATUSES),
         Order.taken_by_token.is_(None),
+        or_(
+            func.length(func.trim(Order.contact_username)) > 0,
+            func.length(func.trim(Order.dispatcher_username)) > 0,
+        ),
         or_(Order.pickup_at.is_(None), Order.pickup_at >= reference),
         # «В ближайшее время» живёт ASAP_EXPIRE_HOURS: из ленты такая заявка пропадает сразу,
         # не дожидаясь фоновой очистки (она раз в 15 минут переводит её в EXPIRED).
@@ -707,7 +712,7 @@ async def driver_stats(session: AsyncSession, token: str, member_since) -> Drive
     """Статистика для профиля: сколько взял, сколько выполнил, сколько заработал.
 
     "Заработал" — сумма client_price по заказам со статусом «Выполнен»
-    (водитель нажал «Выполнил» или прошло 72 часа после дедлайна). Агрегатор
+    (водитель нажал «Выполнил» или прошло 12 часов после дедлайна). Агрегатор
     передаёт заявки 1 в 1 без наценки и не участвует в оплате, поэтому это не
     факт поступления денег, а честная оценка по тем ценам, что были в заявках, —
     другой цифры у нас просто нет.

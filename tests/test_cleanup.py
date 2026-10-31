@@ -274,9 +274,9 @@ async def test_agreed_order_goes_in_progress_at_deadline(session, make_order):
     assert (await _reload(session, later.id)).status == OrderStatus.AGREED
 
 
-async def test_in_progress_order_completes_72_hours_after_deadline(session, make_order):
-    fresh = await _agreed(make_order, pickup_hours=-71)
-    old = await _agreed(make_order, pickup_hours=-73)
+async def test_in_progress_order_completes_12_hours_after_deadline(session, make_order):
+    fresh = await _agreed(make_order, pickup_hours=-11)
+    old = await _agreed(make_order, pickup_hours=-13)
 
     started, completed = await advance_agreed_orders()
 
@@ -296,14 +296,44 @@ async def test_asap_agreed_order_goes_in_progress_after_3_hours(session, make_or
     assert (await _reload(session, due.id)).status == OrderStatus.IN_PROGRESS
 
 
-async def test_asap_agreed_order_completes_75_hours_after_agreement(session, make_order):
-    still = await _agreed(make_order, pickup_hours=None, agreed_hours_ago=74)
-    gone = await _agreed(make_order, pickup_hours=None, agreed_hours_ago=76)
+async def test_asap_agreed_order_completes_15_hours_after_agreement(session, make_order):
+    still = await _agreed(make_order, pickup_hours=None, agreed_hours_ago=14)
+    gone = await _agreed(make_order, pickup_hours=None, agreed_hours_ago=16)
 
     await advance_agreed_orders()
 
     assert (await _reload(session, still.id)).status == OrderStatus.IN_PROGRESS
     assert (await _reload(session, gone.id)).status == OrderStatus.COMPLETED
+
+
+async def test_taken_order_without_agreement_also_closes_and_counts_in_stats(session, make_order):
+    """Взят кнопкой в боте: статус остаётся «Новая», но через 12 часов после подачи заказ закрывается."""
+    from app.web import queries
+
+    old = await make_order(pickup_at=now_msk_naive() - timedelta(hours=13), taken_by_token="tg:7", price="9000")
+    recent = await make_order(pickup_at=now_msk_naive() - timedelta(hours=5), taken_by_token="tg:7", price="5000")
+    free = await make_order(pickup_at=now_msk_naive() - timedelta(hours=13))
+
+    started, completed = await advance_agreed_orders()
+
+    assert completed == 1 and started == 0
+    assert (await _reload(session, old.id)).status == OrderStatus.COMPLETED
+    assert (await _reload(session, recent.id)).status == OrderStatus.NEW
+    assert (await _reload(session, free.id)).status == OrderStatus.NEW  # чужого (ничьего) не трогаем
+    async with SessionLocal() as db:
+        stats = await queries.driver_stats(db, "tg:7", None)
+    assert (stats.completed_total, stats.earned_total) == (1, 9000.0)  # попало в статистику
+
+
+async def test_auto_completion_is_logged(session, make_order):
+    order = await _agreed(make_order, pickup_hours=-20)
+
+    await advance_agreed_orders()
+
+    actions = (
+        await session.execute(select(ActionLog.action).where(ActionLog.order_id == order.id))
+    ).scalars().all()
+    assert "auto_completed" in actions
 
 
 async def test_driver_confirmation_wins_over_automation(session, make_order):

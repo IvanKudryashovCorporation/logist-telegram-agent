@@ -110,6 +110,43 @@ def test_non_breaking_spaces_in_price():
     assert one("✅ Заказ · сегодня\n📍 Сочи → Анапа\n💰 12 000 ₽").client_price == 12000
 
 
+def test_price_in_thousands_from_export():
+    order = one("✅ Заказ · 01.11 10:00–11:00\n📍 Оренбург → Луганск\n👥 1 чел · 💰 45 ₽")
+    assert order.client_price == 45000
+    assert one("✅ Заказ · сегодня\n📍 Сочи → Анапа\n💰 7,5 ₽").client_price == 7500
+
+
+def test_info_line_with_passenger_word_is_not_a_second_passenger_count():
+    text = "✅ Заказ · 31.10 в 09:00\n📍 Севастополь → Партенит\n👥 1 чел · 💰 4 000 ₽\nℹ️ 1 чел"
+    order = one(text)
+    assert order.passengers == 1 and order.client_price == 4000
+
+
+def test_missing_price_is_expected_llm_fallback_without_alert():
+    text = "✅ Заказ · сегодня\n📍 Ростов-на-Дону → Воронеж\n👥 1 чел\nℹ️ 20+ платная дорога"
+    outcome = parse_pro_message(text, today=TODAY)
+    assert outcome.result is None and outcome.bot_format and not outcome.alert_owner
+    assert outcome.reason == "нет цены «💰 …»"
+
+
+def test_round_trip_does_not_create_a_one_way_order():
+    text = "✅ Заказ · сегодня\n📍 Домодедово → Воронеж 🔁 туда-обратно\n👥 12 чел · 💰 25 000 ₽"
+    outcome = parse_pro_message(text, today=TODAY)
+    assert outcome.result is None and outcome.bot_format and not outcome.alert_owner
+    assert outcome.reason.startswith("маршрут туда-обратно")
+
+
+@pytest.mark.parametrize("text", [
+    "🚘 RT TRANSFER | ЗАКАЗ\n📍 Откуда: Пачелма\n📍 Куда: Пенза\n💰 Цена на руки: 4400",
+    "❇️❇️❇️ЗАКАЗ❇️❇️❇️\n🗓 сегодня 🕰 Cрочно!\n🚌 Тула ➡️ Мценск\n👛 4000 на руки",
+    "Детали заказа 🚖\n📆Дата: 31.10.2026\n🗺Маршрут: Дон Плаза — Аэропорт",
+    "Из Ростова на Дону есть заказы? Добрый день",
+])
+def test_other_sources_do_not_trigger_pro_template_alert(text):
+    outcome = parse_pro_message(text, today=TODAY)
+    assert outcome.result is None and not outcome.bot_format and not outcome.alert_owner
+
+
 def test_taken_message_is_not_an_order_and_not_a_failure():
     outcome = parse_pro_message("⛔️ Заказ снят/взят\n⚡️ СРОЧНО Ровеньки → Старый Оскол, 8 000 ₽", today=TODAY)
     assert outcome.result is not None and outcome.result.orders == []
@@ -202,6 +239,15 @@ async def test_template_failure_goes_to_llm_and_alerts_owner(alerts, llm_calls):
     assert len(ids) == 1 and len(llm_calls) == 1
     assert len(alerts) == 1
     assert "по запросу" in alerts[0] and "цена не число" in alerts[0] and str(CHAT) in alerts[0]
+    (stat,) = await stats()
+    assert stat.model == "fake-llm" and stat.error.startswith(FALLBACK_ERROR_PREFIX)
+
+
+async def test_missing_price_uses_llm_without_owner_alert(alerts, llm_calls):
+    text = "✅ Заказ · сегодня\n📍 Ростов-на-Дону → Воронеж\n👥 1 чел\nℹ️ 20+ платная дорога"
+    ids = await work_group.upsert_order_text(chat_id=CHAT, message_id=201, text=text)
+    await settle()
+    assert len(ids) == 1 and len(llm_calls) == 1 and alerts == []
     (stat,) = await stats()
     assert stat.model == "fake-llm" and stat.error.startswith(FALLBACK_ERROR_PREFIX)
 

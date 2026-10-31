@@ -46,10 +46,9 @@ from app.models import (
     WorkGroup,
 )
 from app.parsing import stats as parse_stats
-from app.services import wakeup
+from app.parsing import template_alerts
 from app.parsing.bot_noise import strip_bot_noise
 from app.parsing.closed import ACTION_CLOSED_LOCK, has_bot_taken_mark, has_closed_lock
-from app.parsing import template_alerts
 from app.parsing.llm_parser import ParseResult, content_key, parse_orders, text_hash, text_key
 from app.parsing.order_builder import apply_parsed_fields, extract_contact_username, resolve_pickup_at
 from app.parsing.prefilter import PrefilterDecision, prefilter
@@ -57,6 +56,7 @@ from app.parsing.price import has_price_request
 from app.parsing.pro_template import FALLBACK_ERROR_PREFIX, parse_pro_message
 from app.parsing.schema import ParsedOrder
 from app.parsing.stale import is_stale
+from app.services import wakeup
 from app.telegram import pending as pending_queue
 from app.telegram.dedup import mark_processed, unmark_processed
 from app.timeutil import now_msk_naive, now_utc_naive
@@ -499,11 +499,12 @@ async def upsert_order_text(
             if outcome.result is not None:
                 parse_result = outcome.result
             else:
-                if outcome.bot_format:  # болтовня в группе — не провал шаблона, в статистику не идёт
+                if outcome.bot_format:  # другие форматы и болтовня — не провал шаблона
                     template_note = f"{FALLBACK_ERROR_PREFIX}: {outcome.reason}"
-                    template_alerts.notify_failure(
-                        chat_id, message_id, outcome.reason or "?", original_text, text_hash(text)
-                    )
+                    if outcome.alert_owner:
+                        template_alerts.notify_failure(
+                            chat_id, message_id, outcome.reason or "?", original_text, text_hash(text)
+                        )
                 log.info("Шаблон не разобрал chat=%s msg=%s (%s) — отдаём LLM", chat_id, message_id, outcome.reason)
         if parse_result is None:
             # Несрочное (из очереди) сообщение при лимите провайдера ждёт, а не уходит в платный резерв.

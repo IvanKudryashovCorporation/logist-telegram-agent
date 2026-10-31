@@ -16,7 +16,7 @@ class OrderStatus(str, enum.Enum):
     CANCELLED = "cancelled"                        # Скрыта вручную/удалена в TG (неактуальна)
     AGREED = "agreed"                              # Водитель договорился с диспетчером — заказ закрыт
     IN_PROGRESS = "in_progress"                    # Дедлайн наступил — заказ «в работе»
-    COMPLETED = "completed"                        # Выполнен (водитель нажал сам или прошло 72 ч)
+    COMPLETED = "completed"                        # Выполнен (водитель нажал сам или прошло 12 ч после подачи)
     EXPIRED = "expired"                            # Время подачи прошло — заявка протухла
 
 

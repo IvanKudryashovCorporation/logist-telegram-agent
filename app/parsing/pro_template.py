@@ -26,7 +26,7 @@ from typing import Optional
 from app.parsing.bot_noise import strip_bot_noise
 from app.parsing.closed import has_bot_taken_mark
 from app.parsing.llm_parser import ParseResult, text_hash
-from app.parsing.schema import ParsedOrder
+from app.parsing.schema import ParsedOrder, normalize_price
 from app.timeutil import now_msk_naive
 
 #: Модель в ``parse_stats`` для заявок, разобранных шаблоном (у LLM там имя модели).
@@ -40,7 +40,7 @@ _HEADER_TOKEN = re.compile(
     r"^(?:(?P<word>сегодня|завтра|послезавтра)|(?P<d>\d{1,2})\.(?P<m>\d{1,2})(?:\.(?P<y>\d{4}|\d{2}))?)?"
     r"\s*(?:в\s*)?(?:(?P<h>\d{1,2}):(?P<mi>\d{2}))?$"
 )
-_PRICE = re.compile(r"^(\d[\d  \s]*)(?:[.,]\d+)?\s*(?:₽|руб\w*\.?|р\.?)?$")
+_PRICE = re.compile(r"^(\d[\d\s]*)([.,]\d+)?\s*(?:₽|руб\w*\.?|р\.?)?$")
 _PASSENGERS = re.compile(r"^(\d{1,2})\s*(?:чел\w*|пасс\w*)?\.?$", re.IGNORECASE)
 _USERNAME = re.compile(r"@([A-Za-z0-9_]{4,32})")
 #: «📌 Куда, как в заказе: СНТ Куничина Гора (Псковская обл.)» — уточнение адреса после маршрута.
@@ -51,6 +51,8 @@ _STANDARD_CLASSES = {"стандарт", "эконом", "стандартный
 #: Строки, которые бот добавляет от себя и которые для заявки ничего не значат.
 _IGNORED_LINE = re.compile(r"^(?:здравствуйте|сообщение диспетчеру|группа закрытая|ℹ)", re.IGNORECASE)
 _EMOJI_PREFIX = re.compile(r"^[^\w@+]+")
+_PRO_HEADER = re.compile(r"^\s*[✅⛔]\ufe0f?\s+Заказ\b", re.IGNORECASE)
+_EXPECTED_LLM_REASONS = ("нет цены «💰", "маршрут туда-обратно")
 _MAX_POINT_LEN = 60
 
 
@@ -68,17 +70,19 @@ class TemplateOutcome:
 
     ``result`` — готовый результат (для «Заказ снят/взят» — пустой список заявок).
     ``reason`` — причина провала; ``bot_format`` — похоже ли сообщение на сообщение бота вообще
-    (обычная болтовня в группе шаблоном не разбирается, но и тревоги не поднимает)."""
+    (обычная болтовня в группе шаблоном не разбирается, но и тревоги не поднимает).
+    ``alert_owner`` — неизвестный вариант формата, требующий доработки шаблона; отсутствие цены
+    в исходной заявке ожидаемо и остаётся задачей LLM."""
 
     result: Optional[ParseResult] = None
     reason: Optional[str] = None
     bot_format: bool = True
+    alert_owner: bool = True
 
 
 def looks_like_bot_message(text: str) -> bool:
-    """Есть ли в тексте признаки сообщения бота: «Заказ» в заголовке и строка маршрута со стрелкой."""
-    head = text.lstrip()[:60].lower()
-    return ("заказ" in head) or ("📍" in text) or ("диспетчер:" in text.lower() and "→" in text)
+    """Только формат PRO: остальные группы могут иметь слово «заказ» и свой шаблон."""
+    return bool(_PRO_HEADER.match(text.splitlines()[0])) if text else False
 
 
 def _header_date(word: Optional[str], d: Optional[str], m: Optional[str], y: Optional[str], today: date) -> date:
@@ -141,6 +145,10 @@ def _point(raw: str) -> tuple[str, Optional[str]]:
 
 
 def _parse_route(value: str, order: ParsedOrder) -> None:
+    if "🔁" in value or "туда-обратно" in value.lower():
+        # Отдельного признака обратной поездки в схеме нет. Если взять только «туда»,
+        # водитель увидит неверный маршрут; сложный случай остаётся за LLM.
+        raise TemplateFailure("маршрут туда-обратно — требуется разбор LLM")
     points = [p for p in _ROUTE_SPLIT.split(value.strip()) if p.strip()]
     if len(points) < 2:
         raise TemplateFailure(f"в маршруте меньше двух пунктов: «{value[:80]}»")
@@ -154,10 +162,12 @@ def _parse_price(value: str, order: ParsedOrder) -> None:
     match = _PRICE.match(value.strip().lower())
     if match is None:
         raise TemplateFailure(f"цена не число: «{value[:40]}»")
-    digits = re.sub(r"\D", "", match.group(1))
-    if not digits:
+    number = re.sub(r"\s", "", match.group(1)) + (match.group(2) or "")
+    if not number:
         raise TemplateFailure(f"цена не число: «{value[:40]}»")
-    order.client_price = Decimal(digits)
+    # Присваивание после создания Pydantic-модели не запускает её валидаторы:
+    # «45 ₽» в заявках PRO означает 45 000 ₽, как и при разборе через LLM.
+    order.client_price = normalize_price(Decimal(number.replace(",", ".")))
 
 
 def _parse_segment(segment: str, order: ParsedOrder, seen: set[str]) -> None:
@@ -172,6 +182,8 @@ def _parse_segment(segment: str, order: ParsedOrder, seen: set[str]) -> None:
     elif "💰" in segment:
         _parse_price(body, order)
         seen.add("price")
+    elif "ℹ" in segment:
+        return  # примечание «ℹ️ 1 чел» не является полем пассажиров
     elif "👥" in segment or re.search(r"\bчел\b", low):
         match = _PASSENGERS.match(low)
         if match is None:
@@ -192,8 +204,6 @@ def _parse_segment(segment: str, order: ParsedOrder, seen: set[str]) -> None:
             order.from_address = order.from_address or address
         else:
             order.to_address = order.to_address or address
-    elif "ℹ" in segment:
-        return  # справочная строка бота («ℹ️ 500», «Группа закрытая…»): на заявку не влияет
     elif "🕒" in segment or low.startswith("опубликован"):
         return  # время публикации заявки не касается
     elif "👤" in segment or low.startswith("диспетчер"):
@@ -211,13 +221,18 @@ def parse_pro_message(text: str, *, today: Optional[date] = None) -> TemplateOut
     """Разбирает сообщение бота. Никогда не бросает: провал — в ``reason`` результата."""
     cleaned = strip_bot_noise((text or "").strip())
     if not cleaned:
-        return TemplateOutcome(reason="пустое сообщение", bot_format=False)
+        return TemplateOutcome(reason="пустое сообщение", bot_format=False, alert_owner=False)
     if not looks_like_bot_message(cleaned):
-        return TemplateOutcome(reason="не сообщение бота (нет заголовка «Заказ» и строки 📍)", bot_format=False)
+        return TemplateOutcome(reason="не формат PRO", bot_format=False, alert_owner=False)
     try:
         return TemplateOutcome(result=_parse(cleaned, today or now_msk_naive().date()))
     except TemplateFailure as failure:
-        return TemplateOutcome(reason=failure.reason)
+        # В PRO цена может отсутствовать вовсе или быть записана свободным текстом в примечании.
+        # Оставляем LLM искать её, но это ожидаемый случай, а не поломка шаблона.
+        return TemplateOutcome(
+            reason=failure.reason,
+            alert_owner=not failure.reason.startswith(_EXPECTED_LLM_REASONS),
+        )
 
 
 def _parse(cleaned: str, today: date) -> ParseResult:

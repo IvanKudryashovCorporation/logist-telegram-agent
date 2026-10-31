@@ -54,6 +54,22 @@ async def test_feed_renders_and_issues_driver_cookie(client, make_order):
     assert response.cookies.get("driver_id")
 
 
+async def test_feed_excludes_orders_without_public_dispatcher_username(client, make_order, session):
+    hidden = await make_order(dispatcher_username=None)  # числовой Telegram ID есть, @username нет
+    named = await make_order(dispatcher_username="real_dispatcher")
+    explicit = await make_order(dispatcher_username=None)
+    explicit.contact_username = "contact_in_message"
+    await session.commit()
+
+    response = await client.get("/")
+
+    assert response.status_code == 200
+    assert f'data-order-id="{hidden.id}"' not in response.text
+    assert f'data-order-id="{named.id}"' in response.text
+    assert f'data-order-id="{explicit.id}"' in response.text
+    assert (await client.get("/feed/count")).json()["total"] == 2
+
+
 async def test_feed_pagination_links_keep_filters(client, make_order):
     """Ссылки на страницы обязаны сохранять фильтры, поиск и сортировку."""
     for index in range(12):
