@@ -90,7 +90,9 @@ copy .env.example .env
   на PostgreSQL не воспроизводится.
 * **Новые миграции** пишите переносимо (`sa.true()/sa.false()`) и проверяйте на PostgreSQL.
 * **Бэкап:** `deploy/backup-db.sh` делает `pg_dump | gzip` в `/root/backups` и хранит
-  14 дней; cron `15 3 * * *`. Восстановление: `gunzip -c файл.sql.gz | psql -d база`.
+  14 дней; cron запускает его через оболочку:
+  `15 3 * * * /bin/sh /root/logist-agent/deploy/backup-db.sh >> /root/backups/backup.log 2>&1`.
+  Восстановление: `gunzip -c файл.sql.gz | psql -d база`.
 * **Копия вне сервера:** `scripts/offsite_backup.py` (cron `30 3 * * *`) шифрует последний дамп
   паролем (gpg, AES-256) и присылает файл `logist-….sql.gz.gpg` ботом в личку владельцу
   (`ALERT_CHAT_ID`); сторож следит, что отправка была за последние 26 часов. Один раз выполните

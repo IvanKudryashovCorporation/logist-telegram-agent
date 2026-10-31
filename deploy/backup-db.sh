@@ -1,6 +1,7 @@
 #!/bin/sh
 # Ежедневный дамп PostgreSQL с хранением 14 дней.
-#   cron: 15 3 * * * /root/logist-agent/deploy/backup-db.sh >> /root/backups/backup.log 2>&1
+#   cron: 15 3 * * * /bin/sh /root/logist-agent/deploy/backup-db.sh >> /root/backups/backup.log 2>&1
+# Явный /bin/sh оставляет задание рабочим, даже если при копировании релиза потеряется +x.
 # Пароль берётся из DATABASE_URL в .env (postgresql+asyncpg://user:pass@host/db).
 set -eu
 
