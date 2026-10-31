@@ -19,7 +19,7 @@ from app.config import settings
 from app.db.base import SessionLocal
 from app.models import Driver, Order
 from app.services import billing
-from app.services.subscriptions import chat_url, order_line, order_url
+from app.services.subscriptions import contact_url, order_line, order_url
 from app.web import queries
 
 log = logging.getLogger("web.bot_orders")
@@ -57,9 +57,7 @@ def confirmation(order: Order, group_username: Optional[str]) -> tuple[str, dict
         "договоритесь, отметьте это на сайте."
     )
     row: list[dict] = []
-    url = chat_url(order, group_username)
-    if url:
-        row.append({"text": "✉️ Написать диспетчеру", "url": url})
+    row.append({"text": "✉️ Написать диспетчеру", "url": contact_url(order, group_username)})
     row.append({"text": "Открыть заказ", "url": order_url(order)})
     return text, {"inline_keyboard": [row]}
 

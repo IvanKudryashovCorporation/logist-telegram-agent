@@ -91,14 +91,41 @@ async def test_public_group_without_username_gets_the_group_message_button(make_
     assert markup["inline_keyboard"][0][0]["url"] == f"https://t.me/pubgroup/{order.source_message_id}"
 
 
-async def test_no_chat_button_when_it_could_not_open(make_order):
-    """Закрытая группа без @username: ссылка по id может быть отвергнута Telegram, на сообщение — не пустят."""
+async def test_private_group_without_username_opens_contact_on_site(make_order):
+    """Telegram не принимает tg:// кнопки: у закрытой группы ссылка ведёт к действию на сайте."""
     order = await _order(make_order)
     order.dispatcher_username = None  # есть только tg_id
 
     rows = svc.build_keyboard([order], {})["inline_keyboard"]
 
-    assert [[b["text"] for b in row] for row in rows] == [["Подробнее на сайте"]]  # «Взять» в боте больше нет
+    assert [[b["text"] for b in row] for row in rows] == [
+        ["✉️ Написать диспетчеру"], ["Подробнее на сайте"]
+    ]
+    assert rows[0][0]["url"] == f"{svc.order_url(order)}#contactForm"
+    assert rows[1][0]["url"] == svc.order_url(order)
+
+
+async def test_private_group_digest_has_contact_buttons_for_every_order(make_order):
+    orders = [await _order(make_order) for _ in range(2)]
+    for order in orders:
+        order.dispatcher_username = None
+
+    rows = svc.build_keyboard(orders, {})["inline_keyboard"]
+
+    assert [row[0]["text"] for row in rows] == ["✉️ 1", "✉️ 2"]
+    assert [row[0]["url"] for row in rows] == [f"{svc.order_url(order)}#contactForm" for order in orders]
+
+
+async def test_take_confirmation_keeps_contact_button_without_username(make_order):
+    order = await _order(make_order)
+    order.dispatcher_username = None
+
+    _, markup = bot_orders.confirmation(order, None)
+
+    assert markup["inline_keyboard"][0][0] == {
+        "text": "✉️ Написать диспетчеру",
+        "url": f"{svc.order_url(order)}#contactForm",
+    }
 
 
 async def test_digest_has_a_chat_button_per_order(make_order):

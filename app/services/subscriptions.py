@@ -279,22 +279,24 @@ def chat_url(order: Order, group_username: Optional[str]) -> Optional[str]:
     return url
 
 
+def contact_url(order: Order, group_username: Optional[str]) -> str:
+    """Без безопасной Telegram-ссылки ведём к кнопке связи на странице заказа."""
+    return chat_url(order, group_username) or f"{order_url(order)}#contactForm"
+
+
 def build_keyboard(orders: list[Order], group_names: dict[int, Optional[str]]) -> dict:
     """Кнопки под уведомлением, как на сайте: «Написать диспетчеру» (у списка — ``✉️ N`` на строку заказа).
 
     «Взять заказ» здесь нет: водитель сначала пишет диспетчеру и только договорившись отмечает заказ на сайте.
-    Если в чат к диспетчеру сослаться нельзя (закрытая группа, скрытый автор), у заказа из списка вместо
-    письма кнопка ``🔎 N`` на карточку заказа, а у одного заказа есть «Подробнее на сайте».
+    Если Telegram не примет прямую ссылку по числовому ID, открываем кнопку связи на странице заказа:
+    там водитель сможет перейти в чат, даже когда у диспетчера нет публичного @username.
     """
     shown = orders[: settings.subscription_max_lines]
     rows: list[list[dict]] = []
     for number, order in enumerate(shown, 1):
         single = len(shown) == 1
-        url = chat_url(order, group_names.get(order.source_chat_id))
-        if url:
-            rows.append([{"text": "✉️ Написать диспетчеру" if single else f"✉️ {number}", "url": url}])
-        elif not single:
-            rows.append([{"text": f"🔎 {number}", "url": order_url(order)}])
+        url = contact_url(order, group_names.get(order.source_chat_id))
+        rows.append([{"text": "✉️ Написать диспетчеру" if single else f"✉️ {number}", "url": url}])
         if single:
             rows.append([{"text": "Подробнее на сайте", "url": order_url(order)}])
     return {"inline_keyboard": rows}
